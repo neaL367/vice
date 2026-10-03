@@ -41,15 +41,46 @@ int vice_process_band(vice_ctx* ctx, int band, unsigned char* out_rows,
 int vice_finish_png(vice_ctx* ctx, unsigned char* out, size_t cap,
                     size_t* written);
 
+/* Attach an ICC profile to be embedded as an iCCP chunk in the output PNG. */
+int vice_set_icc_profile(vice_ctx* ctx, const unsigned char* data, size_t size);
+
 /* L-inf residual ||A(out)-y|| after last project (float domain). */
 double vice_last_residual(const vice_ctx* ctx);
 
 void vice_destroy(vice_ctx* ctx);
 
-/* Pure helpers exposed for tests (no ctx needed). */
+/* Native Lanczos-3 adaptive super-resolution upscaler on context.
+   Upscales ctx->y directly into ctx->raw with diagonal steering and noise-gated acutance. */
+int vice_upscale(vice_ctx* ctx);
+
+/* Pure helpers exposed for tests and standalone native pipelines. */
+int vice_upscale_lanczos_adaptive(const float* src, int w, int h, int c, int scale, float* dst);
+
+/* Heuristic constants of the adaptive engine. vice_tuning_defaults() returns the
+   shipped values; vice_upscale_lanczos_adaptive() is exactly the _ex variant with
+   those defaults. */
+typedef struct ViceTuning {
+  float noise_floor;  /* edge energy below which no acutance boost is applied */
+  float boost;        /* max acutance boost strength */
+  float boost_slope;  /* ramp of the boost above the noise floor */
+  float wide_weight;  /* weight of the 4-tap span in edge energy */
+  float steer_thresh; /* diagonal asymmetry needed to steer */
+  float steer_weight; /* max blend toward the diagonal average */
+} ViceTuning;
+void vice_tuning_defaults(ViceTuning* t);
+int vice_upscale_lanczos_adaptive_ex(const float* src, int w, int h, int c, int scale, float* dst,
+                                     const ViceTuning* tuning);
 void vice_project_box(const float* y, float* raw, int w, int h, int s, int c);
+/* Iterative back-projection with a bilinear correction (no block seams). Approximate;
+   follow with vice_project_box for exact block means. */
+void vice_project_smooth(const float* y, float* raw, int w, int h, int s, int c, int iterations);
+/* Smooth back-projection rounds used by vice_project. */
+#define VICE_SMOOTH_ITERS 4
 float vice_srgb_to_linear(float v);
 float vice_linear_to_srgb(float v);
+float vice_fast_linear_to_srgb(float v);
+float vice_fast_srgb_to_linear(float v);
+float vice_spatial_triangular_dither(int x, int y, int ch);
 
 #ifdef __cplusplus
 }

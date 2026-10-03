@@ -3,4 +3,3 @@
 *.png binary
 *.wasm binary
 *.ico binary
-*.onnx binary

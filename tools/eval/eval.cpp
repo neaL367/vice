@@ -137,8 +137,9 @@ bool run_case(const float* hr, int W, int H, int s, Accum& ac) {
   bicubic_down(hr, lr_bic.data(), W, H, w, h, C);
   for (const float* lr : {lr_box.data(), lr_bic.data()}) {
     std::vector<float> raw((size_t)W * H * C), proj;
-    bilinear_up(lr, raw.data(), w, h, s, C);
+    if (s == 4) { int w2 = w*2, h2 = h*2; std::vector<float> mid((size_t)w2*h2*C); vice_upscale_lanczos_adaptive(lr, w, h, C, 2, mid.data()); vice_project_smooth(lr, mid.data(), w, h, 2, C, VICE_SMOOTH_ITERS); vice_project_box(lr, mid.data(), w, h, 2, C); vice_upscale_lanczos_adaptive(mid.data(), w2, h2, C, 2, raw.data()); } else { vice_upscale_lanczos_adaptive(lr, w, h, C, s, raw.data()); }
     proj = raw;
+    vice_project_smooth(lr, proj.data(), w, h, s, C, VICE_SMOOTH_ITERS);
     vice_project_box(lr, proj.data(), w, h, s, C);
     double worst = 0;
     for (int by = 0; by < h; by++)

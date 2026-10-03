@@ -11,7 +11,7 @@ const faculty = Faculty_Glyphic({
 export const metadata: Metadata = {
   title: "Vice — Consistent Super-Resolution Upscaler",
   description:
-    "Free private in-browser upscaler. Original pixels preserved exactly; new detail plausible, not true.",
+    "Free private in-browser mathematical upscaler. Original pixels preserved exactly via box kernel inverse.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

@@ -15,6 +15,7 @@ add_library(vice_core STATIC
   src/tile.cpp
   src/png.cpp
   src/api.cpp
+  src/upscale.cpp
   src/metrics.cpp
   src/miniz.c
   src/miniz_tdef.c
@@ -38,6 +39,17 @@ if(MSVC)
   # stb_image is third-party: no warnings-as-errors there.
   set_source_files_properties(../tools/eval/stb_impl.cpp PROPERTIES COMPILE_OPTIONS "/w")
 else()
+  set_source_files_properties(../tools/eval/stb_impl.cpp PROPERTIES COMPILE_OPTIONS "-w")
+endif()
+
+add_executable(vice_lab ../tools/lab/vice_lab.cpp ../tools/eval/stb_impl.cpp)
+target_link_libraries(vice_lab PRIVATE vice_core)
+target_include_directories(vice_lab PRIVATE ../tools/eval)
+if(MSVC)
+  target_compile_options(vice_lab PRIVATE /WX- /O2)
+  set_source_files_properties(../tools/eval/stb_impl.cpp PROPERTIES COMPILE_OPTIONS "/w")
+else()
+  target_compile_options(vice_lab PRIVATE -Wno-error -O2)
   set_source_files_properties(../tools/eval/stb_impl.cpp PROPERTIES COMPILE_OPTIONS "-w")
 endif()
 

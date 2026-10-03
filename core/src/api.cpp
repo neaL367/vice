@@ -10,6 +10,7 @@ struct vice_ctx {
   int out_w, out_h;
   std::vector<float> y;   // in_h*in_w*C linear premult
   std::vector<float> raw; // out_h*out_w*C linear premult
+  std::vector<unsigned char> icc;
   double last_residual = 0.0;
 };
 
@@ -110,6 +111,8 @@ static double measure_residual(const vice_ctx* ctx, const std::vector<float>& bu
 
 int vice_project(vice_ctx* ctx) {
   if (!ctx) return -1;
+  vice_project_smooth(ctx->y.data(), ctx->raw.data(), ctx->in_w, ctx->in_h,
+                      ctx->scale, ctx->channels, VICE_SMOOTH_ITERS);
   for (int iter = 0; iter < 3; ++iter) {
     vice_project_box(ctx->y.data(), ctx->raw.data(), ctx->in_w, ctx->in_h,
                      ctx->scale, ctx->channels);
@@ -126,11 +129,16 @@ int vice_project(vice_ctx* ctx) {
   return 0;
 }
 
+int vice_upscale(vice_ctx* ctx) {
+  if (!ctx || ctx->y.empty() || ctx->raw.empty()) return -1;
+  return vice_upscale_lanczos_adaptive(ctx->y.data(), ctx->in_w, ctx->in_h,
+                                       ctx->channels, ctx->scale,
+                                       ctx->raw.data());
+}
+
 int vice_process_band(vice_ctx* ctx, int band, unsigned char* out_rows,
                       int* out_row_count) {
   if (!ctx || !out_rows || !out_row_count) return -1;
-  // v1: band = index of output row start / band_h fixed 64? Use full rows.
-  // Caller passes band = y0; we emit 64 rows (or remainder).
   const int band_h = 64;
   int y0 = band * band_h;
   if (y0 >= ctx->out_h) {
@@ -138,18 +146,22 @@ int vice_process_band(vice_ctx* ctx, int band, unsigned char* out_rows,
     return 0;
   }
   int rows = band_h < ctx->out_h - y0 ? band_h : ctx->out_h - y0;
-  for (int y = 0; y < rows; ++y)
-    for (int x = 0; x < ctx->out_w; ++x)
+  for (int y = 0; y < rows; ++y) {
+    int py = y0 + y;
+    for (int x = 0; x < ctx->out_w; ++x) {
       for (int c = 0; c < ctx->channels; ++c) {
         float lin = clamp01(
-            ctx->raw[((y0 + y) * ctx->out_w + x) * ctx->channels + c]);
-        float srgb = vice_linear_to_srgb(lin);
-        int q = (int)(srgb * 255.0f + 0.5f);
+            ctx->raw[((py) * ctx->out_w + x) * ctx->channels + c]);
+        float srgb = vice_fast_linear_to_srgb(lin);
+        float dither = vice_spatial_triangular_dither(x, py, c);
+        int q = (int)(srgb * 255.0f + dither + 0.5f);
         if (q < 0) q = 0;
         if (q > 255) q = 255;
         out_rows[(y * ctx->out_w + x) * ctx->channels + c] =
             (unsigned char)q;
       }
+    }
+  }
   *out_row_count = rows;
   return 0;
 }
@@ -159,25 +171,40 @@ int vice_finish_png(vice_ctx* ctx, unsigned char* out, size_t cap,
   if (!ctx || !out || !written) return -1;
   std::vector<unsigned char> rgba((size_t)ctx->out_w * ctx->out_h *
                                   ctx->channels);
-  for (int y = 0; y < ctx->out_h; ++y)
-    for (int x = 0; x < ctx->out_w; ++x)
+  for (int y = 0; y < ctx->out_h; ++y) {
+    size_t row_offset = (size_t)y * ctx->out_w;
+    for (int x = 0; x < ctx->out_w; ++x) {
+      size_t idx = row_offset + x;
       for (int c = 0; c < ctx->channels; ++c) {
-        float lin =
-            clamp01(ctx->raw[((size_t)y * ctx->out_w + x) * ctx->channels + c]);
-        float srgb = vice_linear_to_srgb(lin);
-        int q = (int)(srgb * 255.0f + 0.5f);
+        float lin = clamp01(ctx->raw[idx * ctx->channels + c]);
+        float srgb = vice_fast_linear_to_srgb(lin);
+        float dither = vice_spatial_triangular_dither(x, y, c);
+        int q = (int)(srgb * 255.0f + dither + 0.5f);
         if (q < 0) q = 0;
         if (q > 255) q = 255;
-        rgba[((size_t)y * ctx->out_w + x) * ctx->channels + c] =
-            (unsigned char)q;
+        rgba[idx * ctx->channels + c] = (unsigned char)q;
       }
+    }
+  }
   std::vector<unsigned char> png;
-  if (vice_encode_png(rgba.data(), ctx->out_w, ctx->out_h, ctx->channels,
-                      png) != 0)
+  const unsigned char* icc_ptr = ctx->icc.empty() ? nullptr : ctx->icc.data();
+  size_t icc_len = ctx->icc.size();
+  if (vice_encode_png_ex(rgba.data(), ctx->out_w, ctx->out_h, ctx->channels,
+                         icc_ptr, icc_len, png) != 0)
     return -1;
   if (png.size() > cap) return -2;
   std::memcpy(out, png.data(), png.size());
   *written = png.size();
+  return 0;
+}
+
+int vice_set_icc_profile(vice_ctx* ctx, const unsigned char* data, size_t size) {
+  if (!ctx) return -1;
+  if (!data || size == 0) {
+    ctx->icc.clear();
+    return 0;
+  }
+  ctx->icc.assign(data, data + size);
   return 0;
 }
 

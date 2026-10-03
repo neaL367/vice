@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   bilinearScale,
+  lanczosAdaptiveScale,
   linearToSrgb,
   measureResidual,
   planOverlap,
@@ -8,6 +9,7 @@ import {
   projectClamp,
   reflectIndex,
   srgbToLinear,
+  tiledUpscaleLanczos,
 } from "../lib/vice-pipeline";
 
 describe("vice-pipeline", () => {
@@ -80,5 +82,32 @@ describe("vice-pipeline", () => {
             cov[(tl.iy + y) * w + tl.ix + x]++;
       for (let i = 0; i < cov.length; i++) expect(cov[i]).toBeGreaterThanOrEqual(1);
     }
+  });
+
+  test("lanczosAdaptiveScale + project stays consistent on all scales", () => {
+    for (const s of [2, 3, 4]) {
+      const w = 8;
+      const h = 6;
+      const c = 3;
+      const y = new Float32Array(w * h * c);
+      for (let i = 0; i < y.length; i++) y[i] = (i % 19) / 19;
+      const raw = lanczosAdaptiveScale(y, w, h, c, s);
+      expect(raw.length).toBe(w * s * h * s * c);
+      projectBox(y, raw, w, h, s, c);
+      expect(measureResidual(y, raw, w, h, s, c)).toBeLessThan(1e-5);
+    }
+  });
+
+  test("tiledUpscaleLanczos + project stays consistent on large tiled inputs", () => {
+    const w = 48;
+    const h = 36;
+    const s = 2;
+    const c = 3;
+    const y = new Float32Array(w * h * c);
+    for (let i = 0; i < y.length; i++) y[i] = (i % 23) / 23;
+    const raw = tiledUpscaleLanczos(y, w, h, c, s, 16, 4);
+    expect(raw.length).toBe(w * s * h * s * c);
+    projectBox(y, raw, w, h, s, c);
+    expect(measureResidual(y, raw, w, h, s, c)).toBeLessThan(1e-5);
   });
 });

@@ -20,6 +20,8 @@ export interface ViceResult {
   residual: number;
   backend: string;
   scale: ViceScale;
+  hasIcc?: boolean;
+  chained4x?: boolean;
 }
 
 export interface ViceProgress {
@@ -34,11 +36,14 @@ export interface ViceResultMeta {
   backend: string;
   outW: number;
   outH: number;
+  hasIcc?: boolean;
+  chained4x?: boolean;
 }
 
 export interface ViceRunOptions {
   signal?: AbortSignal;
   base?: string; // page base URL (trailing slash). Absent -> bilinear only.
+  chained4x?: boolean; // if scale is 4, run as 2x twice
 }
 
 // --- Worker-thread RPC ----------------------------------------------------
@@ -50,6 +55,7 @@ export interface ViceRunMsg {
   file: File;
   scale: ViceScale;
   base: string; // page base URL, trailing slash. Asset root for model + ORT.
+  chained4x?: boolean;
 }
 export interface ViceCancelMsg {
   type: "cancel";

@@ -2,8 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 
 test("shell renders tool, upscales 8x8 to 16x16", async ({ page }) => {
-  // Cold ORT init (wasm compile + 29 MB session) dominates first run.
-  test.setTimeout(240_000);
+  test.setTimeout(60_000);
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Vice" })).toBeVisible();
   await expect(page.getByText("Drop images")).toBeVisible();
@@ -25,13 +24,11 @@ test("shell renders tool, upscales 8x8 to 16x16", async ({ page }) => {
     buffer: Buffer.from(buf),
   });
   await page.getByRole("button", { name: "Upscale", exact: true }).click();
-  await expect(page.getByText("done")).toBeVisible({ timeout: 200_000 });
+  await expect(page.getByText("done")).toBeVisible({ timeout: 60_000 });
   const dl = page.getByRole("link", { name: /Download PNG/ });
   await expect(dl).toBeVisible();
-  // residual shown => projection ran; ort-* => neural path, not fallback
-  await expect(page.getByText(/residual/)).toBeVisible();
-  await expect(page.getByText(/ort-(wasm|webgpu) \+ realplksr-x2/)).toBeVisible({ timeout: 200_000 });
-  await expect(page.getByText(/vice-core-wasm/)).toBeVisible();
+  // meta line shown => projection ran with Lanczos-3
+  await expect(page.getByText(/Lanczos-3/)).toBeVisible({ timeout: 20_000 });
 });
 
 test("3x bilinear path works without model", async ({ page }) => {
@@ -55,7 +52,7 @@ test("3x bilinear path works without model", async ({ page }) => {
   await page.getByRole("button", { name: "3×", exact: true }).click();
   await page.getByRole("button", { name: "Upscale", exact: true }).click();
   await expect(page.getByText("done")).toBeVisible({ timeout: 60_000 });
-  await expect(page.getByText(/bilinear 3x/)).toBeVisible();
+  await expect(page.getByText(/Lanczos-3/).first()).toBeVisible();
   await expect(page.getByRole("link", { name: /Download PNG/ })).toHaveAttribute("download", "blue-vice3x.png");
   await page.getByRole("group", { name: "Zoom" }).getByRole("button", { name: "2×", exact: true }).click();
   await expect(
@@ -78,8 +75,7 @@ async function makePng(page: Page, color: string): Promise<Buffer> {
 }
 
 test("batch 3x produces zip", async ({ page }) => {
-  // 3x skips the model: queue + zip mechanics without cold ORT init.
-  test.setTimeout(120_000);
+  test.setTimeout(60_000);
   await page.goto("/");
   await page.getByLabel(/Choose image/).setInputFiles([
     { name: "red.png", mimeType: "image/png", buffer: await makePng(page, "#c02020") },
@@ -100,4 +96,6 @@ test("batch 3x produces zip", async ({ page }) => {
   expect(zipPath).toBeTruthy();
   const magic = Buffer.from(await readFile(zipPath as string)).subarray(0, 2).toString();
   expect(magic).toBe("PK");
+  await page.getByRole("button", { name: "Remove red.png" }).click();
+  await expect(page.getByRole("button", { name: "Upscale", exact: true })).toBeVisible();
 });

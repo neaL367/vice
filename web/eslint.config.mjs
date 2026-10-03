@@ -16,9 +16,6 @@ const eslintConfig = defineConfig([
     "public/vice-worker.js",
     // Generated Emscripten glue (wasm-build output, not source):
     "public/wasm/**",
-    // Vendored third-party runtime + model assets:
-    "public/ort/**",
-    "public/models/**",
   ]),
 ]);
 

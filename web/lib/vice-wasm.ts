@@ -14,10 +14,12 @@ interface ViceCoreInstance {
     th: number,
     n: number,
   ): number;
+  _vice_upscale?(ctx: number): number;
   _vice_project(ctx: number): number;
   _vice_download_raw(ctx: number, outPtr: number, n: number): number;
   _vice_process_band(ctx: number, band: number, outPtr: number, countPtr: number): number;
   _vice_finish_png(ctx: number, outPtr: number, cap: number, writtenPtr: number): number;
+  _vice_set_icc_profile?(ctx: number, dataPtr: number, size: number): number;
   _vice_last_residual(ctx: number): number;
   _vice_destroy(ctx: number): void;
   _malloc(size: number): number;
@@ -83,6 +85,15 @@ export class ViceCore {
     }
   }
 
+  hasNativeUpscale(): boolean {
+    return typeof this.core._vice_upscale === "function";
+  }
+
+  upscale(ctx: number): void {
+    if (this.core._vice_upscale && this.core._vice_upscale(ctx) !== 0)
+      throw new Error("vice_upscale failed");
+  }
+
   project(ctx: number): void {
     if (this.core._vice_project(ctx) !== 0) throw new Error("vice_project failed");
   }
@@ -103,6 +114,18 @@ export class ViceCore {
     return this.core._vice_last_residual(ctx);
   }
 
+  setIccProfile(ctx: number, data: Uint8Array): void {
+    if (!this.core._vice_set_icc_profile || data.length === 0) return;
+    const ptr = this.core._malloc(data.length);
+    if (!ptr) throw new Error("wasm malloc failed");
+    try {
+      this.core.HEAPU8.set(data, ptr);
+      this.core._vice_set_icc_profile(ctx, ptr, data.length);
+    } finally {
+      this.core._free(ptr);
+    }
+  }
+
   finishPng(ctx: number, outW: number, outH: number, channels: number): Uint8Array {
     const cap = outW * outH * channels + 1024 * 1024;
     const outPtr = this.core._malloc(cap);
@@ -111,9 +134,12 @@ export class ViceCore {
     try {
       const rc = this.core._vice_finish_png(ctx, outPtr, cap, writtenPtr);
       if (rc !== 0) throw new Error(`vice_finish_png failed (${rc})`);
-      // size_t is 32-bit on wasm32.
-      const written = new DataView(this.core.HEAPU8.buffer, writtenPtr, 4).getUint32(0, true);
-      return this.core.HEAPU8.slice(outPtr, outPtr + written);
+      // size_t is 32-bit on wasm32. Access HEAPU8 fresh after potential memory growth.
+      const heap = this.core.HEAPU8;
+      const written = new DataView(heap.buffer, writtenPtr, 4).getUint32(0, true);
+      const out = new Uint8Array(written);
+      out.set(heap.subarray(outPtr, outPtr + written));
+      return out;
     } finally {
       this.core._free(outPtr);
       this.core._free(writtenPtr);

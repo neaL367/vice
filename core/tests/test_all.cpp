@@ -68,6 +68,29 @@ static void test_ctx_roundtrip() {
   vice_destroy(ctx);
 }
 
+static void test_icc_profile() {
+  vice_ctx* ctx = vice_create(4, 4, 2, 3);
+  CHECK(ctx);
+  std::vector<float> y(4 * 4 * 3, 0.4f);
+  CHECK(vice_set_input(ctx, y.data(), (int)y.size()) == 0);
+  const unsigned char dummy_icc[] = {0x00, 0x01, 0x02, 0x03, 'I', 'C', 'C', 'P'};
+  CHECK(vice_set_icc_profile(ctx, dummy_icc, sizeof(dummy_icc)) == 0);
+  std::vector<unsigned char> png(1024 * 1024);
+  size_t written = 0;
+  CHECK(vice_finish_png(ctx, png.data(), png.size(), &written) == 0);
+  // Search for "iCCP" chunk tag
+  bool found_iccp = false;
+  for (size_t i = 0; i + 4 <= written; i++) {
+    if (png[i] == 'i' && png[i + 1] == 'C' && png[i + 2] == 'C' && png[i + 3] == 'P') {
+      found_iccp = true;
+      break;
+    }
+  }
+  CHECK(found_iccp);
+  printf("icc ok\n");
+  vice_destroy(ctx);
+}
+
 static void test_color_roundtrip() {
   for (int i = 0; i <= 255; i++) {
     float s = i / 255.0f;
@@ -98,12 +121,95 @@ static void test_metrics() {
   printf("metrics ok\n");
 }
 
+static void test_upscale_lanczos_adaptive() {
+  for (int s : {2, 3, 4}) {
+    int w = 12, h = 10, c = 4;
+    std::vector<float> src(w * h * c);
+    for (int y = 0; y < h; ++y) {
+      for (int x = 0; x < w; ++x) {
+        for (int ch = 0; ch < c; ++ch) {
+          src[(y * w + x) * c + ch] = (float)(x + y) / (float)(w + h);
+        }
+      }
+    }
+    int out_w = w * s;
+    int out_h = h * s;
+    std::vector<float> dst(out_w * out_h * c, 0.0f);
+    CHECK(vice_upscale_lanczos_adaptive(src.data(), w, h, c, s, dst.data()) == 0);
+    vice_project_box(src.data(), dst.data(), w, h, s, c);
+    double worst = 0;
+    int W = w * s;
+    for (int by = 0; by < h; by++)
+      for (int bx = 0; bx < w; bx++)
+        for (int ch = 0; ch < c; ch++) {
+          double sum = 0;
+          for (int dy = 0; dy < s; dy++)
+            for (int dx = 0; dx < s; dx++)
+              sum += dst[((by * s + dy) * W + bx * s + dx) * c + ch];
+          double mean = sum / (s * s);
+          double e = std::abs(mean - src[(by * w + bx) * c + ch]);
+          if (e > worst) worst = e;
+        }
+    printf("native upscale scale=%d exact_residual=%g\n", s, worst);
+    CHECK(worst < 1e-5);
+
+    // Box downscale consistency on ctx
+    vice_ctx* ctx = vice_create(w, h, s, c);
+    CHECK(ctx);
+    CHECK(vice_set_input(ctx, src.data(), (int)src.size()) == 0);
+    CHECK(vice_upscale(ctx) == 0);
+    CHECK(vice_project(ctx) == 0);
+    double r = vice_last_residual(ctx);
+    CHECK(r < 0.005);
+    vice_destroy(ctx);
+  }
+  printf("upscale ok\n");
+}
+
+static void test_project_smooth() {
+  const int w = 24, h = 24, c = 3;
+  for (int s = 2; s <= 4; s++) {
+    std::vector<float> y((size_t)w * h * c);
+    for (int py = 0; py < h; py++)
+      for (int px = 0; px < w; px++)
+        for (int ch = 0; ch < c; ch++)
+          y[((size_t)py * w + px) * c + ch] =
+              0.2f + 0.5f * (float)(((px + ch) / 5 + py / 7) % 2) + 0.08f * std::sin(0.9f * px + 0.7f * py);
+    const int W = w * s, H = h * s;
+    std::vector<float> raw((size_t)W * H * c);
+    CHECK(vice_upscale_lanczos_adaptive(y.data(), w, h, c, s, raw.data()) == 0);
+    std::vector<float> box = raw, smooth = raw;
+    vice_project_box(y.data(), box.data(), w, h, s, c);
+    vice_project_smooth(y.data(), smooth.data(), w, h, s, c, VICE_SMOOTH_ITERS);
+    vice_project_box(y.data(), smooth.data(), w, h, s, c);
+    double worst = 0;
+    for (int by = 0; by < h; by++)
+      for (int bx = 0; bx < w; bx++)
+        for (int ch = 0; ch < c; ch++) {
+          double sum = 0;
+          for (int dy = 0; dy < s; dy++)
+            for (int dx = 0; dx < s; dx++)
+              sum += smooth[((size_t)(by * s + dy) * W + bx * s + dx) * c + ch];
+          worst = std::max(worst, std::abs(sum / (s * s) - y[((size_t)by * w + bx) * c + ch]));
+        }
+    double seam_box = vice_seam_ratio(box.data(), W, H, s, c);
+    double seam_smooth = vice_seam_ratio(smooth.data(), W, H, s, c);
+    printf("project_smooth s=%d worst=%g seam box=%.3f smooth=%.3f\n", s, worst,
+           seam_box, seam_smooth);
+    CHECK(worst < 1e-5);
+    CHECK(seam_smooth <= seam_box + 1e-6);
+  }
+}
+
 int main() {
   test_project_exact();
   test_scales();
   test_ctx_roundtrip();
+  test_icc_profile();
   test_color_roundtrip();
   test_metrics();
+  test_upscale_lanczos_adaptive();
+  test_project_smooth();
   printf("ALL PASS\n");
   return 0;
 }

@@ -16,21 +16,53 @@ import type {
   ViceScale,
 } from "./types/vice";
 
+const workerReadyMap = new WeakMap<Worker, Promise<void>>();
+
 export function spawnViceWorker(): Worker | null {
   try {
     if (typeof document === "undefined") return null;
-    return new Worker(new URL("vice-worker.js", document.baseURI), {
+    const worker = new Worker(new URL("vice-worker.js", document.baseURI), {
       type: "module",
     });
+
+    // Synchronously listen for boot handshake so the event is never missed.
+    const readyPromise = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new Error("Worker boot timeout"));
+      }, 8000);
+      const cleanup = () => {
+        clearTimeout(timer);
+        worker.removeEventListener("message", onMessage);
+        worker.removeEventListener("error", onError);
+      };
+      const onMessage = (e: MessageEvent<ViceOutgoing>) => {
+        if (e.data.type === "ready") {
+          cleanup();
+          resolve();
+        }
+      };
+      const onError = (e: ErrorEvent) => {
+        cleanup();
+        reject(new Error(e.message || "Worker failed to boot"));
+      };
+      worker.addEventListener("message", onMessage);
+      worker.addEventListener("error", onError);
+    });
+
+    workerReadyMap.set(worker, readyPromise);
+    return worker;
   } catch {
     return null;
   }
 }
 
 // Boot handshake: resolves when the thread posts ready, rejects on error
-// or silence. Silence (broken worker build, MIME/parse failure with no
-// error event) must not hang the job — caller falls back inline.
+// or silence. Uses the promise captured at spawn time to avoid race conditions.
 export function waitForWorkerReady(worker: Worker, timeoutMs = 8000): Promise<void> {
+  const existing = workerReadyMap.get(worker);
+  if (existing) return existing;
+
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       cleanup();
@@ -63,6 +95,7 @@ export function runOnWorkerThread(
   scale: ViceScale,
   base: string,
   onProgress: (p: ViceProgress) => void,
+  chained4x?: boolean,
 ): Promise<{ blob: Blob; meta: ViceResultMeta }> {
   return new Promise((resolve, reject) => {
     const cleanup = () => {
@@ -89,11 +122,12 @@ export function runOnWorkerThread(
     };
     const onError = (e: ErrorEvent) => {
       cleanup();
+      console.error("[Vice Worker ErrorEvent]:", e.message, e);
       reject(new Error(e.message || "Worker failed"));
     };
     worker.addEventListener("message", onMessage);
     worker.addEventListener("error", onError);
-    const req: ViceIncoming = { type: "run", jobId, file, scale, base };
+    const req: ViceIncoming = { type: "run", jobId, file, scale, base, chained4x };
     worker.postMessage(req);
   });
 }
@@ -109,3 +143,4 @@ export function warmViceWorker(worker: Worker, base: string): void {
   const msg: ViceIncoming = { type: "warm", jobId: 0, base };
   worker.postMessage(msg);
 }
+

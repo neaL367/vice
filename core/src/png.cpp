@@ -82,6 +82,12 @@ static unsigned filter_row(const unsigned char* row, const unsigned char* prev,
 
 int vice_encode_png(const unsigned char* rgba, int w, int h, int channels,
                     std::vector<unsigned char>& out) {
+  return vice_encode_png_ex(rgba, w, h, channels, nullptr, 0, out);
+}
+
+int vice_encode_png_ex(const unsigned char* rgba, int w, int h, int channels,
+                       const unsigned char* icc_data, size_t icc_size,
+                       std::vector<unsigned char>& out) {
   if (w <= 0 || h <= 0 || (channels != 3 && channels != 4)) return -1;
   if (!rgba) return -1;
   out.clear();
@@ -100,6 +106,23 @@ int vice_encode_png(const unsigned char* rgba, int w, int h, int channels,
   ihdr[9] = (channels == 4) ? 6 : 2;
   ihdr[10] = ihdr[11] = ihdr[12] = 0;
   chunk(out, "IHDR", ihdr, 13);
+
+  // If ICC profile is present, emit iCCP chunk right after IHDR
+  if (icc_data && icc_size > 0) {
+    const char profile_name[] = "ICC Profile";
+    size_t name_len = sizeof(profile_name); // includes null terminator
+    mz_ulong comp_bound = mz_compressBound((mz_ulong)icc_size);
+    std::vector<unsigned char> comp_icc((size_t)comp_bound);
+    mz_ulong comp_len = comp_bound;
+    if (mz_compress2(comp_icc.data(), &comp_len, icc_data, (mz_ulong)icc_size, 6) == MZ_OK) {
+      std::vector<unsigned char> iccp_payload;
+      iccp_payload.reserve(name_len + 1 + comp_len);
+      iccp_payload.insert(iccp_payload.end(), (const unsigned char*)profile_name, (const unsigned char*)profile_name + name_len);
+      iccp_payload.push_back(0); // compression method 0 = DEFLATE
+      iccp_payload.insert(iccp_payload.end(), comp_icc.data(), comp_icc.data() + comp_len);
+      chunk(out, "iCCP", iccp_payload.data(), iccp_payload.size());
+    }
+  }
 
   size_t stride = (size_t)w * channels;
   std::vector<unsigned char> raw;

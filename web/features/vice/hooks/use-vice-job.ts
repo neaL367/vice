@@ -1,6 +1,12 @@
 "use client";
 
-import { startTransition, useCallback, useEffect, useRef, useState } from "react";
+import {
+  startTransition,
+  useCallback,
+  useEffect,
+  useReducer,
+  useRef,
+} from "react";
 import type {
   ViceFile,
   ViceProgress,
@@ -19,6 +25,17 @@ import {
 const MAX_FILES = 10;
 const IMAGE_RE = /^image\/(png|jpeg|webp)$/;
 
+function stageLabel(stage: string): string | null {
+  if (stage === "done") return "Done";
+  return null;
+}
+
+import { initialState, viceJobReducer } from "./vice-job-reducer";
+
+// ---------------------------------------------------------------------------
+// Hook
+// ---------------------------------------------------------------------------
+
 // Batch job queue: files upscale sequentially, one at a time (spec sec 8),
 // results accumulate and zip on demand. Object URLs live in a tracked list
 // revoked on replace-all only — never in effect cleanup. Cleanup fires on
@@ -30,22 +47,16 @@ const IMAGE_RE = /^image\/(png|jpeg|webp)$/;
 // cancels on page hide; the idle thread terminates in effect cleanup and
 // respawns lazily on next run, releasing GPU buffers while hidden.
 export function useViceJob() {
-  const [files, setFiles] = useState<ViceFile[]>([]);
-  const [results, setResults] = useState<ViceResult[]>([]);
-  const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [zipUrl, setZipUrl] = useState<string | null>(null);
-  const [scale, setScale] = useState<ViceScale>(2);
-  const [progress, setProgress] = useState("");
-  const [running, setRunning] = useState(false);
-  const [error, setError] = useState("");
+  const [state, dispatch] = useReducer(viceJobReducer, initialState);
 
+  // Escape Hatches (refs for external systems & non-rendering imperative handles)
   const urlsRef = useRef<string[]>([]);
   const zipUrlRef = useRef<string | null>(null);
   const workerRef = useRef<Worker | null>(null);
+  const readyRef = useRef<Worker | null>(null);
   const workerBrokenRef = useRef(false);
   const baseRef = useRef<string>("");
   const batchAbortRef = useRef<AbortController | null>(null);
-  const inlineAbortRef = useRef<AbortController | null>(null);
   const jobIdRef = useRef(0);
   const resultIdRef = useRef(0);
   const runningRef = useRef(false);
@@ -54,29 +65,23 @@ export function useViceJob() {
     urlsRef.current.push(url);
     return url;
   };
+
   const revokeAll = () => {
     for (const u of urlsRef.current) URL.revokeObjectURL(u);
     urlsRef.current = [];
   };
 
   useEffect(() => {
-    const onVisibility = () => {
-      if (document.visibilityState !== "hidden" || !runningRef.current) return;
-      const w = workerRef.current;
-      if (w) cancelWorkerJob(w, jobIdRef.current);
-      batchAbortRef.current?.abort();
-      inlineAbortRef.current?.abort();
-    };
     const onPageHide = () => revokeAll();
-    document.addEventListener("visibilitychange", onVisibility);
+
     window.addEventListener("pagehide", onPageHide);
+
     return () => {
-      document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("pagehide", onPageHide);
       batchAbortRef.current?.abort();
-      inlineAbortRef.current?.abort();
       workerRef.current?.terminate();
       workerRef.current = null;
+      readyRef.current = null;
     };
   }, []);
 
@@ -92,37 +97,80 @@ export function useViceJob() {
 
   const pick = useCallback((incoming: File[] | FileList | undefined | null) => {
     if (!incoming) return;
-    const list = [...incoming].slice(0, MAX_FILES);
-    if (list.length === 0) return;
-    if ([...incoming].length > MAX_FILES) {
-      setError(`Only first ${MAX_FILES} files kept.`);
-    } else {
-      setError("");
-    }
-    const bad = list.find((f) => !IMAGE_RE.test(f.type));
-    if (bad) {
-      setError(`Unsupported type: ${bad.name}. PNG/JPEG/WebP only.`);
+    if (runningRef.current) {
+      dispatch({
+        type: "SET_ERROR",
+        error: "Finish or cancel the current batch before picking new files.",
+      });
       return;
     }
-    // Replace-all: drop previous URLs first (updaters stay pure).
+    const list = [...incoming].slice(0, MAX_FILES);
+    if (list.length === 0) return;
+
+    let warning = "";
+    if ([...incoming].length > MAX_FILES) {
+      warning = `Only first ${MAX_FILES} files kept.`;
+    }
+
+    const bad = list.find((f) => !IMAGE_RE.test(f.type));
+    if (bad) {
+      dispatch({
+        type: "SET_ERROR",
+        error: `Unsupported type: ${bad.name}. PNG/JPEG/WebP only.`,
+      });
+      return;
+    }
+
+    // Replace-all: revoke previous URLs first outside the render cycle
     revokeAll();
     zipUrlRef.current = null;
-    const next: ViceFile[] = list.map((file) => ({ file, previewUrl: track(URL.createObjectURL(file)) }));
-    setFiles(next);
-    setResults([]);
-    setSelectedId(null);
-    setZipUrl(null);
+    const next: ViceFile[] = list.map((file) => ({
+      file,
+      previewUrl: track(URL.createObjectURL(file)),
+    }));
+
+    startTransition(() => {
+      dispatch({ type: "PICK_FILES", files: next, error: warning });
+    });
+
     // Warm the model while the user reads the UI; run() reuses the session.
     const w = ensureWorker();
-    if (w) warmViceWorker(w, baseRef.current);
+    if (w) {
+      void (async () => {
+        try {
+          if (w !== readyRef.current) {
+            await waitForWorkerReady(w);
+            if (workerRef.current === w) readyRef.current = w;
+          }
+          warmViceWorker(w, baseRef.current);
+        } catch {
+          // run() retries with its own wait, then falls back inline.
+        }
+      })();
+    }
+  }, []);
+
+  const removeFile = useCallback((previewUrl: string) => {
+    if (runningRef.current) return;
+    const target = urlsRef.current.indexOf(previewUrl);
+    if (target >= 0) {
+      URL.revokeObjectURL(previewUrl);
+      urlsRef.current.splice(target, 1);
+    }
+    startTransition(() => {
+      dispatch({ type: "REMOVE_FILE", previewUrl });
+    });
   }, []);
 
   const run = useCallback(async () => {
-    if (runningRef.current || files.length === 0) return;
+    if (runningRef.current || state.files.length === 0) return;
     runningRef.current = true;
-    setRunning(true);
-    setError("");
-    const report = (s: string) => startTransition(() => setProgress(s));
+    dispatch({ type: "START_RUN" });
+
+    // startTransition keeps high-frequency tile updates from locking urgent UI interactions
+    const report = (s: string) =>
+      startTransition(() => dispatch({ type: "SET_PROGRESS", progress: s }));
+
     const batchCtrl = new AbortController();
     batchAbortRef.current = batchCtrl;
 
@@ -134,43 +182,54 @@ export function useViceJob() {
       if (!w) return runInline(file, onProg, batchCtrl.signal);
       const jobId = ++jobIdRef.current;
       try {
-        await waitForWorkerReady(w);
-        return await runOnWorkerThread(w, jobId, file, scale, baseRef.current, onProg);
+        if (w !== readyRef.current) {
+          await waitForWorkerReady(w);
+          readyRef.current = w;
+        }
+        return await runOnWorkerThread(
+          w,
+          jobId,
+          file,
+          state.scale,
+          baseRef.current,
+          onProg,
+          state.chained4x
+        );
       } catch (e) {
         if (e instanceof DOMException && e.name === "AbortError") throw e;
+        console.warn("[Vice] Worker execution failed, attempting inline fallback:", e);
         workerBrokenRef.current = true;
+        readyRef.current = null;
         w.terminate();
         if (workerRef.current === w) workerRef.current = null;
         return runInline(file, onProg, batchCtrl.signal);
       }
     };
+
     const runInline = async (
       file: File,
       onProg: (p: ViceProgress) => void,
       signal: AbortSignal,
     ): Promise<{ blob: Blob; meta: ViceResultMeta }> => {
-      // Fallback chunk: same module, main thread. Never in initial bundle.
       const mod = await import("../vice.worker");
-      inlineAbortRef.current = batchCtrl;
-      try {
-        return await mod.runViceUpscale(file, scale, onProg, {
-          signal,
-          base: baseRef.current,
-        });
-      } finally {
-        inlineAbortRef.current = null;
-      }
+      return await mod.runViceUpscale(file, state.scale, onProg, {
+        signal,
+        base: baseRef.current,
+        chained4x: state.chained4x,
+      });
     };
 
     try {
       const w = ensureWorker();
-      for (let i = 0; i < files.length; i++) {
+      for (let i = 0; i < state.files.length; i++) {
         if (batchCtrl.signal.aborted) throw new DOMException("cancelled", "AbortError");
-        const vf = files[i];
-        const tag = files.length > 1 ? `file ${i + 1}/${files.length} ` : "";
+        const vf = state.files[i];
+        const tag = state.files.length > 1 ? `file ${i + 1}/${state.files.length} ` : "";
         report(`${tag}starting…`);
-        const onProg = (p: ViceProgress) =>
-          report(`${tag}${p.stage}: ${p.band}/${p.totalBands}`);
+        const onProg = (p: ViceProgress) => {
+          const label = stageLabel(p.stage) ?? `${p.stage}: ${p.band}/${p.totalBands}`;
+          report(`${tag}${label}`);
+        };
         const { blob, meta } = await runOne(vf.file, w, onProg);
         const id = ++resultIdRef.current;
         const r: ViceResult = {
@@ -183,37 +242,50 @@ export function useViceJob() {
           outH: meta.outH,
           residual: meta.residual,
           backend: meta.backend,
-          scale,
+          scale: state.scale,
+          hasIcc: meta.hasIcc,
+          chained4x: meta.chained4x,
         };
-        setResults((prev) => [...prev, r]);
-        setSelectedId((sel) => (sel === null ? id : sel));
+        startTransition(() => {
+          dispatch({ type: "ADD_RESULT", result: r });
+        });
       }
-      report("done");
+      startTransition(() => {
+        dispatch({ type: "FINISH_RUN" });
+      });
     } catch (e) {
-      if (e instanceof DOMException && e.name === "AbortError") report("cancelled");
-      else setError(e instanceof Error ? e.message : "Upscale failed");
+      console.error("[Vice] Job failed:", e);
+      if (e instanceof DOMException && e.name === "AbortError") {
+        startTransition(() => {
+          dispatch({ type: "FAIL_RUN", progress: "cancelled" });
+        });
+      } else {
+        startTransition(() => {
+          dispatch({
+            type: "FAIL_RUN",
+            error: e instanceof Error ? e.message : "Upscale failed",
+          });
+        });
+      }
     } finally {
       batchAbortRef.current = null;
       runningRef.current = false;
-      setRunning(false);
     }
-  }, [files, scale]);
+  }, [state.files, state.scale, state.chained4x]);
 
   const cancel = useCallback(() => {
     const w = workerRef.current;
     if (w && runningRef.current) cancelWorkerJob(w, jobIdRef.current);
     batchAbortRef.current?.abort();
-    inlineAbortRef.current?.abort();
   }, []);
 
   const downloadZip = useCallback(async () => {
-    if (results.length < 2) return;
+    if (state.results.length < 2) return;
     const { BlobReader, BlobWriter, ZipWriter } = await import("@zip.js/zip.js");
-    // Main-thread deflate: tiny PNGs, and no blob: worker under our CSP.
     const writer = new ZipWriter(new BlobWriter("application/zip"), {
       useWebWorkers: false,
     });
-    for (const r of results) {
+    for (const r of state.results) {
       const stem = r.name.replace(/\.[^.]*$/, "") || "image";
       await writer.add(`${stem}-vice${r.scale}x.png`, new BlobReader(r.blob));
     }
@@ -221,21 +293,38 @@ export function useViceJob() {
     if (zipUrlRef.current) URL.revokeObjectURL(zipUrlRef.current);
     const url = track(URL.createObjectURL(blob));
     zipUrlRef.current = url;
-    setZipUrl(url);
-  }, [results]);
+    dispatch({ type: "SET_ZIP_URL", url });
+  }, [state.results]);
+
+  const setScale = useCallback((scale: ViceScale) => {
+    dispatch({ type: "SET_SCALE", scale });
+  }, []);
+
+  const setChained4x = useCallback((chained4x: boolean) => {
+    dispatch({ type: "SET_CHAINED_4X", chained4x });
+  }, []);
+
+  const setSelectedId = useCallback((id: number | null) => {
+    startTransition(() => {
+      dispatch({ type: "SET_SELECTED_ID", id });
+    });
+  }, []);
 
   return {
-    files,
-    results,
-    selectedId,
+    files: state.files,
+    results: state.results,
+    selectedId: state.selectedId,
     setSelectedId,
-    zipUrl,
-    scale,
+    zipUrl: state.zipUrl,
+    scale: state.scale,
     setScale,
-    progress,
-    running,
-    error,
+    chained4x: state.chained4x,
+    setChained4x,
+    progress: state.progress,
+    running: state.running,
+    error: state.error,
     pick,
+    removeFile,
     run,
     cancel,
     downloadZip,

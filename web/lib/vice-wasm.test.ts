@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { projectBox } from "./vice-pipeline";
+import { projectBox, projectSmooth, SMOOTH_ITERS } from "./vice-pipeline";
 
 // WASM-vs-TS parity: same C++ source as native, compiled with Emscripten.
 // Catches toolchain divergence (fast-math, SIMD, f32 precision).
@@ -40,5 +40,136 @@ describe("wasm parity", () => {
     for (let i = 0; i < expected.length; i++)
       worst = Math.max(worst, Math.abs(expected[i] - got[i]));
     expect(worst).toBeLessThan(1e-6);
+  });
+
+  test("vice_project (smooth + box) matches TS projectSmooth + projectBox", async () => {
+    const mod = (await import("../public/wasm/core.js")) as {
+      default: () => Promise<{
+        _vice_project_smooth(yPtr: number, rawPtr: number, w: number, h: number, s: number, c: number, it: number): void;
+        _vice_project_box(yPtr: number, rawPtr: number, w: number, h: number, s: number, c: number): void;
+        _malloc(n: number): number;
+        _free(p: number): void;
+        HEAPF32: Float32Array;
+      }>;
+    };
+    const core = await mod.default();
+    const w = 6;
+    const h = 5;
+    const s = 3;
+    const c = 3;
+    const y = new Float32Array(w * h * c);
+    const base = new Float32Array(w * s * h * s * c);
+    for (let i = 0; i < y.length; i++) y[i] = (i % 13) / 13;
+    for (let i = 0; i < base.length; i++) base[i] = (i % 29) / 29;
+
+    const expected = base.slice();
+    projectSmooth(y, expected, w, h, s, c, SMOOTH_ITERS);
+    projectBox(y, expected, w, h, s, c);
+
+    const yPtr = core._malloc(y.length * 4);
+    const rawPtr = core._malloc(base.length * 4);
+    core.HEAPF32.set(y, yPtr / 4);
+    core.HEAPF32.set(base, rawPtr / 4);
+    core._vice_project_smooth(yPtr, rawPtr, w, h, s, c, SMOOTH_ITERS);
+    core._vice_project_box(yPtr, rawPtr, w, h, s, c);
+    const got = core.HEAPF32.slice(rawPtr / 4, rawPtr / 4 + base.length);
+    core._free(yPtr);
+    core._free(rawPtr);
+
+    let worst = 0;
+    for (let i = 0; i < expected.length; i++)
+      worst = Math.max(worst, Math.abs(expected[i] - got[i]));
+    expect(worst).toBeLessThan(1e-4);
+  });
+
+  test("native WASM upscale + project runs and satisfies box consistency", async () => {
+    const { ViceCore } = await import("./vice-wasm");
+    const core = await ViceCore.load("../public/");
+    expect(core).toBeTruthy();
+    if (!core) return;
+    expect(core.hasNativeUpscale()).toBe(true);
+
+    const w = 8;
+    const h = 6;
+    const scale = 2;
+    const c = 4;
+    const y = new Float32Array(w * h * c);
+    for (let i = 0; i < y.length; i++) y[i] = (i % 19) / 19;
+
+    const ctx = core.create(w, h, scale, c);
+    core.setInput(ctx, y);
+    core.upscale(ctx);
+    core.project(ctx);
+    const residual = core.lastResidual(ctx);
+    expect(residual).toBeLessThan(0.05);
+
+    const png = core.finishPng(ctx, w * scale, h * scale, c);
+    expect(png.length).toBeGreaterThan(8);
+    expect(png[0]).toBe(137); // PNG magic byte
+    expect(png[1]).toBe(80);  // 'P'
+    core.destroy(ctx);
+  });
+
+  test("ViceCore setIccProfile embeds iCCP chunk into PNG", async () => {
+    const { ViceCore } = await import("./vice-wasm");
+    const core = await ViceCore.load("../public/");
+    if (!core) return;
+    const w = 4;
+    const h = 4;
+    const ctx = core.create(w, h, 2, 4);
+    const y = new Float32Array(w * h * 4).fill(0.5);
+    core.setInput(ctx, y);
+    core.upscale(ctx);
+    core.project(ctx);
+    const fakeIcc = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
+    core.setIccProfile(ctx, fakeIcc);
+    const png = core.finishPng(ctx, w * 2, h * 2, 4);
+    core.destroy(ctx);
+
+    // Verify "iCCP" chunk tag exists in the PNG bytes
+    let foundIccp = false;
+    for (let i = 0; i + 4 <= png.length; i++) {
+      if (
+        png[i] === 0x69 && // 'i'
+        png[i + 1] === 0x43 && // 'C'
+        png[i + 2] === 0x43 && // 'C'
+        png[i + 3] === 0x50 // 'P'
+      ) {
+        foundIccp = true;
+        break;
+      }
+    }
+    expect(foundIccp).toBe(true);
+  });
+
+  test("chained 4x (2x twice via downloadRaw) satisfies box consistency", async () => {
+    const { ViceCore } = await import("./vice-wasm");
+    const core = await ViceCore.load("../public/");
+    if (!core) return;
+    const w = 6;
+    const h = 6;
+    const c = 4;
+    const y = new Float32Array(w * h * c);
+    for (let i = 0; i < y.length; i++) y[i] = (i % 11) / 11;
+
+    // Pass 1: 2x
+    const ctx1 = core.create(w, h, 2, c);
+    core.setInput(ctx1, y);
+    core.upscale(ctx1);
+    core.project(ctx1);
+    const mid = core.downloadRaw(ctx1, w * 2 * h * 2 * c);
+    core.destroy(ctx1);
+
+    // Pass 2: 2x
+    const ctx2 = core.create(w * 2, h * 2, 2, c);
+    core.setInput(ctx2, mid);
+    core.upscale(ctx2);
+    core.project(ctx2);
+    const residual = core.lastResidual(ctx2);
+    expect(residual).toBeLessThan(0.05);
+
+    const png = core.finishPng(ctx2, w * 4, h * 4, c);
+    expect(png[0]).toBe(137);
+    core.destroy(ctx2);
   });
 });
