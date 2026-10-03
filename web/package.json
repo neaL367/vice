@@ -1,0 +1,46 @@
+{
+  "name": "web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "test": "bun test lib",
+    "test:e2e": "playwright test",
+    "worker:build": "bun build features/vice/vice.worker.ts --outfile public/vice-worker.js --target browser --format esm --minify",
+    "ort:vendor": "mkdir -p public/ort && cp node_modules/onnxruntime-web/dist/ort.min.mjs node_modules/onnxruntime-web/dist/ort.webgpu.min.mjs node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.mjs node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.wasm node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.jsep.mjs node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.jsep.wasm public/ort/",
+    "model:fetch": "mkdir -p public/models && (test -f public/models/realplksr-x2.onnx || curl -sSL --max-time 600 \"https://huggingface.co/darktable-org/upscale-realplksr-onnx/resolve/main/onnx/model_x2.onnx\" -o public/models/realplksr-x2.onnx)",
+    "predev": "bun run worker:build",
+    "prebuild": "bun run ort:vendor && bun run model:fetch && bun run worker:build"
+  },
+  "dependencies": {
+    "@zip.js/zip.js": "^2.23.0",
+    "next": "16.3.8",
+    "onnxruntime-web": "^1.30.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "bun-types": "^1.4.2",
+    "eslint": "^9",
+    "eslint-config-next": "16.3.8",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  },
+  "packageManager": "bun@1.4.1",
+  "ignoreScripts": [
+    "sharp",
+    "unrs-resolver"
+  ],
+  "trustedDependencies": [
+    "sharp",
+    "unrs-resolver"
+  ]
+}

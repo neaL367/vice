@@ -1,0 +1,38 @@
+# Build outputs
+core/build/
+web/.next/
+web/out/
+web/public/vice-worker.js
+# NOTE: web/public/wasm/* (core.js/wasm, ~54 KB) IS committed: Vercel has no
+# emsdk, and the app needs it at runtime (TS fallback otherwise).
+# Large runtime assets stay out (fetched by `bun run prebuild` on deploy):
+web/public/ort/
+web/public/models/
+
+# Deps
+web/node_modules/
+node_modules/
+
+# Local spec doc, not for repo
+Vice_ Consistent Super-Resolution Upscaler, Implementation Guide.md
+
+# Large model weights (vendor + license note before ship)
+models/*.onnx
+models/*.bin
+models/*.pt
+
+# Test artifacts
+web/test-results/
+web/playwright-report/
+web/coverage/
+coverage/
+
+# Env + editor + misc
+*.local
+.env*
+.vscode/
+*.tsbuildinfo
+.DS_Store
+
+# Eval datasets (250MB+ downloads, not for repo)
+tools/eval/data/

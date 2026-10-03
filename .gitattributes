@@ -1,0 +1,6 @@
+# Normalize line endings on commit; keep working-tree native.
+* text=auto
+*.png binary
+*.wasm binary
+*.ico binary
+*.onnx binary
