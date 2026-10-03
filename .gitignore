@@ -1,4 +1,5 @@
 # Build outputs
+build/
 core/build/
 web/.next/
 web/out/
