@@ -109,6 +109,40 @@ int vice_stream_finish_png(vice_stream_ctx* sctx, const unsigned char* rgba_rows
 double vice_stream_last_residual(const vice_stream_ctx* sctx);
 void vice_stream_destroy(vice_stream_ctx* sctx);
 
+/* Fused chained 4x for the streaming pipeline (infinite-export path).
+   mode 0 = off (direct 4x kernel); 1 = two 2x passes, clean second pass
+   (sharpness/shock forced to 0, matches the full-image chained policy);
+   2 = two 2x passes with full tuning on both ("detail").
+   The intermediate 2x image exists only for the current strip plus a fixed
+   input halo (6 rows each side); only owned output rows are kept, and the
+   final exact 4x4 block projection still runs against the original input,
+   so the reconstruction guarantee is unchanged. Set before pulling bands. */
+int vice_stream_set_fused(vice_stream_ctx* sctx, int mode);
+
+/* Incremental (truly out-of-core) PNG writer for the infinite-export path.
+   Only the previous row (for filtering), a fixed DEFLATE window/buffer, and
+   framed-but-undrained IDAT bytes are retained: peak working memory is
+   independent of image height. The caller feeds 8-bit rows top-to-bottom
+   (as produced by vice_stream_pull_band), drains encoded chunks, and writes
+   them to disk immediately. Multi-IDAT output: one zlib stream split across
+   consecutive IDAT chunks, per the PNG spec.
+   Color type is fixed at open: pass out_channels 3 (RGB) or 4 (RGBA).
+   Decide from the INPUT alpha (known before rendering), not by scanning
+   the output. in_channels is the fed row stride (3 or 4, >= out_channels);
+   RGBA rows are packed down to RGB inside when they differ.
+   Typical loop: open -> [write_rows -> drain*]* -> close -> drain* -> destroy.
+   close() fails unless exactly h rows were fed. drain() returns 0 with
+   *written == 0 when there is nothing pending. */
+typedef struct vice_png_stream vice_png_stream;
+vice_png_stream* vice_png_open(int w, int h, int in_channels, int out_channels,
+                               const unsigned char* icc_data, size_t icc_size);
+int vice_png_write_rows(vice_png_stream* st, const unsigned char* rows, int row_count);
+int vice_png_drain(vice_png_stream* st, unsigned char* out, size_t cap, size_t* written);
+int vice_png_close(vice_png_stream* st);
+void vice_png_destroy(vice_png_stream* st);
+/* Test hook: largest (pending + staged-deflate) byte count seen so far. */
+size_t vice_png_peak_pending(const vice_png_stream* st);
+
 float vice_srgb_to_linear(float v);
 float vice_linear_to_srgb(float v);
 float vice_fast_linear_to_srgb(float v);

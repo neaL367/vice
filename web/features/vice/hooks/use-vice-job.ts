@@ -27,6 +27,33 @@ import { initialState, viceJobReducer } from "./vice-job-reducer";
 const MAX_FILES = 10;
 const IMAGE_RE = /^image\/(png|jpeg|webp)$/;
 
+interface SaveFileHandle {
+  createWritable(): Promise<{
+    write(chunk: Uint8Array): Promise<void>;
+    close(): Promise<void>;
+    abort(): Promise<void>;
+  }>;
+}
+
+function canSaveToDisk(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    typeof (window as unknown as { showSaveFilePicker?: unknown }).showSaveFilePicker ===
+      "function"
+  );
+}
+
+async function pickSaveFile(suggestedName: string): Promise<SaveFileHandle> {
+  const w = window as unknown as {
+    showSaveFilePicker?: (opts: unknown) => Promise<SaveFileHandle>;
+  };
+  if (!w.showSaveFilePicker) throw new Error("Save-to-disk is not supported by this browser.");
+  return w.showSaveFilePicker({
+    suggestedName,
+    types: [{ description: "PNG image", accept: { "image/png": [".png"] } }],
+  });
+}
+
 function stageLabel(stage: string): string | null {
   if (stage === "done") return "Done";
   return null;
@@ -307,6 +334,126 @@ export function useViceJob() {
     }
   }, [state.files, state.scale, state.chained4x, state.preset, state.dering, state.sharpness, state.shock, killWorker, ensureWorker]);
 
+  // Infinite (save-to-disk) export: no output MP cap. Single file only — one
+  // picker per user gesture. The full PNG streams to disk in chunks; the
+  // result entry carries a small preview plus the saved file's name/size.
+  const runToFile = useCallback(async () => {
+    if (runningRef.current || state.files.length !== 1) return;
+    if (!canSaveToDisk()) {
+      dispatch({
+        type: "SET_ERROR",
+        error: "Large exports require Chrome/Edge desktop or Vice Desktop.",
+      });
+      return;
+    }
+    runningRef.current = true;
+    dispatch({ type: "START_RUN" });
+    const report = (s: string) =>
+      startTransition(() => dispatch({ type: "SET_PROGRESS", progress: s }));
+    const batchCtrl = new AbortController();
+    batchAbortRef.current = batchCtrl;
+    const jobId = ++jobIdRef.current;
+    const vf = state.files[0];
+    const stem = vf.file.name.replace(/\.[^.]*$/, "") || "image";
+    const fileName = `${stem}-vice${state.scale}x.png`;
+    try {
+      const handle = await pickSaveFile(fileName);
+      const writable = await handle.createWritable();
+      report("starting…");
+      const onProg = (p: ViceProgress) => {
+        const label = stageLabel(p.stage) ?? `${p.stage}: ${p.band}/${p.totalBands}`;
+        report(label);
+      };
+      const opts = {
+        chained4x: state.chained4x,
+        preset: state.preset,
+        dering: state.dering,
+        sharpness: state.sharpness,
+        shock: state.shock,
+      };
+      let w = ensureWorker();
+      if (w && w !== readyRef.current) {
+        try {
+          await waitForWorkerReady(w);
+          if (workerRef.current === w) readyRef.current = w;
+        } catch {
+          killWorker();
+          w = null;
+        }
+      }
+      let blob: Blob;
+      let meta: ViceResultMeta;
+      const sinkWrite = async (chunk: Uint8Array) => {
+        await writable.write(chunk);
+      };
+      try {
+        if (w) {
+          ({ blob, meta } = await runViceJob(w, jobId, vf.file, state.scale, baseRef.current, onProg, {
+            ...opts,
+            sinkWrite,
+          }));
+        } else {
+          // Inline fallback: same engine on the main thread (spec fallback).
+          const mod = await import("../vice.worker");
+          ({ blob, meta } = await mod.runViceUpscale(vf.file, state.scale, onProg, {
+            ...opts,
+            signal: batchCtrl.signal,
+            base: baseRef.current,
+            sink: { write: sinkWrite },
+          }));
+        }
+        await writable.close();
+      } catch (e) {
+        try {
+          await writable.abort();
+        } catch {
+          // Already closed/failed; the original error matters.
+        }
+        throw e;
+      }
+      const id = ++resultIdRef.current;
+      const r: ViceResult = {
+        id,
+        name: vf.file.name,
+        previewUrl: vf.previewUrl,
+        blob,
+        blobUrl: track(URL.createObjectURL(blob)),
+        outW: meta.outW,
+        outH: meta.outH,
+        residual: meta.residual,
+        backend: meta.backend,
+        scale: state.scale,
+        hasIcc: meta.hasIcc,
+        chained4x: meta.chained4x,
+        durationMs: meta.durationMs,
+        savedToDisk: true,
+        fileName,
+        fileBytes: meta.fileBytes,
+      };
+      startTransition(() => {
+        dispatch({ type: "ADD_RESULT", result: r });
+        dispatch({ type: "FINISH_RUN" });
+      });
+    } catch (e) {
+      console.error("[Vice] Save-to-disk job failed:", e);
+      if (e instanceof DOMException && e.name === "AbortError") {
+        startTransition(() => {
+          dispatch({ type: "FAIL_RUN", progress: "cancelled" });
+        });
+      } else {
+        startTransition(() => {
+          dispatch({
+            type: "FAIL_RUN",
+            error: e instanceof Error ? e.message : "Save-to-disk export failed",
+          });
+        });
+      }
+    } finally {
+      batchAbortRef.current = null;
+      runningRef.current = false;
+    }
+  }, [state.files, state.scale, state.chained4x, state.preset, state.dering, state.sharpness, state.shock, killWorker, ensureWorker]);
+
   const cancel = useCallback(() => {
     const w = workerRef.current;
     if (w && runningRef.current) cancelWorkerJob(w, jobIdRef.current);
@@ -314,12 +461,14 @@ export function useViceJob() {
   }, []);
 
   const downloadZip = useCallback(async () => {
-    if (state.results.length < 2) return;
+    // Save-to-disk results carry preview blobs only; never zip those.
+    const zippable = state.results.filter((r) => !r.savedToDisk);
+    if (zippable.length < 2) return;
     const { BlobReader, BlobWriter, ZipWriter } = await import("@zip.js/zip.js");
     const writer = new ZipWriter(new BlobWriter("application/zip"), {
       useWebWorkers: false,
     });
-    for (const r of state.results) {
+    for (const r of zippable) {
       const stem = r.name.replace(/\.[^.]*$/, "") || "image";
       await writer.add(`${stem}-vice${r.scale}x.png`, new BlobReader(r.blob));
     }
@@ -392,6 +541,8 @@ export function useViceJob() {
     pick,
     removeFile,
     run,
+    runToFile,
+    canSaveToDisk: canSaveToDisk(),
     cancel,
     downloadZip,
   };

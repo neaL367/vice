@@ -186,7 +186,7 @@ export const UpscalerHeaderActions = memo(function UpscalerHeaderActions() {
         <span>New</span>
       </button>
 
-      {job.results.length > 1 && (
+      {job.results.filter((r) => !r.savedToDisk).length > 1 && (
         <button
           type="button"
           onClick={job.downloadZip}
@@ -206,7 +206,13 @@ export const UpscalerHeaderActions = memo(function UpscalerHeaderActions() {
         </a>
       )}
 
-      {selectedResult && exportHref && (
+      {selectedResult?.savedToDisk && selectedResult.fileName && (
+        <span className="hidden max-w-48 truncate text-xs text-muted sm:inline" title={selectedResult.fileName}>
+          Saved: {selectedResult.fileName}
+        </span>
+      )}
+
+      {selectedResult && exportHref && !selectedResult.savedToDisk && (
         <div className="flex items-center gap-1 rounded-md border border-hairline bg-foreground/[0.02] p-0.5">
           <div
             role="group"
@@ -274,7 +280,11 @@ export const UpscalerMobileBar = memo(function UpscalerMobileBar() {
       </button>
     );
   } else if (hasResults && selectedResult) {
-    primary = (
+    primary = selectedResult.savedToDisk ? (
+      <span className="inline-flex h-10 flex-1 items-center justify-center rounded-md border border-hairline text-sm font-semibold text-muted">
+        Saved to disk
+      </span>
+    ) : (
       <a
         href={selectedResult.blobUrl}
         download={`${selectedResult.name.replace(/\.[^.]*$/, "") || "image"}-vice${selectedResult.scale}x.png`}

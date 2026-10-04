@@ -26,6 +26,10 @@ export interface ViceJobOptions {
   sharpness?: number;
   shock?: number;
   streamThresholdPx?: number;
+  fourXDetail?: boolean;
+  // Infinite path: chunks from the worker are written here (FileSystem
+  // Writable), then acknowledged one at a time (backpressure: 1 in flight).
+  sinkWrite?: (chunk: Uint8Array) => Promise<void>;
 }
 
 const workerReadyMap = new WeakMap<Worker, Promise<void>>();
@@ -117,6 +121,24 @@ export function runOnWorkerThread(
       if (msg.jobId !== jobId) return;
       if (msg.type === "progress") {
         onProgress(msg.progress);
+      } else if (msg.type === "pngchunk") {
+        // Backpressure relay: write, then ack exactly once. On write
+        // failure ack anyway (unblocks the worker) and fail the job.
+        void (async () => {
+          try {
+            if (!options?.sinkWrite) throw new Error("no chunk sink for save-to-disk job");
+            await options.sinkWrite(msg.chunk);
+            worker.postMessage({ type: "pngack", jobId });
+          } catch (err) {
+            try {
+              worker.postMessage({ type: "pngack", jobId });
+            } catch {
+              // Worker already gone.
+            }
+            cleanup();
+            reject(err instanceof Error ? err : new Error("chunk write failed"));
+          }
+        })();
       } else if (msg.type === "done") {
         cleanup();
         resolve({ blob: msg.blob, meta: msg.meta });
@@ -136,21 +158,32 @@ export function runOnWorkerThread(
     };
     worker.addEventListener("message", onMessage);
     worker.addEventListener("error", onError);
-    const req: ViceIncoming = {
-      type: "run",
-      jobId,
-      file,
-      scale,
-      base,
-      chained4x: options?.chained4x,
-      preset: options?.preset,
-      dering: options?.dering,
-      sharpness: options?.sharpness,
-      shock: options?.shock,
-      streamThresholdPx: options?.streamThresholdPx,
-    };
-    worker.postMessage(req);
+    worker.postMessage(toRunRequest(jobId, file, scale, base, options));
   });
+}
+
+function toRunRequest(
+  jobId: number,
+  file: File,
+  scale: ViceScale,
+  base: string,
+  options?: ViceJobOptions,
+): ViceIncoming {
+  return {
+    type: "run",
+    jobId,
+    file,
+    scale,
+    base,
+    chained4x: options?.chained4x,
+    preset: options?.preset,
+    dering: options?.dering,
+    sharpness: options?.sharpness,
+    shock: options?.shock,
+    streamThresholdPx: options?.streamThresholdPx,
+    saveToDisk: options?.sinkWrite ? true : undefined,
+    fourXDetail: options?.fourXDetail,
+  };
 }
 
 /**

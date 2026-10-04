@@ -28,6 +28,9 @@ export interface ViceResult {
   sharpness?: number;
   shock?: number;
   durationMs: number;
+  savedToDisk?: boolean; // blob is a small preview; full PNG already on disk
+  fileName?: string;
+  fileBytes?: number;
 }
 
 export interface ViceProgress {
@@ -49,6 +52,15 @@ export interface ViceResultMeta {
   sharpness?: number;
   shock?: number;
   durationMs: number;
+  savedToDisk?: boolean; // infinite path: blob is a small preview, file is on disk
+  fileBytes?: number; // infinite path: encoded bytes written
+}
+
+// Chunk sink for the infinite (save-to-disk) path. Implemented inline by the
+// main thread (FileSystemWritableFileStream) or bridged over worker RPC
+// (pngchunk/pngack). Never crosses postMessage itself.
+export interface VicePngSink {
+  write(chunk: Uint8Array): Promise<void>;
 }
 
 export interface ViceRunOptions {
@@ -60,6 +72,8 @@ export interface ViceRunOptions {
   sharpness?: number;
   shock?: number;
   streamThresholdPx?: number; // test hook: force streaming above this output px
+  sink?: VicePngSink; // present -> infinite path: stream PNG chunks, no Blob
+  fourXDetail?: boolean; // infinite chained 4x: full tuning on both passes
 }
 
 // --- Worker-thread RPC ----------------------------------------------------
@@ -77,6 +91,8 @@ export interface ViceRunMsg {
   sharpness?: number;
   shock?: number;
   streamThresholdPx?: number;
+  saveToDisk?: boolean; // infinite path: worker emits pngchunk, awaits pngack
+  fourXDetail?: boolean;
 }
 export interface ViceCancelMsg {
   type: "cancel";
@@ -87,12 +103,21 @@ export interface ViceWarmMsg {
   jobId: 0;
   base: string;
 }
-export type ViceIncoming = ViceRunMsg | ViceCancelMsg | ViceWarmMsg;
+export type ViceIncoming = ViceRunMsg | ViceCancelMsg | ViceWarmMsg | ViceAckMsg;
 
 export interface ViceProgressMsg {
   type: "progress";
   jobId: number;
   progress: ViceProgress;
+}
+export interface ViceChunkMsg {
+  type: "pngchunk";
+  jobId: number;
+  chunk: Uint8Array; // transferable: posted with [chunk.buffer]
+}
+export interface ViceAckMsg {
+  type: "pngack";
+  jobId: number;
 }
 export interface ViceDoneMsg {
   type: "done";
@@ -112,6 +137,7 @@ export interface ViceReadyMsg {
 }
 export type ViceOutgoing =
   | ViceProgressMsg
+  | ViceChunkMsg
   | ViceDoneMsg
   | ViceFailMsg
   | ViceReadyMsg;

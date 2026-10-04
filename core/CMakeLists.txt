@@ -31,6 +31,7 @@ endif()
 
 add_executable(vice_tests tests/test_all.cpp)
 target_link_libraries(vice_tests PRIVATE vice_core)
+target_include_directories(vice_tests PRIVATE src)
 
 add_executable(vice_eval ../tools/eval/eval.cpp ../tools/eval/stb_impl.cpp)
 target_link_libraries(vice_eval PRIVATE vice_core)

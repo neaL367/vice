@@ -84,4 +84,84 @@ export async function runStream(
   };
 }
 
-(window as unknown as { __streamProbe: object }).__streamProbe = { runStream };
+export interface InfiniteProbeResult extends StreamProbeResult {
+  savedToDisk: boolean;
+  fileBytes: number;
+  previewW: number;
+  previewH: number;
+}
+
+export async function runInfinite(
+  kind: "halves-bw" | "halves-alpha" | "gray",
+  scale: 2 | 4 = 2,
+  chained4x = false,
+): Promise<InfiniteProbeResult> {
+  const input = await paint(kind);
+  const file = new File([new Uint8Array(input.bytes)], input.name, { type: input.mime });
+  const chunks: Uint8Array[] = [];
+  const { blob, meta } = await runViceUpscale(file, scale, () => {}, {
+    base: "/",
+    streamThresholdPx: 0,
+    preset: "photo",
+    dering: 1.0,
+    sharpness: 0.35,
+    shock: 0.35,
+    chained4x,
+    sink: {
+      write: async (chunk: Uint8Array) => {
+        chunks.push(chunk.slice());
+      },
+    },
+  });
+  // Reassemble the streamed file exactly as the disk writer would.
+  const total = chunks.reduce((s, c) => s + c.length, 0);
+  const fileBytes = new Uint8Array(total);
+  let off = 0;
+  for (const c of chunks) {
+    fileBytes.set(c, off);
+    off += c.length;
+  }
+  const fileBlob = new Blob([fileBytes as unknown as BlobPart], { type: "image/png" });
+  const tag = [0x69, 0x43, 0x43, 0x50];
+  let pngHasIccp = false;
+  for (let i = 0; i + 4 <= fileBytes.length; i++) {
+    if (
+      fileBytes[i] === tag[0] &&
+      fileBytes[i + 1] === tag[1] &&
+      fileBytes[i + 2] === tag[2] &&
+      fileBytes[i + 3] === tag[3]
+    ) {
+      pngHasIccp = true;
+      break;
+    }
+  }
+  const bmp = await createImageBitmap(fileBlob);
+  const cv = document.createElement("canvas");
+  cv.width = bmp.width;
+  cv.height = bmp.height;
+  const ctx = cv.getContext("2d")!;
+  ctx.drawImage(bmp, 0, 0);
+  const d = ctx.getImageData(0, 0, cv.width, cv.height);
+  bmp.close();
+  // Preview blob decodes too (small product, not the file).
+  const pvBmp = await createImageBitmap(blob);
+  const previewW = pvBmp.width;
+  const previewH = pvBmp.height;
+  pvBmp.close();
+  return {
+    outW: meta.outW,
+    outH: meta.outH,
+    residual: meta.residual,
+    backend: meta.backend,
+    w: cv.width,
+    h: cv.height,
+    data: [...d.data],
+    pngHasIccp,
+    savedToDisk: !!meta.savedToDisk,
+    fileBytes: meta.fileBytes ?? total,
+    previewW,
+    previewH,
+  };
+}
+
+(window as unknown as { __streamProbe: object }).__streamProbe = { runStream, runInfinite };

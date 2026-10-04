@@ -90,9 +90,11 @@ export function UpscalerProvider({ children }: { children: ReactNode }) {
     [],
   );
 
-  // Convert PNG blob to WebP / JPEG when user picks non-PNG format
+  // Convert PNG blob to WebP / JPEG when user picks non-PNG format.
+  // Skipped for save-to-disk results: blobUrl is a small preview, and the
+  // full PNG already lives on disk.
   useEffect(() => {
-    if (!selectedResult || exportFormat === "png") return;
+    if (!selectedResult || exportFormat === "png" || selectedResult.savedToDisk) return;
     let active = true;
     const mime = exportFormat === "webp" ? "image/webp" : "image/jpeg";
     const img = new Image();

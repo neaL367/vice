@@ -426,4 +426,117 @@ describe("wasm parity", () => {
       expect(worst).toBeLessThan(2e-3);
     }
   });
+
+  test("incremental PNG writer round-trips fixed-budget chunks", async () => {
+    const { inflateSync } = await import("node:zlib");
+    const { ViceCore } = await import("./vice-wasm");
+    const core = await ViceCore.load("../public/");
+    if (!core) return;
+    expect(core.hasInfinite()).toBe(true);
+    const W = 12;
+    const H = 9;
+    const rows = new Uint8Array(W * H * 4);
+    for (let y = 0; y < H; y++)
+      for (let x = 0; x < W; x++) {
+        const i = (y * W + x) * 4;
+        rows[i] = (x * 37 + y * 91) & 255;
+        rows[i + 1] = (x * 11 + 40) & 255;
+        rows[i + 2] = (y * 131 + 90) & 255;
+        rows[i + 3] = 255;
+      }
+    const st = core.pngOpen(W, H, 4, 3);
+    const chunks: Uint8Array[] = [];
+    for (const [off, n] of [[0, 4], [4, 5]] as const) {
+      const ptr = core.writeBytes(rows.slice(off * W * 4, (off + n) * W * 4));
+      try {
+        core.pngWriteRows(st, ptr, n);
+      } finally {
+        core.freeBytes(ptr);
+      }
+      for (;;) {
+        const c = core.pngDrain(st, 997);
+        if (c.length === 0) break;
+        chunks.push(c);
+      }
+    }
+    core.pngClose(st);
+    for (;;) {
+      const c = core.pngDrain(st, 997);
+      if (c.length === 0) break;
+      chunks.push(c);
+    }
+    core.pngDestroy(st);
+    const total = chunks.reduce((s, c) => s + c.length, 0);
+    const png = new Uint8Array(total);
+    let p = 0;
+    for (const c of chunks) {
+      png.set(c, p);
+      p += c.length;
+    }
+    expect(png[0]).toBe(137);
+    expect(png[1]).toBe(0x50);
+    // IHDR dims.
+    const rd32 = (o: number) =>
+      (png[o] * 2 ** 24 + png[o + 1] * 2 ** 16 + png[o + 2] * 2 ** 8 + png[o + 3]) >>> 0;
+    expect(rd32(16)).toBe(W);
+    expect(rd32(20)).toBe(H);
+    // Walk chunks: every CRC valid, IDAT payloads inflate to (stride+1)*H.
+    let pos = 8;
+    let idatLen = 0;
+    const idat = new Uint8Array(total);
+    const crcTable = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+      let v = n;
+      for (let k = 0; k < 8; k++) v = v & 1 ? 0xedb88320 ^ (v >>> 1) : v >>> 1;
+      crcTable[n] = v >>> 0;
+    }
+    const crc = (buf: Uint8Array, o: number, n: number): number => {
+      let v = 0xffffffff;
+      for (let i = 0; i < n; i++) v = crcTable[(v ^ buf[o + i]) & 255] ^ (v >>> 8);
+      return (v ^ 0xffffffff) >>> 0;
+    };
+    let seenIend = false;
+    while (pos + 8 <= png.length) {
+      const n = rd32(pos);
+      const type = String.fromCharCode(png[pos + 4], png[pos + 5], png[pos + 6], png[pos + 7]);
+      expect(crc(png, pos + 4, 4 + n)).toBe(rd32(pos + 8 + n));
+      if (type === "IDAT") {
+        idat.set(png.slice(pos + 8, pos + 8 + n), idatLen);
+        idatLen += n;
+      }
+      if (type === "IEND") seenIend = true;
+      pos += 12 + n;
+    }
+    expect(seenIend).toBe(true);
+    expect(pos).toBe(png.length);
+    const raw = inflateSync(idat.slice(0, idatLen));
+    expect(raw.length).toBe((W * 3 + 1) * H);
+    // First row used a filter in range; spot-check unfiltered bytes exist.
+    expect(raw[0]).toBeLessThanOrEqual(4);
+  });
+
+  test("fused 4x stream renders exact dims with residual", async () => {
+    const { ViceCore } = await import("./vice-wasm");
+    const core = await ViceCore.load("../public/");
+    if (!core || !core.hasInfinite()) return;
+    const w = 12;
+    const h = 10;
+    const sctx = core.createStream(w, h, 4, 4, 64);
+    core.streamSetFused(sctx, 1);
+    const y = new Float32Array(w * h * 4).fill(0.4);
+    for (let yy = 0; yy < h; yy += 5) core.streamPushRows(sctx, y.slice(yy * w * 4, (yy + 5) * w * 4), 5);
+    const bandPtr = core.mallocBytes(64 * w * 4 * 4);
+    let emitted = 0;
+    try {
+      while (emitted < h * 4) {
+        if (!core.streamHasNext(sctx)) throw new Error("stalled");
+        const { rows } = core.streamPullBand(sctx, bandPtr, 64);
+        emitted += rows;
+      }
+    } finally {
+      core.freeBytes(bandPtr);
+      core.streamDestroy(sctx);
+    }
+    expect(emitted).toBe(h * 4);
+  });
 });

@@ -30,7 +30,14 @@ interface ViceCoreInstance {
   _vice_stream_pull_band?(sctx: number, outPtr: number, countPtr: number): number;
   _vice_stream_finish_png?(sctx: number, rgbaPtr: number, n: number, outPtr: number, cap: number, writtenPtr: number): number;
   _vice_stream_last_residual?(sctx: number): number;
+  _vice_stream_set_fused?(sctx: number, mode: number): number;
   _vice_stream_destroy?(sctx: number): void;
+  _vice_png_open?(w: number, h: number, inCh: number, outCh: number, iccPtr: number, iccSize: number): number;
+  _vice_png_write_rows?(st: number, rowsPtr: number, rowCount: number): number;
+  _vice_png_drain?(st: number, outPtr: number, cap: number, writtenPtr: number): number;
+  _vice_png_close?(st: number): number;
+  _vice_png_destroy?(st: number): void;
+  _vice_png_peak_pending?(st: number): number;
   _vice_last_residual(ctx: number): number;
   _vice_destroy(ctx: number): void;
   _malloc(size: number): number;
@@ -349,6 +356,77 @@ export class ViceCore {
 
   streamDestroy(sctx: number): void {
     this.core._vice_stream_destroy!(sctx);
+  }
+
+  streamSetFused(sctx: number, mode: 0 | 1 | 2): void {
+    if (!this.core._vice_stream_set_fused) throw new Error("stale core.js: no fused 4x");
+    if (this.core._vice_stream_set_fused(sctx, mode) !== 0)
+      throw new Error(`vice_stream_set_fused failed (mode=${mode})`);
+  }
+
+  // --- Incremental PNG writer (infinite export) --------------------------
+  // Fixed memory budget: bands in, 256 KB chunks out. Missing exports
+  // (stale cached core.js) -> false -> caller refuses the save-to-disk path
+  // instead of silently accumulating a Blob.
+
+  hasInfinite(): boolean {
+    const c = this.core;
+    return (
+      this.hasStream() &&
+      typeof c._vice_stream_set_fused === "function" &&
+      typeof c._vice_png_open === "function" &&
+      typeof c._vice_png_write_rows === "function" &&
+      typeof c._vice_png_drain === "function" &&
+      typeof c._vice_png_close === "function" &&
+      typeof c._vice_png_destroy === "function"
+    );
+  }
+
+  pngOpen(w: number, h: number, inCh: number, outCh: number, icc?: Uint8Array): number {
+    let iccPtr = 0;
+    try {
+      if (icc && icc.length > 0) {
+        iccPtr = this.core._malloc(icc.length);
+        if (!iccPtr) throw new Error("wasm malloc failed");
+        this.core.HEAPU8.set(icc, iccPtr);
+      }
+      const st = this.core._vice_png_open!(w, h, inCh, outCh, iccPtr, icc?.length ?? 0);
+      if (!st) throw new Error("vice_png_open failed (bad dims)");
+      return st;
+    } finally {
+      if (iccPtr) this.core._free(iccPtr);
+    }
+  }
+
+  pngWriteRows(st: number, rowsPtr: number, rowCount: number): void {
+    if (this.core._vice_png_write_rows!(st, rowsPtr, rowCount) !== 0)
+      throw new Error("vice_png_write_rows failed");
+  }
+
+  pngDrain(st: number, cap = 1 << 20): Uint8Array {
+    const outPtr = this.core._malloc(cap);
+    const writtenPtr = this.core._malloc(8);
+    if (!outPtr || !writtenPtr) throw new Error("wasm malloc failed");
+    try {
+      if (this.core._vice_png_drain!(st, outPtr, cap, writtenPtr) !== 0)
+        throw new Error("vice_png_drain failed");
+      const heap = this.core.HEAPU8;
+      const written = new DataView(heap.buffer, writtenPtr, 4).getUint32(0, true);
+      const out = new Uint8Array(written);
+      out.set(heap.subarray(outPtr, outPtr + written));
+      return out;
+    } finally {
+      this.core._free(outPtr);
+      this.core._free(writtenPtr);
+    }
+  }
+
+  pngClose(st: number): void {
+    if (this.core._vice_png_close!(st) !== 0) throw new Error("vice_png_close failed");
+  }
+
+  pngDestroy(st: number): void {
+    this.core._vice_png_destroy!(st);
   }
 
   lastStreamResidual(sctx: number): number {

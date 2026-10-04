@@ -74,17 +74,19 @@ export async function runViceUpscale(
   const outPx = bmp.width * bmp.height * scale * scale;
   const fullCapPx = opts.streamThresholdPx ?? maxOutputPixels();
   const streamCapPx = maxStreamPixels();
-  if (outPx > streamCapPx) {
+  // Save-to-disk (infinite) path has no output MP cap: size changes time
+  // and disk use, not peak RAM. The Blob routes below keep their caps.
+  if (outPx > streamCapPx && !opts.sink) {
     const mp = (outPx / 1_000_000).toFixed(1);
     bmp.close();
     throw new Error(
-      `Output ${mp} MP exceeds this device's ${(streamCapPx / 1_000_000).toFixed(0)} MP streaming limit. Use a smaller image or scale.`,
+      `Output ${mp} MP exceeds this device's ${(streamCapPx / 1_000_000).toFixed(0)} MP streaming limit. Use a smaller image or scale, or save to disk.`,
     );
   }
-  if (scale === 4 && opts.chained4x && outPx > fullCapPx) {
+  if (scale === 4 && opts.chained4x && outPx > fullCapPx && !opts.sink) {
     bmp.close();
     throw new Error(
-      `Chained 2×2× above ${(fullCapPx / 1_000_000).toFixed(0)} MP is not supported. Disable it for a direct 4× upscale.`,
+      `Chained 2×2× above ${(fullCapPx / 1_000_000).toFixed(0)} MP is not supported. Disable it for a direct 4× upscale, or save to disk.`,
     );
   }
 
@@ -111,12 +113,193 @@ export async function runViceUpscale(
 
   // 1. Native C++ WebAssembly engine: ultra-fast in-memory Lanczos-3 with diagonal steering
   const core = opts.base ? await ensureCore(opts.base) : null;
+  if (opts.sink && !(core && core.hasStream() && core.hasInfinite())) {
+    bmp.close();
+    throw new Error(
+      "Save-to-disk export needs the current native engine (stale or missing WASM core).",
+    );
+  }
   if (core && core.hasNativeUpscale()) {
-    // 1a. Streaming strip path: band-sized floats, 8-bit accumulation, one
+    // 1a. Infinite path: band renderer -> incremental PNG writer -> caller
+    // sink (disk). No full RGBA, no full PNG, no Blob: peak working memory
+    // is band-sized plus fixed writer buffers, independent of output height.
+    // Chained 4x runs fused (strip-local 2x o 2x, exact 4x4 projection).
+    const useInfinite = !!opts.sink;
+    if (useInfinite) {
+      const infBackend = `Lanczos-3 infinite${scale === 4 && opts.chained4x ? " 2×2×" : ""}`;
+      const BAND = 64;
+      const CHUNK = 256;
+      onProgress({ band: 0, totalBands: H, stage: "Streaming…", backend: infBackend });
+      throwIfAborted(opts.signal);
+      // Color type from INPUT alpha (tiled scan, bounded): the incremental
+      // writer must commit to RGB/RGBA in IHDR before the first band.
+      let hasAlpha = false;
+      scan: for (let y0 = 0; y0 < h; y0 += 512) {
+        const rows = Math.min(512, h - y0);
+        const strip = ctx.getImageData(0, y0, w, rows);
+        const d = strip.data;
+        for (let i = 3; i < d.length; i += 4) {
+          if (d[i] < 255) {
+            hasAlpha = true;
+            break scan;
+          }
+        }
+        throwIfAborted(opts.signal);
+      }
+      const outCh = hasAlpha ? 4 : 3;
+      const sctx = core.createStream(w, h, scale, 4, BAND);
+      if (scale === 4 && opts.chained4x) core.streamSetFused(sctx, opts.fourXDetail ? 2 : 1);
+      const bandPtr = core.mallocBytes(BAND * W * 4);
+      const pst = core.pngOpen(W, H, 4, outCh, icc ?? undefined);
+      // Fixed preview product: box-downsample emitted bands into a <=1600px
+      // RGBA buffer. The giant output never becomes a canvas or Blob URL.
+      const PV_MAX = 1600;
+      let pW = W;
+      let pH = H;
+      if (pW > PV_MAX || pH > PV_MAX) {
+        const k = Math.min(PV_MAX / pW, PV_MAX / pH);
+        pW = Math.max(1, Math.round(pW * k));
+        pH = Math.max(1, Math.round(pH * k));
+      }
+      const preview = new Uint8Array(pW * pH * 4);
+      const accSum = new Float32Array(pW * 4);
+      let accN = 0;
+      let curPy = -1;
+      const flushPreviewRow = (py: number) => {
+        if (py < 0 || accN === 0) return;
+        const base = py * pW * 4;
+        for (let px = 0; px < pW; px++) {
+          for (let c = 0; c < 4; c++) {
+            preview[base + px * 4 + c] = Math.max(
+              0,
+              Math.min(255, Math.round(accSum[px * 4 + c] / accN)),
+            );
+          }
+        }
+      };
+      const sink = opts.sink!;
+      let emitted = 0;
+      let fileBytes = 0;
+      const drainToDisk = async () => {
+        for (;;) {
+          const chunk = core.pngDrain(pst);
+          if (chunk.length === 0) break;
+          fileBytes += chunk.length;
+          await sink.write(chunk);
+          throwIfAborted(opts.signal);
+        }
+      };
+      try {
+        core.streamSetTuning(sctx, {
+          preset: opts.preset,
+          dering: opts.dering,
+          sharpness: opts.sharpness,
+          shock: opts.shock,
+        });
+        if (icc) core.streamSetIcc(sctx, icc);
+        const pump = async () => {
+          while (core.streamHasNext(sctx)) {
+            const { rc, rows } = core.streamPullBand(sctx, bandPtr, BAND);
+            const bytes = core.readBytes(bandPtr, rows * W * 4);
+            core.pngWriteRows(pst, bandPtr, rows);
+            // Preview: horizontal box per output row, vertical box across rows.
+            for (let r = 0; r < rows; r++) {
+              const y = emitted + r;
+              const py = Math.min(pH - 1, Math.floor((y * pH) / H));
+              if (py !== curPy) {
+                flushPreviewRow(curPy);
+                accSum.fill(0);
+                accN = 0;
+                curPy = py;
+              }
+              const rowOff = r * W * 4;
+              for (let px = 0; px < pW; px++) {
+                const x0 = Math.floor((px * W) / pW);
+                const x1 = Math.max(x0 + 1, Math.floor(((px + 1) * W) / pW));
+                const n = x1 - x0;
+                for (let c = 0; c < 4; c++) {
+                  let s = 0;
+                  for (let x = x0; x < x1; x++) s += bytes[rowOff + x * 4 + c];
+                  accSum[px * 4 + c] += s / n;
+                }
+              }
+              accN++;
+            }
+            emitted += rows;
+            await drainToDisk();
+            if (emitted % 512 === 0 || rc === 1) {
+              onProgress({
+                band: Math.min(emitted, H),
+                totalBands: H,
+                stage: "Streaming…",
+                backend: infBackend,
+              });
+            }
+            throwIfAborted(opts.signal);
+            if (rc === 1) break;
+          }
+        };
+        let pushed = 0;
+        while (pushed < h) {
+          const rows = Math.min(CHUNK, h - pushed);
+          const strip = ctx.getImageData(0, pushed, w, rows);
+          core.streamPushRows(
+            sctx,
+            straightSrgbToPremultLinear(strip.data, w, rows),
+            rows,
+          );
+          pushed += rows;
+          throwIfAborted(opts.signal);
+          await pump();
+        }
+        while (emitted < H) {
+          if (!core.streamHasNext(sctx)) {
+            throw new Error("stream stalled: input exhausted with rows unemitted");
+          }
+          await pump();
+        }
+        flushPreviewRow(curPy);
+        const residual = core.lastStreamResidual(sctx);
+        onProgress({ band: H, totalBands: H, stage: "Saving…", backend: infBackend });
+        throwIfAborted(opts.signal);
+        core.pngClose(pst);
+        await drainToDisk();
+        bmp.close();
+        const pvCanvas = new OffscreenCanvas(pW, pH);
+        const pvCtx = pvCanvas.getContext("2d");
+        if (!pvCtx) throw new Error("preview context unavailable");
+        pvCtx.putImageData(new ImageData(new Uint8ClampedArray(preview), pW, pH), 0, 0);
+        const blob = await pvCanvas.convertToBlob({ type: "image/png" });
+        onProgress({ band: H, totalBands: H, stage: "done", backend: infBackend });
+        return {
+          blob,
+          meta: {
+            residual,
+            backend: infBackend,
+            outW: W,
+            outH: H,
+            hasIcc: !!icc,
+            chained4x: scale === 4 && !!opts.chained4x,
+            preset: opts.preset,
+            dering: opts.dering,
+            sharpness: opts.sharpness,
+            shock: opts.shock,
+            durationMs: engineMs(),
+            savedToDisk: true,
+            fileBytes,
+          },
+        };
+      } finally {
+        core.freeBytes(bandPtr);
+        core.pngDestroy(pst);
+        core.streamDestroy(sctx);
+      }
+    }
+    // 1b. Streaming strip path: band-sized floats, 8-bit accumulation, one
     // PNG encode. Bounded memory above the full-image cap; box-only band
     // projection (same guarantee, no multigrid). Direct scales only.
     const useStream =
-      core.hasStream() && !(scale === 4 && opts.chained4x) && outPx > fullCapPx;
+      !useInfinite && core.hasStream() && !(scale === 4 && opts.chained4x) && outPx > fullCapPx;
     if (useStream) {
       const streamBackend = "Lanczos-3 stream";
       const BAND = 64;
@@ -426,17 +609,25 @@ function isWorkerScope(): boolean {
 
 if (isWorkerScope()) {
   const controllers = new Map<number, AbortController>();
+  const ackWaiters = new Map<number, { resolve: () => void; reject: (e: unknown) => void }>();
   const scope = self as unknown as {
     addEventListener(
       type: "message",
       listener: (e: MessageEvent<ViceIncoming>) => void,
     ): void;
-    postMessage(message: ViceOutgoing): void;
+    postMessage(message: ViceOutgoing, transfer?: Transferable[]): void;
   };
   scope.addEventListener("message", (e) => {
     const msg = e.data;
     if (msg.type === "cancel") {
       controllers.get(msg.jobId)?.abort();
+      ackWaiters.get(msg.jobId)?.reject(new DOMException("cancelled", "AbortError"));
+      ackWaiters.delete(msg.jobId);
+      return;
+    }
+    if (msg.type === "pngack") {
+      ackWaiters.get(msg.jobId)?.resolve();
+      ackWaiters.delete(msg.jobId);
       return;
     }
     if (msg.type === "warm") {
@@ -460,14 +651,31 @@ if (isWorkerScope()) {
         sharpness: msg.sharpness,
         shock: msg.shock,
         streamThresholdPx: msg.streamThresholdPx,
+        fourXDetail: msg.fourXDetail,
+        sink: msg.saveToDisk
+          ? {
+              write: (chunk) =>
+                new Promise<void>((resolve, reject) => {
+                  if (ctrl.signal.aborted) {
+                    reject(new DOMException("cancelled", "AbortError"));
+                    return;
+                  }
+                  ackWaiters.set(msg.jobId, { resolve, reject });
+                  const buf = chunk.buffer as ArrayBuffer;
+                  scope.postMessage({ type: "pngchunk", jobId: msg.jobId, chunk }, [buf]);
+                }),
+            }
+          : undefined,
       },
     ).then(
       ({ blob, meta }) => {
         controllers.delete(msg.jobId);
+        ackWaiters.delete(msg.jobId);
         scope.postMessage({ type: "done", jobId: msg.jobId, blob, meta });
       },
       (err: unknown) => {
         controllers.delete(msg.jobId);
+        ackWaiters.delete(msg.jobId);
         const aborted = err instanceof DOMException && err.name === "AbortError";
         scope.postMessage({
           type: "fail",

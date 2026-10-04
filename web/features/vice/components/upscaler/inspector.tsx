@@ -1,7 +1,7 @@
 "use client";
 
 import { memo } from "react";
-import { useDeviceCapMp } from "../../hooks/use-device-cap";
+import { useDeviceCapMp, useDeviceStreamCapMp } from "../../hooks/use-device-cap";
 import type { VicePreset, ViceScale } from "../../types/vice";
 import { useUpscaler } from "./upscaler-context";
 import { SpinnerIcon } from "../studio-icons";
@@ -96,9 +96,13 @@ function Segmented<T extends string | number>({
 function InspectorStaged() {
   const { job, stagedDims } = useUpscaler();
   const capMp = useDeviceCapMp();
+  const streamCapMp = useDeviceStreamCapMp();
   const outMp =
     stagedDims != null ? (stagedDims.w * job.scale * (stagedDims.h * job.scale)) / 1_000_000 : null;
   const overCap = outMp != null && outMp > capMp;
+  const overStreamCap = outMp != null && outMp > streamCapMp;
+  const singleFile = job.files.length === 1;
+  const canSave = overStreamCap && singleFile && job.canSaveToDisk;
 
   return (
     <div className="flex flex-col gap-4">
@@ -133,12 +137,14 @@ function InspectorStaged() {
 
       <div
         aria-live="polite"
-        className={`font-mono text-[11px] tabular-nums ${overCap ? "font-semibold text-error" : "text-muted"}`}
+        className={`font-mono text-[11px] tabular-nums ${overStreamCap ? "font-semibold text-error" : "text-muted"}`}
       >
         {outMp != null
-          ? overCap
-            ? `${job.scale}× output: ${outMp.toFixed(1)} MP exceeds this device's ${capMp.toFixed(0)} MP limit.`
-            : `${job.scale}× output: ${outMp.toFixed(1)} MP of ${capMp.toFixed(0)} MP available.`
+          ? overStreamCap
+            ? `${job.scale}× output: ${outMp.toFixed(1)} MP exceeds this device's ${streamCapMp.toFixed(0)} MP in-browser limit.`
+            : overCap
+              ? `${job.scale}× output: ${outMp.toFixed(1)} MP streams in tiles (above the ${capMp.toFixed(0)} MP full-fidelity tier).`
+              : `${job.scale}× output: ${outMp.toFixed(1)} MP of ${capMp.toFixed(0)} MP available.`
           : "Staging preview…"}
       </div>
 
@@ -190,10 +196,30 @@ function InspectorStaged() {
         </div>
       </details>
 
-      {overCap ? (
-        <div className="text-xs text-error">
-          Reduce the input size or scale to run on this device.
-        </div>
+      {overStreamCap ? (
+        canSave ? (
+          <div className="flex flex-col gap-2">
+            <button
+              type="button"
+              onClick={() => void job.runToFile()}
+              disabled={job.running}
+              className="inline-flex h-8 w-full items-center justify-center gap-2 rounded-md bg-foreground px-4 text-xs font-semibold text-background transition-opacity hover:opacity-90 active:scale-[0.98] disabled:opacity-40"
+            >
+              {job.running && <SpinnerIcon className="h-3 w-3 animate-spin" />}
+              <span>Choose destination &amp; upscale</span>
+            </button>
+            <div className="text-[11px] text-muted">
+              {job.scale}× output {outMp?.toFixed(1)} MP streams straight to disk — no
+              memory cap, preview only in-app.
+            </div>
+          </div>
+        ) : (
+          <div className="text-xs text-error">
+            {singleFile
+              ? "Over this device's in-browser limit. Large exports require Chrome/Edge desktop or Vice Desktop."
+              : "Over this device's in-browser limit. Reduce the input size, scale, or batch to one file for save-to-disk."}
+          </div>
+        )
       ) : (
         <UpscaleButton full />
       )}
@@ -211,6 +237,15 @@ function InspectorResult() {
     ["Residual", r.residual.toExponential(1)],
     ["Time", `${r.durationMs}ms`],
     ["ICC", r.hasIcc ? "Preserved" : "Absent"],
+    ...(r.savedToDisk
+      ? ([
+          ["Saved", r.fileName ?? "on disk"],
+          [
+            "File size",
+            r.fileBytes != null ? `${(r.fileBytes / 1_048_576).toFixed(1)} MB` : "—",
+          ],
+        ] as [string, string][])
+      : []),
   ];
   return (
     <div className="flex flex-col gap-4">

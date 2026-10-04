@@ -1,10 +1,14 @@
 // No-dep native tests: covers spec sec 10 unit gates.
 #include "vice.h"
 #include "vice_metrics.h"
+#include "miniz.h"
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
+// C++-linkage checksum helpers defined in core/src/png.cpp.
+uint32_t vice_crc32(const unsigned char* d, size_t n);
 
 #define CHECK(cond)                                                 \
   do {                                                              \
@@ -388,6 +392,448 @@ static void test_saturated_residual() {
   printf("saturated residual ok\n");
 }
 
+// --- Infinite-export PNG plumbing -------------------------------------------
+// Minimal strict PNG decoder for tests: verifies signature, chunk CRCs, IHDR,
+// inflates the concatenated IDAT zlib stream (adler-checked by miniz), and
+// reverses all 5 filters. Returns false on any structural defect.
+static uint32_t rd32(const unsigned char* p) {
+  return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3];
+}
+
+static bool decode_png_rows(const std::vector<unsigned char>& png, int* w, int* h,
+                            int* ch, std::vector<unsigned char>& px, bool* has_iccp) {
+  if (png.size() < 8) return false;
+  static const unsigned char sig[8] = {137, 80, 78, 71, 13, 10, 26, 10};
+  if (std::memcmp(png.data(), sig, 8) != 0) return false;
+  size_t pos = 8;
+  int W = 0, H = 0, C = 0;
+  bool iccp = false, seen_ihdr = false, seen_iend = false;
+  std::vector<unsigned char> idat;
+  auto chunk_ok = [&](const char* type, const unsigned char* d, size_t n) -> bool {
+    if (std::memcmp(type, "IHDR", 4) == 0) {
+      if (n != 13 || seen_ihdr) return false;
+      W = (int)rd32(d);
+      H = (int)rd32(d + 4);
+      if (W <= 0 || H <= 0 || d[8] != 8) return false;
+      if (d[9] == 2) C = 3;
+      else if (d[9] == 6) C = 4;
+      else return false;
+      if (d[10] != 0 || d[11] != 0 || d[12] != 0) return false;
+      seen_ihdr = true;
+    } else if (std::memcmp(type, "iCCP", 4) == 0) {
+      iccp = true;
+    } else if (std::memcmp(type, "IDAT", 4) == 0) {
+      if (!seen_ihdr || seen_iend) return false;
+      idat.insert(idat.end(), d, d + n);
+    } else if (std::memcmp(type, "IEND", 4) == 0) {
+      if (n != 0) return false;
+      seen_iend = true;
+    }
+    return true;
+  };
+  while (pos + 8 <= png.size()) {
+    uint32_t n = rd32(png.data() + pos);
+    if (n > 16u * 1024u * 1024u) return false;
+    if (pos + 12 + n > png.size()) return false;
+    const char* type = (const char*)png.data() + pos + 4;
+    const unsigned char* d = png.data() + pos + 8;
+    uint32_t want = vice_crc32((const unsigned char*)type, 4 + n);
+    if (rd32(png.data() + pos + 8 + n) != want) return false;
+    if (!chunk_ok(type, d, n)) return false;
+    pos += 12 + n;
+    if (seen_iend) break;
+  }
+  if (!seen_ihdr || !seen_iend || pos != png.size() || idat.empty()) return false;
+  size_t stride = (size_t)W * C;
+  std::vector<unsigned char> raw((stride + 1) * (size_t)H);
+  mz_ulong rawlen = (mz_ulong)raw.size();
+  CHECK(idat.size() <= (size_t)0xffffffffu);
+  if (mz_uncompress(raw.data(), &rawlen, idat.data(), (mz_ulong)idat.size()) != MZ_OK)
+    return false;
+  if (rawlen != raw.size()) return false;
+  px.resize(stride * (size_t)H);
+  std::vector<unsigned char> prev(stride, 0), cur(stride, 0);
+  for (int y = 0; y < H; y++) {
+    const unsigned char* frow = raw.data() + (size_t)y * (stride + 1);
+    int f = frow[0];
+    if (f < 0 || f > 4) return false;
+    for (size_t i = 0; i < stride; i++) {
+      int a = i >= (size_t)C ? cur[i - C] : 0;
+      int b = prev[i];
+      int cc = i >= (size_t)C ? prev[i - C] : 0;
+      int pred = 0;
+      if (f == 1) pred = a;
+      else if (f == 2) pred = b;
+      else if (f == 3) pred = (a + b) >> 1;
+      else if (f == 4) {
+        int p = a + b - cc, pa = std::abs(p - a), pb = std::abs(p - b), pc = std::abs(p - cc);
+        pred = (pa <= pb && pa <= pc) ? a : (pb <= pc ? b : cc);
+      }
+      cur[i] = (unsigned char)(frow[1 + i] + pred);
+    }
+    std::memcpy(px.data() + (size_t)y * stride, cur.data(), stride);
+    prev = cur;
+  }
+  *w = W;
+  *h = H;
+  *ch = C;
+  if (has_iccp) *has_iccp = iccp;
+  return true;
+}
+
+static void test_png_stream_decode_equiv() {
+  // Odd row splits + tiny drain caps; decoded pixels must equal the input,
+  // IHDR/iCCP must survive, and multi-IDAT output is exercised by the caps.
+  for (int trial = 0; trial < 2; trial++) {
+    int W = 37, H = 23;
+    int in_ch = 4, out_ch = (trial == 0) ? 3 : 4;
+    std::vector<unsigned char> img((size_t)W * H * 4);
+    for (int y = 0; y < H; y++)
+      for (int x = 0; x < W; x++) {
+        size_t i = ((size_t)y * W + x) * 4;
+        img[i + 0] = (unsigned char)((x * 37 + y * 91) & 255);
+        img[i + 1] = (unsigned char)((x * 11 + y * 57 + 40) & 255);
+        img[i + 2] = (unsigned char)((x * 5 + y * 131 + 90) & 255);
+        img[i + 3] = (trial == 0) ? 255 : (unsigned char)((x < 20) ? 255 : (y * 10) & 255);
+      }
+    const unsigned char icc[] = {9, 8, 7, 6, 5, 'X'};
+    vice_png_stream* st = vice_png_open(W, H, in_ch, out_ch, icc, sizeof(icc));
+    CHECK(st != nullptr);
+    std::vector<unsigned char> png;
+    std::vector<unsigned char> piece(997); // prime cap: splits chunks arbitrarily
+    auto drain_all = [&]() {
+      for (;;) {
+        size_t got = 0;
+        CHECK(vice_png_drain(st, piece.data(), piece.size(), &got) == 0);
+        if (!got) break;
+        png.insert(png.end(), piece.data(), piece.data() + got);
+      }
+    };
+    drain_all(); // header must already be drainable before any rows
+    CHECK(!png.empty() && png[0] == 137);
+    int fed = 0;
+    int splits[] = {1, 5, 2, 7, 3};
+    for (int k = 0; fed < H; k++) {
+      int s = splits[k % 5];
+      int n = (fed + s <= H) ? s : H - fed;
+      CHECK(vice_png_write_rows(st, img.data() + (size_t)fed * W * 4, n) == 0);
+      fed += n;
+      drain_all();
+    }
+    CHECK(fed == H);
+    CHECK(vice_png_close(st) == 0);
+    CHECK(vice_png_close(st) == 0); // idempotent
+    CHECK(vice_png_write_rows(st, img.data(), 1) != 0); // frozen after close
+    drain_all();
+    CHECK(vice_png_peak_pending(st) < 1u << 20);
+    vice_png_destroy(st);
+    int dW = 0, dH = 0, dC = 0;
+    bool iccp = false;
+    std::vector<unsigned char> px;
+    CHECK(decode_png_rows(png, &dW, &dH, &dC, px, &iccp));
+    CHECK(dW == W && dH == H && dC == out_ch && iccp);
+    for (int y = 0; y < H; y++)
+      for (int x = 0; x < W; x++)
+        for (int c = 0; c < out_ch; c++) {
+          unsigned char want = img[((size_t)y * W + x) * 4 + c];
+          unsigned char got = px[((size_t)y * W + x) * (size_t)out_ch + c];
+          CHECK(want == got);
+        }
+    printf("png_stream_decode_equiv trial=%d bytes=%zu\n", trial, png.size());
+  }
+}
+
+static void test_png_stream_misuse() {
+  CHECK(vice_png_open(0, 10, 4, 4, nullptr, 0) == nullptr);
+  CHECK(vice_png_open(10, 10, 2, 2, nullptr, 0) == nullptr);
+  CHECK(vice_png_open(10, 10, 3, 4, nullptr, 0) == nullptr);
+  CHECK(vice_png_open(200000, 10, 4, 4, nullptr, 0) == nullptr);
+  vice_png_stream* st = vice_png_open(8, 4, 4, 4, nullptr, 0);
+  CHECK(st != nullptr);
+  std::vector<unsigned char> rows((size_t)8 * 4 * 4, 128);
+  CHECK(vice_png_write_rows(st, rows.data(), 0) != 0);
+  CHECK(vice_png_write_rows(st, nullptr, 1) != 0);
+  CHECK(vice_png_write_rows(st, rows.data(), 2) == 0);
+  CHECK(vice_png_write_rows(st, rows.data(), 3) != 0); // overrun
+  CHECK(vice_png_close(st) != 0); // incomplete
+  CHECK(vice_png_write_rows(st, rows.data(), 2) == 0);
+  CHECK(vice_png_close(st) == 0);
+  size_t got = 0;
+  unsigned char tmp[64];
+  CHECK(vice_png_drain(nullptr, tmp, sizeof(tmp), &got) != 0);
+  CHECK(vice_png_drain(st, nullptr, sizeof(tmp), &got) != 0);
+  CHECK(vice_png_peak_pending(nullptr) == 0);
+  vice_png_destroy(st);
+  printf("png_stream_misuse ok\n");
+}
+
+// 500 MP through the writer with a fixed drain cadence: peak retained bytes
+// must stay flat while every chunk CRC, the zlib adler, and sampled rows
+// verify. Decodes the IDAT stream incrementally (no full-image buffer).
+static void test_png_stream_soak() {
+  const int W = 25000, H = 20000; // 500 MP
+  const int C = 3;
+  vice_png_stream* st = vice_png_open(W, H, C, C, nullptr, 0);
+  CHECK(st != nullptr);
+  std::vector<unsigned char> band(64 * (size_t)W * C);
+  std::vector<unsigned char> piece(1u << 20);
+  std::vector<unsigned char> idat;
+  idat.reserve(64u << 20);
+  bool seen_sig = false, seen_ihdr = false;
+  std::vector<unsigned char> carry; // unparsed drained bytes across calls
+  auto feed_drained = [&]() {
+    for (;;) {
+      size_t got = 0;
+      CHECK(vice_png_drain(st, piece.data(), piece.size(), &got) == 0);
+      if (!got) break;
+      carry.insert(carry.end(), piece.data(), piece.data() + got);
+      if (!seen_sig) {
+        CHECK(carry.size() >= 8);
+        CHECK(carry[0] == 137 && carry[1] == 80);
+        seen_sig = true;
+      }
+      size_t cursor = 0;
+      if (!seen_ihdr && carry.size() >= 8u + 25u) {
+        // sig(8) + IHDR chunk(25)
+        CHECK(rd32(carry.data() + 8) == 13);
+        CHECK(std::memcmp(carry.data() + 12, "IHDR", 4) == 0);
+        CHECK((int)rd32(carry.data() + 16) == W);
+        CHECK((int)rd32(carry.data() + 20) == H);
+        seen_ihdr = true;
+        cursor = 8 + 25;
+      } else if (seen_ihdr) {
+        cursor = 0;
+      } else {
+        continue;
+      }
+      while (seen_ihdr && carry.size() - cursor >= 12) {
+        uint32_t nn = rd32(carry.data() + cursor);
+        if (carry.size() - cursor < 12u + nn) break;
+        const char* type = (const char*)carry.data() + cursor + 4;
+        uint32_t want = vice_crc32((const unsigned char*)type, 4 + nn);
+        CHECK(rd32(carry.data() + cursor + 8 + nn) == want);
+        if (std::memcmp(type, "IDAT", 4) == 0) {
+          idat.insert(idat.end(), carry.data() + cursor + 8,
+                      carry.data() + cursor + 8 + nn);
+        } else if (std::memcmp(type, "IEND", 4) == 0) {
+          CHECK(nn == 0);
+        }
+        cursor += 12 + nn;
+      }
+      if (cursor > 0) carry.erase(carry.begin(), carry.begin() + (ptrdiff_t)cursor);
+    }
+  };
+  for (int y0 = 0; y0 < H; y0 += 64) {
+    int n = (H - y0 < 64) ? H - y0 : 64;
+    for (int r = 0; r < n; r++)
+      for (int x = 0; x < W; x++) {
+        size_t i = ((size_t)r * W + x) * C;
+        band[i + 0] = (unsigned char)((x + y0 + r) & 255);
+        band[i + 1] = (unsigned char)(((x * 3 + y0 + r) >> 2) & 255);
+        band[i + 2] = (unsigned char)(((y0 + r) * 7 + x) & 255);
+      }
+    CHECK(vice_png_write_rows(st, band.data(), n) == 0);
+    feed_drained();
+    CHECK(vice_png_peak_pending(st) < 1u << 20);
+  }
+  CHECK(vice_png_close(st) == 0);
+  feed_drained();
+  CHECK(vice_png_peak_pending(st) < 1u << 20);
+  CHECK(seen_sig && seen_ihdr);
+  vice_png_destroy(st);
+  // Incremental inflate of the full IDAT stream: verify row count, sampled
+  // rows, and (via miniz) the zlib adler; no full-frame allocation.
+  mz_stream zs{};
+  CHECK(mz_inflateInit(&zs) == MZ_OK);
+  size_t stride = (size_t)W * C;
+  std::vector<unsigned char> ibuf(1u << 20);
+  std::vector<unsigned char> rowbuf(stride + 1);
+  std::vector<unsigned char> prev(stride, 0), cur(stride, 0);
+  size_t in_pos = 0, row_fill = 0, rows_done = 0;
+  auto check_row = [&](int y) {
+    if (y != 0 && y != H / 2 && y != H - 1) return;
+    for (int x = 0; x < 16; x++) {
+      unsigned char e0 = (unsigned char)((x + y) & 255);
+      unsigned char e1 = (unsigned char)(((x * 3 + y) >> 2) & 255);
+      unsigned char e2 = (unsigned char)((y * 7 + x) & 255);
+      CHECK(cur[(size_t)x * C + 0] == e0);
+      CHECK(cur[(size_t)x * C + 1] == e1);
+      CHECK(cur[(size_t)x * C + 2] == e2);
+    }
+  };
+  bool stream_end = false;
+  while (!stream_end) {
+    if (zs.avail_in == 0 && in_pos < idat.size()) {
+      size_t take = idat.size() - in_pos > ibuf.size() ? ibuf.size() : idat.size() - in_pos;
+      std::memcpy(ibuf.data(), idat.data() + in_pos, take);
+      in_pos += take;
+      zs.next_in = ibuf.data();
+      zs.avail_in = (unsigned int)take;
+    }
+    zs.next_out = rowbuf.data() + row_fill;
+    zs.avail_out = (unsigned int)(rowbuf.size() - row_fill);
+    int rc = mz_inflate(&zs, MZ_NO_FLUSH);
+    size_t produced = rowbuf.size() - row_fill - zs.avail_out;
+    row_fill += produced;
+    if (rc == MZ_STREAM_END) stream_end = true;
+    else CHECK(rc == MZ_OK || rc == MZ_BUF_ERROR);
+    while (row_fill == rowbuf.size()) {
+      int f = rowbuf[0];
+      CHECK(f >= 0 && f <= 4);
+      for (size_t i = 0; i < stride; i++) {
+        int a = i >= (size_t)C ? cur[i - C] : 0;
+        int b = prev[i];
+        int cc = i >= (size_t)C ? prev[i - C] : 0;
+        int pred = 0;
+        if (f == 1) pred = a;
+        else if (f == 2) pred = b;
+        else if (f == 3) pred = (a + b) >> 1;
+        else if (f == 4) {
+          int p = a + b - cc, pa = std::abs(p - a), pb = std::abs(p - b),
+              pc = std::abs(p - cc);
+          pred = (pa <= pb && pa <= pc) ? a : (pb <= pc ? b : cc);
+        }
+        cur[i] = (unsigned char)(rowbuf[1 + i] + pred);
+      }
+      check_row((int)rows_done);
+      rows_done++;
+      prev = cur;
+      row_fill = 0;
+      zs.next_out = rowbuf.data();
+      zs.avail_out = (unsigned int)rowbuf.size();
+      if (rows_done > (size_t)H) break;
+    }
+    if (rows_done > (size_t)H) break;
+  }
+  mz_inflateEnd(&zs);
+  CHECK(rows_done == (size_t)H);
+  CHECK(in_pos == idat.size());
+  printf("png_stream_soak 500MP rows=%zu idat=%zuMB\n", rows_done,
+         idat.size() >> 20);
+}
+
+static std::vector<unsigned char> render_stream_rows(int in_w, int in_h, int scale,
+                                                     int ch, int band_h, int fused,
+                                                     const std::vector<float>& input,
+                                                     double* residual) {
+  vice_stream_ctx* sctx = vice_stream_create(in_w, in_h, scale, ch, band_h);
+  CHECK(sctx != nullptr);
+  if (fused) CHECK(vice_stream_set_fused(sctx, fused) == 0);
+  int out_w = in_w * scale, out_h = in_h * scale;
+  const int PUSH = 16;
+  int pushed = 0, emitted = 0;
+  std::vector<unsigned char> band((size_t)band_h * out_w * ch);
+  std::vector<unsigned char> out((size_t)out_w * out_h * ch);
+  while (emitted < out_h) {
+    while (pushed < in_h && !vice_stream_has_next_band(sctx)) {
+      int n = (in_h - pushed < PUSH) ? in_h - pushed : PUSH;
+      CHECK(vice_stream_push_input_rows(
+                sctx, input.data() + (size_t)pushed * in_w * ch, n) == 0);
+      pushed += n;
+    }
+    CHECK(vice_stream_has_next_band(sctx) == 1);
+    int rows = 0;
+    int rc = vice_stream_pull_band(sctx, band.data(), &rows);
+    CHECK(rc >= 0 && rows > 0);
+    std::memcpy(out.data() + (size_t)emitted * out_w * ch, band.data(),
+                (size_t)rows * out_w * ch);
+    emitted += rows;
+  }
+  *residual = vice_stream_last_residual(sctx);
+  vice_stream_destroy(sctx);
+  return out;
+}
+
+static void test_stream_seam_bands() {
+  // Edge + gradient synthetic: band joints must not exceed interior
+  // row-to-row variation, at every band cadence, scales 2 and 4-direct.
+  for (int scale : {2, 4}) {
+    int in_w = 40, in_h = 40, ch = 4;
+    std::vector<float> input((size_t)in_w * in_h * ch);
+    for (int y = 0; y < in_h; y++)
+      for (int x = 0; x < in_w; x++)
+        for (int c = 0; c < ch; c++) {
+          float v = (float)(x + y * 2 + c * 7) / (float)(in_w + in_h * 2 + 21);
+          if (x >= in_w / 2) v = 1.0f - v * 0.2f; // hard vertical edge
+          input[((size_t)y * in_w + x) * ch + c] = v;
+        }
+    int out_w = in_w * scale, out_h = in_h * scale;
+    for (int band : {16, 32, 48, 64}) {
+      int bh = ((band + scale - 1) / scale) * scale; // multiple of scale
+      double res = 0;
+      auto out = render_stream_rows(in_w, in_h, scale, ch, bh, 0, input, &res);
+      CHECK(res < 1e-5);
+      double interior = 0;
+      for (int y = 1; y < out_h; y++) {
+        if (y % bh == 0) continue;
+        for (int x = 0; x < out_w; x++)
+          for (int c = 0; c < ch; c++) {
+            double d = std::abs((double)out[((size_t)y * out_w + x) * ch + c] -
+                                (double)out[((size_t)(y - 1) * out_w + x) * ch + c]);
+            if (d > interior) interior = d;
+          }
+      }
+      for (int y = bh; y < out_h; y += bh)
+        for (int x = 0; x < out_w; x++)
+          for (int c = 0; c < ch; c++) {
+            double d = std::abs((double)out[((size_t)y * out_w + x) * ch + c] -
+                                (double)out[((size_t)(y - 1) * out_w + x) * ch + c]);
+            CHECK(d <= interior + 1.0);
+          }
+      printf("seam scale=%d band=%d interior=%.1f\n", scale, bh, interior);
+    }
+  }
+}
+
+static void test_fused4x() {
+  CHECK(vice_stream_set_fused(nullptr, 1) != 0);
+  int in_w = 24, in_h = 24, ch = 4;
+  std::vector<float> input((size_t)in_w * in_h * ch);
+  for (size_t i = 0; i < input.size(); i++) input[i] = (float)(i % 251) / 251.0f;
+  for (int mode : {1, 2}) {
+    double res = 0;
+    auto out = render_stream_rows(in_w, in_h, 4, ch, 32, mode, input, &res);
+    CHECK((int)out.size() == 96 * 96 * ch);
+    printf("fused4x mode=%d residual=%g\n", mode, res);
+    CHECK(res < 1e-5);
+  }
+  // Fused is scale-4 only.
+  vice_stream_ctx* sctx = vice_stream_create(16, 16, 2, 4, 16);
+  CHECK(sctx != nullptr);
+  CHECK(vice_stream_set_fused(sctx, 1) != 0);
+  CHECK(vice_stream_set_fused(sctx, 3) != 0);
+  vice_stream_destroy(sctx);
+  // Fused seam: hard edge must cross the 64-row joint cleanly.
+  {
+    int fw = 32, fh = 32, fch = 4;
+    std::vector<float> edge((size_t)fw * fh * fch);
+    for (int y = 0; y < fh; y++)
+      for (int x = 0; x < fw; x++)
+        for (int c = 0; c < fch; c++)
+          edge[((size_t)y * fw + x) * fch + c] =
+              (x < fw / 2) ? 0.05f : 0.95f;
+    double res = 0;
+    auto out = render_stream_rows(fw, fh, 4, fch, 64, 1, edge, &res);
+    CHECK(res < 1e-5);
+    int oW = fw * 4, oH = fh * 4;
+    double interior = 0, joint = 0;
+    for (int y = 1; y < oH; y++)
+      for (int x = 0; x < oW; x++)
+        for (int c = 0; c < fch; c++) {
+          double d = std::abs((double)out[((size_t)y * oW + x) * fch + c] -
+                              (double)out[((size_t)(y - 1) * oW + x) * fch + c]);
+          if (y % 64 == 0) {
+            if (d > joint) joint = d;
+          } else if (d > interior) {
+            interior = d;
+          }
+        }
+    printf("fused seam joint=%.1f interior=%.1f\n", joint, interior);
+    CHECK(joint <= interior + 1.0);
+  }
+  printf("fused4x ok\n");
+}
+
 int main() {
   test_project_exact();
   test_scales();
@@ -402,6 +848,11 @@ int main() {
   test_stream_options();
   test_transparency();
   test_saturated_residual();
+  test_png_stream_decode_equiv();
+  test_png_stream_misuse();
+  test_png_stream_soak();
+  test_stream_seam_bands();
+  test_fused4x();
   printf("ALL PASS\n");
   return 0;
 }

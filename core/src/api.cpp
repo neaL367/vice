@@ -253,7 +253,14 @@ struct vice_stream_ctx {
   ViceTuning tuning;
   std::vector<unsigned char> icc;
   double worst = 0.0;
+  int fused = 0; // 0 off, 1 chained-clean 2nd pass, 2 chained-full (detail)
+  int halo_extra = 0; // extra input rows each side when fused
 };
+
+// Fixed input halo (rows each side) for fused chained 4x: the intermediate
+// 2x strip is rendered with this margin and only interior rows survive the
+// second pass + crop, so band edges never see truncated support.
+static constexpr int kFusedHalo = 6;
 
 vice_stream_ctx* vice_stream_create(int in_w, int in_h, int scale, int channels, int band_h) {
   if (in_w <= 0 || in_h <= 0 || (scale != 2 && scale != 3 && scale != 4) ||
@@ -278,6 +285,8 @@ vice_stream_ctx* vice_stream_create(int in_w, int in_h, int scale, int channels,
   sctx->out_rows_emitted = 0;
   sctx->in_buf_start_y = 0;
   sctx->in_buf_row_count = 0;
+  sctx->fused = 0;
+  sctx->halo_extra = 0;
   vice_tuning_defaults(&sctx->tuning);
   return sctx;
 }
@@ -299,6 +308,15 @@ int vice_stream_set_icc_profile(vice_stream_ctx* sctx, const unsigned char* data
   return 0;
 }
 
+int vice_stream_set_fused(vice_stream_ctx* sctx, int mode) {
+  if (!sctx || (mode != 0 && mode != 1 && mode != 2)) return -1;
+  // Fused chaining is only defined for scale 4 (2x o 2x).
+  if (mode != 0 && sctx->scale != 4) return -1;
+  sctx->fused = mode;
+  sctx->halo_extra = mode ? kFusedHalo : 0;
+  return 0;
+}
+
 int vice_stream_push_input_rows(vice_stream_ctx* sctx, const float* in_rows, int row_count) {
   if (!sctx || !in_rows || row_count <= 0) return -1;
   size_t row_stride = (size_t)sctx->in_w * sctx->channels;
@@ -315,7 +333,8 @@ int vice_stream_has_next_band(const vice_stream_ctx* sctx) {
   if (!sctx || sctx->out_rows_emitted >= sctx->out_h) return 0;
   int next_out_y1 = std::min(sctx->out_h, sctx->out_rows_emitted + sctx->band_h);
   double max_src_y = ((double)(next_out_y1 - 1) + 0.5) / (double)sctx->scale - 0.5;
-  int needed_in_y_max = std::min(sctx->in_h - 1, (int)std::floor(max_src_y) + 4);
+  int needed_in_y_max =
+      std::min(sctx->in_h - 1, (int)std::floor(max_src_y) + 4 + sctx->halo_extra);
   return (sctx->in_rows_pushed > needed_in_y_max || sctx->in_rows_pushed >= sctx->in_h) ? 1 : 0;
 }
 
@@ -332,8 +351,9 @@ int vice_stream_pull_band(vice_stream_ctx* sctx, unsigned char* out_bytes, int* 
 
   double min_src_y = ((double)out_y0 + 0.5) / (double)sctx->scale - 0.5;
   double max_src_y = ((double)(out_y1 - 1) + 0.5) / (double)sctx->scale - 0.5;
-  int req_in_y0 = std::max(0, (int)std::floor(min_src_y) - 3);
-  int req_in_y1 = std::min(sctx->in_h, (int)std::floor(max_src_y) + 5);
+  int HE = sctx->halo_extra;
+  int req_in_y0 = std::max(0, (int)std::floor(min_src_y) - 3 - HE);
+  int req_in_y1 = std::min(sctx->in_h, (int)std::floor(max_src_y) + 5 + HE);
   int req_in_rows = req_in_y1 - req_in_y0;
 
   if (sctx->in_rows_pushed < req_in_y1 && sctx->in_rows_pushed < sctx->in_h) {
@@ -354,23 +374,55 @@ int vice_stream_pull_band(vice_stream_ctx* sctx, unsigned char* out_bytes, int* 
   }
 
   size_t out_row_stride = (size_t)sctx->out_w * sctx->channels;
-  int strip_out_h = req_in_rows * sctx->scale;
-  std::vector<float> strip_upscaled((size_t)strip_out_h * out_row_stride);
-
-  vice_upscale_lanczos_adaptive_ex(in_strip.data(), sctx->in_w, req_in_rows,
-                                   sctx->channels, sctx->scale,
-                                   strip_upscaled.data(), &sctx->tuning);
-
-  int strip_global_out_y0 = req_in_y0 * sctx->scale;
-  int local_band_offset = out_y0 - strip_global_out_y0;
-
   std::vector<float> band_raw((size_t)cur_band_h * out_row_stride);
-  for (int by = 0; by < cur_band_h; ++by) {
-    int src_row = local_band_offset + by;
-    if (src_row >= 0 && src_row < strip_out_h) {
-      std::memcpy(band_raw.data() + (size_t)by * out_row_stride,
-                  strip_upscaled.data() + (size_t)src_row * out_row_stride,
-                  out_row_stride * sizeof(float));
+  if (sctx->fused && sctx->scale == 4) {
+    // Fused chained 4x: the halo-extended strip goes through two 2x passes
+    // and only the owned rows are kept; the intermediate 2x image never
+    // covers more than this strip. Mode 1 zeroes sharpness/shock on the
+    // second pass (matches the full-image chained policy); mode 2 runs full
+    // tuning on both passes (detail).
+    ViceTuning t1 = sctx->tuning, t2 = sctx->tuning;
+    if (sctx->fused == 1) {
+      t2.sharpness = 0.0f;
+      t2.shock = 0.0f;
+    }
+    int tmp_w = sctx->in_w * 2;
+    int tmp_h = req_in_rows * 2;
+    int big_h = req_in_rows * 4;
+    std::vector<float> tmp((size_t)tmp_h * tmp_w * sctx->channels);
+    std::vector<float> big((size_t)big_h * out_row_stride);
+    vice_upscale_lanczos_adaptive_ex(in_strip.data(), sctx->in_w, req_in_rows,
+                                     sctx->channels, 2, tmp.data(), &t1);
+    vice_upscale_lanczos_adaptive_ex(tmp.data(), tmp_w, tmp_h, sctx->channels, 2,
+                                     big.data(), &t2);
+    int strip_global_out_y0 = req_in_y0 * 4;
+    int local_band_offset = out_y0 - strip_global_out_y0;
+    for (int by = 0; by < cur_band_h; ++by) {
+      int src_row = local_band_offset + by;
+      if (src_row >= 0 && src_row < big_h) {
+        std::memcpy(band_raw.data() + (size_t)by * out_row_stride,
+                    big.data() + (size_t)src_row * out_row_stride,
+                    out_row_stride * sizeof(float));
+      }
+    }
+  } else {
+    int strip_out_h = req_in_rows * sctx->scale;
+    std::vector<float> strip_upscaled((size_t)strip_out_h * out_row_stride);
+
+    vice_upscale_lanczos_adaptive_ex(in_strip.data(), sctx->in_w, req_in_rows,
+                                     sctx->channels, sctx->scale,
+                                     strip_upscaled.data(), &sctx->tuning);
+
+    int strip_global_out_y0 = req_in_y0 * sctx->scale;
+    int local_band_offset = out_y0 - strip_global_out_y0;
+
+    for (int by = 0; by < cur_band_h; ++by) {
+      int src_row = local_band_offset + by;
+      if (src_row >= 0 && src_row < strip_out_h) {
+        std::memcpy(band_raw.data() + (size_t)by * out_row_stride,
+                    strip_upscaled.data() + (size_t)src_row * out_row_stride,
+                    out_row_stride * sizeof(float));
+      }
     }
   }
 
@@ -481,8 +533,9 @@ int vice_stream_pull_band(vice_stream_ctx* sctx, unsigned char* out_bytes, int* 
   sctx->out_rows_emitted += cur_band_h;
   *written_rows = cur_band_h;
 
-  // Evict consumed input rows
-  int min_in_y_needed_next = std::max(0, (int)std::floor(((double)sctx->out_rows_emitted + 0.5) / (double)sctx->scale - 0.5) - 3);
+  // Evict consumed input rows (retain the lookback the next band's halo needs)
+  int lookback = 3 + sctx->halo_extra;
+  int min_in_y_needed_next = std::max(0, (int)std::floor(((double)sctx->out_rows_emitted + 0.5) / (double)sctx->scale - 0.5) - lookback);
   int rows_to_drop = min_in_y_needed_next - sctx->in_buf_start_y;
   if (rows_to_drop > 0 && rows_to_drop <= sctx->in_buf_row_count) {
     size_t floats_to_drop = (size_t)rows_to_drop * in_row_stride;

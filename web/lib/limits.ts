@@ -42,10 +42,15 @@ export function maxOutputPixels(): number {
 export const MAX_OUTPUT_MP = MAX_OUTPUT_PIXELS / 1_000_000;
 
 /**
- * Streaming ceiling: band-sized float buffers keep the WASM math ~flat, but
- * the 8-bit accumulation + PNG encode + output blob + result preview all
- * scale with output size, so the cap is about total tab weight, not just
- * OOM survival.
+ * Streaming ceiling for the Blob (in-browser download) route: band-sized
+ * float buffers keep the WASM math ~flat, but the 8-bit accumulation + PNG
+ * encode + output blob + result preview all scale with output size, so the
+ * cap is about total tab weight, not just OOM survival.
+ *
+ * The save-to-disk (infinite) route has NO output cap: bands feed the
+ * incremental PNG writer and chunks go straight to disk, so output size
+ * changes time and disk use, not peak RAM. These ceilings gate Blob
+ * downloads only.
  *
  * Measured 2026-10-04, headless Chromium, 16 GB / 8-core desktop, noisy JPEG
  * input, default routing (streaming above the 24 MP full-image tier),
