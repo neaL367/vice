@@ -100,8 +100,6 @@ export function ComparisonProvider({
   const isDraggingHandleRef = useRef(false);
   const isPanningRef = useRef(false);
   const panStartRef = useRef({ x: 0, y: 0, scrollLeft: 0, scrollTop: 0 });
-  const posRef = useRef(pos);
-  posRef.current = pos;
 
   const [sliderOffscreen, setSliderOffscreen] = useState<{
     isSliderOffLeft: boolean;
@@ -195,7 +193,7 @@ export function ComparisonProvider({
     const stageRect = stage.getBoundingClientRect();
     if (stageRect.width <= 0) return;
 
-    const activePos = overridePos ?? posRef.current;
+    const activePos = overridePos ?? pos;
     const sliderClientX = stageRect.left + (activePos / 100) * stageRect.width;
 
     // Grab handle is 36px wide (18px radius). Consider off-screen when handle edge is past viewport bounds.
@@ -208,7 +206,7 @@ export function ComparisonProvider({
       }
       return { isSliderOffLeft: offLeft, isSliderOffRight: offRight };
     });
-  }, [zoom, mode]);
+  }, [zoom, mode, pos]);
 
   const updateSplitPos = useCallback((clientX: number) => {
     if (!stageRef.current) return;
@@ -217,7 +215,6 @@ export function ComparisonProvider({
     const offset = clientX - stageRect.left;
     const pct = Math.max(0, Math.min(100, (offset / stageRect.width) * 100));
     const rounded = Math.round(pct * 10) / 10;
-    posRef.current = rounded;
     setPos(rounded);
     updateSliderOffscreen(rounded);
   }, [updateSliderOffscreen]);
@@ -233,7 +230,6 @@ export function ComparisonProvider({
     const offset = visibleCenterX - stageRect.left;
     const pct = Math.max(5, Math.min(95, (offset / stageRect.width) * 100));
     const rounded = Math.round(pct * 10) / 10;
-    posRef.current = rounded;
     setPos(rounded);
     setSliderOffscreen({ isSliderOffLeft: false, isSliderOffRight: false });
   }, []);
@@ -299,7 +295,6 @@ export function ComparisonProvider({
           const visibleCenterX = actualScrollLeft + nextVp.clientWidth / 2;
           const newPos = Math.max(5, Math.min(95, (visibleCenterX / targetStageW) * 100));
           const rounded = Math.round(newPos * 10) / 10;
-          posRef.current = rounded;
           setPos(rounded);
           setSliderOffscreen({ isSliderOffLeft: false, isSliderOffRight: false });
         }
