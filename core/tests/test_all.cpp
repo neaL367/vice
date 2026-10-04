@@ -265,18 +265,10 @@ static void test_stream_options() {
   CHECK(vice_stream_create(32, 48, 2, 2, 16) == nullptr);
   CHECK(vice_stream_create(200000, 200000, 2, 4, 16) == nullptr);
 
-  // Tuning setter takes effect: smooth preset suppresses boost without error.
+  // Stream push and pull: valid band output produced.
   {
     vice_stream_ctx* sctx = vice_stream_create(16, 16, 2, 3, 16);
     CHECK(sctx != nullptr);
-    ViceTuning t;
-    vice_tuning_defaults(&t);
-    t.preset = 1;
-    t.sharpness = 0.0f;
-    t.shock = 0.0f;
-    CHECK(vice_stream_set_tuning(sctx, &t) == 0);
-    CHECK(vice_stream_set_tuning(sctx, nullptr) != 0);
-    CHECK(vice_stream_set_tuning(nullptr, &t) != 0);
     std::vector<float> chunk(16 * 16 * 3, 0.4f);
     CHECK(vice_stream_push_input_rows(sctx, chunk.data(), 16) == 0);
     std::vector<unsigned char> band(16 * 32 * 3);

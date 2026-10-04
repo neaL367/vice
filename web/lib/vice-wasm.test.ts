@@ -183,15 +183,13 @@ describe("wasm parity", () => {
     const y = new Float32Array(w * h * c);
     for (let i = 0; i < y.length; i++) y[i] = (i % 17) / 17;
 
-    for (const preset of ["photo", "smooth", "pixel-art"] as const) {
-      const ctx = core.create(w, h, 2, c);
-      core.setInput(ctx, y);
-      core.upscale(ctx, { preset, dering: 0.8, sharpness: 0.4 });
-      core.project(ctx);
-      const residual = core.lastResidual(ctx);
-      expect(residual).toBeLessThan(1e-4);
-      core.destroy(ctx);
-    }
+    const ctx = core.create(w, h, 2, c);
+    core.setInput(ctx, y);
+    core.upscale(ctx);
+    core.project(ctx);
+    const residual = core.lastResidual(ctx);
+    expect(residual).toBeLessThan(1e-4);
+    core.destroy(ctx);
   });
 
   test("ViceCore finishPng applies lossless compression and auto-prunes opaque alpha to RGB", async () => {
@@ -270,8 +268,8 @@ describe("wasm parity", () => {
     if (!core) return;
 
     const cases = [
-      { w: 8, h: 6, scale: 2, c: 4, opts: { preset: "photo" as const, dering: 1.0, sharpness: 0.35, shock: 0.35 } },
-      { w: 7, h: 5, scale: 3, c: 3, opts: { preset: "smooth" as const, dering: 1.0, sharpness: 0.35, shock: 0 } },
+      { w: 8, h: 6, scale: 2, c: 4, opts: { dering: 1.0, sharpness: 0.35, shock: 0.35 } },
+      { w: 7, h: 5, scale: 3, c: 3, opts: { dering: 1.0, sharpness: 0.35, shock: 0.35 } },
     ];
     for (const { w, h, scale, c, opts } of cases) {
       const y = new Float32Array(w * h * c);
@@ -282,7 +280,7 @@ describe("wasm parity", () => {
 
       const ctx = core.create(w, h, scale, c);
       core.setInput(ctx, y);
-      core.upscale(ctx, opts);
+      core.upscale(ctx);
       core.project(ctx);
       const wasmRaw = core.downloadRaw(ctx, w * scale * h * scale * c);
       core.destroy(ctx);
@@ -328,14 +326,14 @@ describe("wasm parity", () => {
                     ? 0.5 + 0.4 * Math.sin(xx * 0.3) * Math.sin(yy * 0.23)
                     : 0.1 + 0.8 * (xx / (w - 1)) * (yy / (h - 1));
           }
-      const opts = { preset: "photo" as const, dering: 1.0, sharpness: 0.35, shock: 0.35 };
+      const opts = { dering: 1.0, sharpness: 0.35, shock: 0.35 };
       const W = w * scale;
       const H = h * scale;
 
       // Full-image 8-bit reference via processBand.
       const ctx = core.create(w, h, scale, c);
       core.setInput(ctx, y);
-      core.upscale(ctx, opts);
+      core.upscale(ctx);
       core.project(ctx);
       const full = new Uint8Array(W * H * c);
       let foff = 0;
@@ -350,7 +348,6 @@ describe("wasm parity", () => {
 
       // Streaming protocol: 3-row pushes, 64-row band pulls.
       const sctx = core.createStream(w, h, scale, c, 64);
-      core.streamSetTuning(sctx, opts);
       core.streamSetIcc(sctx, new Uint8Array([9, 8, 7, 6]));
       const inRow = w * c;
       for (let yy = 0; yy < h; yy += 3) {
@@ -398,7 +395,7 @@ describe("wasm parity", () => {
     }
   });
 
-  test("TS lanczosAdaptiveScale matches WASM upscale with identical tuning", async () => {
+  test("TS lanczosAdaptiveScale matches WASM upscale with default tuning", async () => {
     const { ViceCore } = await import("./vice-wasm");
     const { lanczosAdaptiveScale } = await import("./pipeline/kernels");
     const core = await ViceCore.load("../public/");
@@ -410,21 +407,17 @@ describe("wasm parity", () => {
     const y = new Float32Array(w * h * c);
     for (let i = 0; i < y.length; i++) y[i] = (i % 19) / 19;
 
-    for (const opts of [
-      { preset: "photo" as const, dering: 1.0, sharpness: 0.35, shock: 0.35 },
-      { preset: "smooth" as const, dering: 1.0, sharpness: 0.35, shock: 0 },
-    ]) {
-      const expected = lanczosAdaptiveScale(y, w, h, c, scale, opts);
-      const ctx = core.create(w, h, scale, c);
-      core.setInput(ctx, y);
-      core.upscale(ctx, opts);
-      const got = core.downloadRaw(ctx, w * scale * h * scale * c);
-      core.destroy(ctx);
-      let worst = 0;
-      for (let i = 0; i < expected.length; i++)
-        worst = Math.max(worst, Math.abs(expected[i] - got[i]));
-      expect(worst).toBeLessThan(2e-3);
-    }
+    const opts = { dering: 1.0, sharpness: 0.35, shock: 0.35 };
+    const expected = lanczosAdaptiveScale(y, w, h, c, scale, opts);
+    const ctx = core.create(w, h, scale, c);
+    core.setInput(ctx, y);
+    core.upscale(ctx);
+    const got = core.downloadRaw(ctx, w * scale * h * scale * c);
+    core.destroy(ctx);
+    let worst = 0;
+    for (let i = 0; i < expected.length; i++)
+      worst = Math.max(worst, Math.abs(expected[i] - got[i]));
+    expect(worst).toBeLessThan(2e-3);
   });
 
   test("incremental PNG writer round-trips fixed-budget chunks", async () => {

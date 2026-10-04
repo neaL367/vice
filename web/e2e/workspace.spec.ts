@@ -47,13 +47,9 @@ test.describe("desktop workspace", () => {
     await expect(page.getByRole("complementary", { name: "File queue" })).toBeVisible();
     await expect(page.getByText("red.png")).toBeVisible();
     // Inspector limit messaging before the run (8x8 at 2x = 256 px).
-    await expect(page.getByText("2× output: 0.0 MP of 24 MP available.")).toBeVisible();
+    await expect(page.getByText("2× output: 0.0 MP · memory-bounded streaming.")).toBeVisible();
     // Evidence rail staged line.
-    await expect(page.getByText("Original 8×8 → 2× → 16×16 · 0.0 MP of 24 MP")).toBeVisible();
-    // Fine-tune disclosure holds the math controls.
-    await page.getByText("Fine tune").click();
-    await expect(page.getByLabel("Null-space sharpness")).toBeVisible();
-    await expect(page.getByLabel("Shock edge steepness")).toBeVisible();
+    await expect(page.getByText("Original 8×8 → 2× → 16×16 · 0.0 MP (max 64 MP in-browser)")).toBeVisible();
   });
 
   test("keyboard runs upscale and downloads result", async ({ page }) => {

@@ -38,8 +38,7 @@ export const StudioDropzone = memo(function StudioDropzone({
             Output limits
           </summary>
           <p className="mt-1 font-mono tabular-nums">
-            Up to {MAX_STREAM_MP} MP output · full-quality passes adapt to
-            device memory
+            Up to {MAX_STREAM_MP} MP in-browser · unlimited with Save to Disk
           </p>
         </details>
 

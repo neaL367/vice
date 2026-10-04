@@ -50,10 +50,6 @@ export async function runStream(
   const { blob, meta } = await runViceUpscale(file, 2, () => {}, {
     base: "/",
     streamThresholdPx: 0,
-    preset: "photo",
-    dering: 1.0,
-    sharpness: 0.35,
-    shock: 0.35,
   });
   const raw = new Uint8Array(await blob.arrayBuffer());
   const tag = [0x69, 0x43, 0x43, 0x50];
@@ -103,10 +99,6 @@ export async function runInfinite(
   const { blob, meta } = await runViceUpscale(file, scale, () => {}, {
     base: "/",
     streamThresholdPx: 0,
-    preset: "photo",
-    dering: 1.0,
-    sharpness: 0.35,
-    shock: 0.35,
     chained4x,
     sink: {
       write: async (chunk: Uint8Array) => {
@@ -197,10 +189,6 @@ export async function runInfiniteFile(
   const t0 = performance.now();
   const { blob, meta } = await runViceUpscale(file, scale, () => {}, {
     base: "/",
-    preset: "photo",
-    dering: 1.0,
-    sharpness: 0.35,
-    shock: 0.35,
     chained4x,
     sink: {
       write: async (chunk: Uint8Array) => {

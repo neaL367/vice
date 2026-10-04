@@ -55,65 +55,23 @@ inline int clamp_idx(int idx, int max_val) {
 
 } // namespace
 
-void vice_tuning_defaults(ViceTuning* t) {
-  if (!t) return;
-  t->noise_floor = 0.008f;
-  t->boost = 0.45f;
-  t->boost_slope = 6.0f;
-  t->wide_weight = 0.5f;
-  t->steer_thresh = 0.15f;
-  t->steer_weight = 0.2f;
-  t->dering = 1.0f;
-  t->sharpness = 0.35f;
-  t->preset = 0;
-  t->shock = 0.35f;
-}
-
-int vice_thread_workers(void) {
-  return vice_worker_count(128); // representative band height for telemetry
-}
-
 int vice_upscale_lanczos_adaptive(const float* src, int w, int h, int c, int scale, float* dst) {
-  ViceTuning t;
-  vice_tuning_defaults(&t);
-  return vice_upscale_lanczos_adaptive_ex(src, w, h, c, scale, dst, &t);
-}
-
-int vice_upscale_lanczos_adaptive_ex(const float* src, int w, int h, int c, int scale, float* dst,
-                                     const ViceTuning* tuning) {
-  if (!src || !dst || !tuning || w <= 0 || h <= 0 || (c != 3 && c != 4) ||
+  if (!src || !dst || w <= 0 || h <= 0 || (c != 3 && c != 4) ||
       (scale != 2 && scale != 3 && scale != 4))
     return -1;
 
   const int W = w * scale;
   const int H = h * scale;
 
-  // Preset 2: Pixel Art (exact nearest-neighbor integer box expansion)
-  if (tuning->preset == 2) {
-    for (int by = 0; by < h; ++by) {
-      for (int bx = 0; bx < w; ++bx) {
-        for (int dy = 0; dy < scale; ++dy) {
-          for (int dx = 0; dx < scale; ++dx) {
-            for (int ch = 0; ch < c; ++ch) {
-              dst[(((size_t)by * scale + dy) * W + bx * scale + dx) * c + ch] =
-                  src[((size_t)by * w + bx) * c + ch];
-            }
-          }
-        }
-      }
-    }
-    return 0;
-  }
-
-  const float NOISE_FLOOR = tuning->noise_floor;
-  // Preset 1 (Smooth / CGI): suppress acutance boosting to avoid ringing on rendered surfaces
-  const float BOOST = tuning->preset == 1 ? 0.0f : tuning->boost;
-  const float BOOST_SLOPE = tuning->boost_slope;
-  const float WIDE_W = tuning->wide_weight;
-  const float STEER_T = tuning->steer_thresh;
-  const float STEER_W = tuning->steer_weight;
-  const float DERING = std::max(0.0f, std::min(1.0f, tuning->dering));
-  const float SHARPNESS = std::max(0.0f, std::min(1.0f, tuning->sharpness));
+  const float NOISE_FLOOR = 0.008f;
+  const float BOOST = 0.45f;
+  const float BOOST_SLOPE = 6.0f;
+  const float WIDE_W = 0.5f;
+  const float STEER_T = 0.15f;
+  const float STEER_W = 0.2f;
+  const float DERING = 1.0f;
+  const float SHARPNESS = 0.35f;
+  const float SHOCK = 0.35f;
 
   // Pass 1: Horizontal scale (w x h -> W x h)
   std::vector<float> tmp((size_t)W * h * c);
@@ -277,7 +235,7 @@ int vice_upscale_lanczos_adaptive_ex(const float* src, int w, int h, int c, int 
 
   // Pass 3: Null-Space Micro-Texture Sharpness Enhancement
   const int proc_c = (c == 4) ? 3 : c;
-  if (SHARPNESS > 0.001f) {
+  {
     std::vector<float> sharp_tmp((size_t)W * H * c);
     std::memcpy(sharp_tmp.data(), dst, sharp_tmp.size() * sizeof(float));
     vice_parallel_for(0, H, [&](int y) {
@@ -302,8 +260,7 @@ int vice_upscale_lanczos_adaptive_ex(const float* src, int w, int h, int c, int 
   }
 
   // Pass 4: Vice 2.0 Coherence-Enhancing Shock PDE
-  const float SHOCK = std::max(0.0f, std::min(1.0f, tuning->shock));
-  if (tuning->preset == 0 && SHOCK > 0.001f) {
+  {
     float dt = 0.12f * std::min(1.0f, SHOCK);
     std::vector<float> shock_tmp((size_t)W * H * c);
     std::memcpy(shock_tmp.data(), dst, shock_tmp.size() * sizeof(float));

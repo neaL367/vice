@@ -9,7 +9,6 @@ import {
   BYTE_TO_LINEAR_LUT,
   fastLinearToSrgb,
 } from "../../lib/pipeline/color";
-import type { VicePreset } from "../../features/vice/types/vice";
 
 export interface WebGPUCaseResult {
   outW: number;
@@ -67,11 +66,9 @@ async function decode(blob: Blob): Promise<{ w: number; h: number; data: Uint8Cl
 
 async function runCase(
   kind: "halves-bw" | "halves-alpha",
-  preset: VicePreset,
 ): Promise<WebGPUCaseResult> {
   const { bmp, bytes } = await fixture(kind);
   const gpu = await runWebGPUUpscale(bmp, 2, {
-    preset,
     dering: 1.0,
     sharpness: 0.35,
     shock: 0.35,
@@ -83,7 +80,6 @@ async function runCase(
   // TS reference mirror on the same input (lanczos + full projectClamp).
   const lin = linearize(bytes, 8, 8);
   const ref = lanczosAdaptiveScale(lin, 8, 8, 4, 2, {
-    preset,
     dering: 1.0,
     sharpness: 0.35,
     shock: 0.35,
@@ -128,10 +124,8 @@ async function runCase(
 
 export async function runMatrix(): Promise<Record<string, WebGPUCaseResult>> {
   return {
-    photoBW: await runCase("halves-bw", "photo"),
-    photoAlpha: await runCase("halves-alpha", "photo"),
-    smoothBW: await runCase("halves-bw", "smooth"),
-    pixelBW: await runCase("halves-bw", "pixel-art"),
+    bw: await runCase("halves-bw"),
+    alpha: await runCase("halves-alpha"),
   };
 }
 

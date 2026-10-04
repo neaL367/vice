@@ -13,8 +13,13 @@ add_library(vice_core STATIC
   src/color.cpp
   src/project.cpp
   src/tile.cpp
+  src/png_filters.cpp
+  src/png_writer.cpp
   src/png.cpp
-  src/api.cpp
+  src/engine_context.cpp
+  src/stream_renderer.cpp
+  src/fused_4x.cpp
+  src/parallel_runtime.cpp
   src/upscale.cpp
   src/metrics.cpp
   src/miniz.c
@@ -43,23 +48,12 @@ else()
   set_source_files_properties(../tools/eval/stb_impl.cpp PROPERTIES COMPILE_OPTIONS "-w")
 endif()
 
-add_executable(vice_lab ../tools/lab/vice_lab.cpp ../tools/eval/stb_impl.cpp)
-target_link_libraries(vice_lab PRIVATE vice_core)
-
 add_executable(vice_bench4x ../tools/bench4x/bench4x.cpp ../tools/eval/stb_impl.cpp)
 target_link_libraries(vice_bench4x PRIVATE vice_core)
 target_include_directories(vice_bench4x PRIVATE ../tools/eval)
 if(MSVC)
   set_source_files_properties(../tools/eval/stb_impl.cpp PROPERTIES COMPILE_OPTIONS "/w")
 else()
-  set_source_files_properties(../tools/eval/stb_impl.cpp PROPERTIES COMPILE_OPTIONS "-w")
-endif()
-target_include_directories(vice_lab PRIVATE ../tools/eval)
-if(MSVC)
-  target_compile_options(vice_lab PRIVATE /WX- /O2)
-  set_source_files_properties(../tools/eval/stb_impl.cpp PROPERTIES COMPILE_OPTIONS "/w")
-else()
-  target_compile_options(vice_lab PRIVATE -Wno-error -O2)
   set_source_files_properties(../tools/eval/stb_impl.cpp PROPERTIES COMPILE_OPTIONS "-w")
 endif()
 

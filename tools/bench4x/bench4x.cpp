@@ -41,15 +41,9 @@ std::vector<float> load_rgb(const char* path, int* w, int* h) {
   return f;
 }
 
-void set_tuning(vice_ctx* ctx, bool clean_second) {
-  ViceTuning t;
-  vice_tuning_defaults(&t);
-  if (clean_second) {
-    t.sharpness = 0.0f;
-    t.shock = 0.0f;
-  }
-  if (vice_upscale_ex(ctx, &t) != 0) {
-    printf("upscale_ex failed\n");
+void run_upscale(vice_ctx* ctx) {
+  if (vice_upscale(ctx) != 0) {
+    printf("upscale failed\n");
     std::abort();
   }
 }
@@ -57,6 +51,7 @@ void set_tuning(vice_ctx* ctx, bool clean_second) {
 // Full-image render to float. chained: 2x o 2x with optional clean 2nd pass.
 std::vector<float> render_full(const float* in, int w, int h, bool chained,
                                bool clean_second, double* residual, double* ms) {
+  (void)clean_second;
   auto t0 = clock::now();
   std::vector<float> out;
   if (!chained) {
@@ -64,7 +59,7 @@ std::vector<float> render_full(const float* in, int w, int h, bool chained,
     if (!ctx) abort();
     std::vector<float> y(in, in + (size_t)w * h * 3);
     vice_set_input(ctx, y.data(), (int)y.size());
-    set_tuning(ctx, false);
+    run_upscale(ctx);
     vice_project(ctx);
     *residual = vice_last_residual(ctx);
     out.resize((size_t)w * 4 * h * 4 * 3);
@@ -75,7 +70,7 @@ std::vector<float> render_full(const float* in, int w, int h, bool chained,
     if (!c1) abort();
     std::vector<float> y(in, in + (size_t)w * h * 3);
     vice_set_input(c1, y.data(), (int)y.size());
-    set_tuning(c1, false);
+    run_upscale(c1);
     vice_project(c1);
     std::vector<float> mid((size_t)w * 2 * h * 2 * 3);
     vice_download_raw(c1, mid.data(), (int)mid.size());
@@ -83,7 +78,7 @@ std::vector<float> render_full(const float* in, int w, int h, bool chained,
     vice_ctx* c2 = vice_create(w * 2, h * 2, 2, 3);
     if (!c2) abort();
     vice_set_input(c2, mid.data(), (int)mid.size());
-    set_tuning(c2, clean_second);
+    run_upscale(c2);
     vice_project(c2);
     *residual = vice_last_residual(c2);
     out.resize((size_t)w * 4 * h * 4 * 3);

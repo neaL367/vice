@@ -5,101 +5,27 @@
 extern "C" {
 #endif
 
-typedef struct vice_ctx vice_ctx;
+/* --- 1. Typed Status Codes --- */
+typedef enum ViceStatus {
+  VICE_OK = 0,
+  VICE_INVALID_ARGUMENT = -1,
+  VICE_OUT_OF_MEMORY = -2,
+  VICE_BAD_STATE = -3,
+  VICE_OUTPUT_BACKPRESSURE = -4,
+  VICE_CANCELLED = -5,
+} ViceStatus;
 
-/* Create context. in_w/in_h = input dims, scale = 2/3/4, channels = 3 or 4.
-   Returns NULL on invalid args / overflow. */
-vice_ctx* vice_create(int in_w, int in_h, int scale, int channels);
+/* --- 2. Enums --- */
+typedef enum ViceScale {
+  VICE_SCALE_2X = 2,
+  VICE_SCALE_3X = 3,
+  VICE_SCALE_4X = 4,
+} ViceScale;
 
-/* Set full-res input y (h*w*C linear-light premultiplied float, range [0,1]).
-   Must be called once before submit. Copies data. Returns 0 ok, <0 error. */
-int vice_set_input(vice_ctx* ctx, const float* y, int n);
-
-/* Submit one raw network tile. Tile is already blended into band space by caller?
-   v1: tx,ty = top-left in output pixels, tile = th*tw*C floats, n = th*tw*C.
-   Accumulates with overwrite (caller blends overlaps before submit, or submits
-   disjoint tiles). Returns 0 ok. */
-int vice_submit_raw_tile(vice_ctx* ctx, int tx, int ty, const float* tile,
-                         int tw, int th, int n);
-
-/* Project accumulated raw buffer with box consistency vs input y.
-   Runs project->clamp up to 3 rounds. Returns 0 ok. */
-int vice_project(vice_ctx* ctx);
-
-/* Download the projected float buffer (out_w*out_h*channels floats).
-   Exists for chaining passes without re-upload; n must match exactly. */
-int vice_download_raw(vice_ctx* ctx, float* out, int n);
-
-/* Copy finished output scanlines for band (band of output rows).
-   out_rows must hold band_h*out_w*C bytes. Sets *out_row_count.
-   Quantizes float->8bit sRGB inside. Returns 0 ok. */
-int vice_process_band(vice_ctx* ctx, int band, unsigned char* out_rows,
-                      int* out_row_count);
-
-/* Encode full output to PNG (8-bit, pass-through, filter None, stored deflate).
-   v1 valid but uncompressed; swap to miniz/zlib-ng later. */
-int vice_finish_png(vice_ctx* ctx, unsigned char* out, size_t cap,
-                    size_t* written);
-
-/* Attach an ICC profile to be embedded as an iCCP chunk in the output PNG. */
-int vice_set_icc_profile(vice_ctx* ctx, const unsigned char* data, size_t size);
-
-/* L-inf residual ||A(out)-y|| after last project (float domain). */
-double vice_last_residual(const vice_ctx* ctx);
-
-void vice_destroy(vice_ctx* ctx);
-
-/* Native Lanczos-3 adaptive super-resolution upscaler on context.
-   Upscales ctx->y directly into ctx->raw with diagonal steering and noise-gated acutance. */
-int vice_upscale(vice_ctx* ctx);
-
-/* Native Lanczos-3 adaptive upscaler on context with explicit tuning parameters. */
-int vice_upscale_ex(vice_ctx* ctx, const struct ViceTuning* tuning);
-
-/* Pure helpers exposed for tests and standalone native pipelines. */
-int vice_upscale_lanczos_adaptive(const float* src, int w, int h, int c, int scale, float* dst);
-
-/* Heuristic constants of the adaptive engine. vice_tuning_defaults() returns the
-   shipped values; vice_upscale_lanczos_adaptive() is exactly the _ex variant with
-   those defaults. */
-typedef struct ViceTuning {
-  float noise_floor;  /* edge energy below which no acutance boost is applied */
-  float boost;        /* max acutance boost strength */
-  float boost_slope;  /* ramp of the boost above the noise floor */
-  float wide_weight;  /* weight of the 4-tap span in edge energy */
-  float steer_thresh; /* diagonal asymmetry needed to steer */
-  float steer_weight; /* max blend toward the diagonal average */
-  float dering;       /* anti-ringing clamp strength [0.0, 1.0] (default 1.0) */
-  float sharpness;    /* null-space high-pass sharpness boost [0.0, 1.0] (default 0.35) */
-  int   preset;       /* 0 = adaptive lanczos (photo), 1 = smooth (CGI), 2 = pixel art */
-  float shock;        /* coherence shock PDE strength [0.0, 1.0] (default 0.35 photo, 0 else) */
-} ViceTuning;
-void vice_tuning_defaults(ViceTuning* t);
-int vice_upscale_lanczos_adaptive_ex(const float* src, int w, int h, int c, int scale, float* dst,
-                                     const ViceTuning* tuning);
-void vice_project_box(const float* y, float* raw, int w, int h, int s, int c);
-/* Clamp-aware exact box projection: shifts each s*s block by a per-block scalar d
-   such that mean(clamp(v + d, 0, 1)) = y, guaranteeing both [0, 1] range and
-   residual <= 3e-8 even on saturated content. */
-void vice_project_box_clamped(const float* y, float* raw, int w, int h, int s, int c);
-/* Iterative back-projection with a bilinear correction (no block seams). Approximate;
-   follow with vice_project_box for exact block means. */
-void vice_project_smooth(const float* y, float* raw, int w, int h, int s, int c, int iterations);
-/* Smooth back-projection rounds used by vice_project. */
-#define VICE_SMOOTH_ITERS 4
-
-/* Hierarchical 2-level multi-grid consistency solver: coarse-to-fine residual restriction
-   and prolongation eliminates low-frequency haloing and accelerates convergence. */
-void vice_project_multigrid(const float* y, float* raw, int w, int h, int s, int c, int cycles);
-
-/* Streaming strip / band context for memory-bounded processing of gigapixel images.
-   Float buffers stay band-sized; the caller accumulates 8-bit rows (1 B/px/ch)
-   and finishes with vice_stream_finish_png. Band projection is box-only
-   (no multigrid): same residual guarantee, slightly different low frequencies
-   than the full-image path. */
+/* --- 3. Unified Streaming Pipeline C ABI --- */
 typedef struct vice_stream_ctx vice_stream_ctx;
+
 vice_stream_ctx* vice_stream_create(int in_w, int in_h, int scale, int channels, int band_h);
-int vice_stream_set_tuning(vice_stream_ctx* sctx, const struct ViceTuning* tuning);
 int vice_stream_set_icc_profile(vice_stream_ctx* sctx, const unsigned char* data, size_t size);
 int vice_stream_push_input_rows(vice_stream_ctx* sctx, const float* in_rows, int row_count);
 int vice_stream_has_next_band(const vice_stream_ctx* sctx);
@@ -108,48 +34,52 @@ int vice_stream_finish_png(vice_stream_ctx* sctx, const unsigned char* rgba_rows
                            unsigned char* out, size_t cap, size_t* written);
 double vice_stream_last_residual(const vice_stream_ctx* sctx);
 void vice_stream_destroy(vice_stream_ctx* sctx);
-
-/* Fused chained 4x for the streaming pipeline (infinite-export path).
-   mode 0 = off (direct 4x kernel); 1 = two 2x passes, clean second pass
-   (sharpness/shock forced to 0, matches the full-image chained policy);
-   2 = two 2x passes with full tuning on both ("detail").
-   The intermediate 2x image exists only for the current strip plus a fixed
-   input halo (6 rows each side); only owned output rows are kept, and the
-   final exact 4x4 block projection still runs against the original input,
-   so the reconstruction guarantee is unchanged. Set before pulling bands. */
 int vice_stream_set_fused(vice_stream_ctx* sctx, int mode);
 
-/* Incremental (truly out-of-core) PNG writer for the infinite-export path.
-   Only the previous row (for filtering), a fixed DEFLATE window/buffer, and
-   framed-but-undrained IDAT bytes are retained: peak working memory is
-   independent of image height. The caller feeds 8-bit rows top-to-bottom
-   (as produced by vice_stream_pull_band), drains encoded chunks, and writes
-   them to disk immediately. Multi-IDAT output: one zlib stream split across
-   consecutive IDAT chunks, per the PNG spec.
-   Color type is fixed at open: pass out_channels 3 (RGB) or 4 (RGBA).
-   Decide from the INPUT alpha (known before rendering), not by scanning
-   the output. in_channels is the fed row stride (3 or 4, >= out_channels);
-   RGBA rows are packed down to RGB inside when they differ.
-   Typical loop: open -> [write_rows -> drain*]* -> close -> drain* -> destroy.
-   close() fails unless exactly h rows were fed. drain() returns 0 with
-   *written == 0 when there is nothing pending. */
+/* --- 4. Incremental PNG Writer C ABI --- */
 typedef struct vice_png_stream vice_png_stream;
+
 vice_png_stream* vice_png_open(int w, int h, int in_channels, int out_channels,
                                const unsigned char* icc_data, size_t icc_size);
 int vice_png_write_rows(vice_png_stream* st, const unsigned char* rows, int row_count);
 int vice_png_drain(vice_png_stream* st, unsigned char* out, size_t cap, size_t* written);
 int vice_png_close(vice_png_stream* st);
 void vice_png_destroy(vice_png_stream* st);
-/* Test hook: largest (pending + staged-deflate) byte count seen so far. */
 size_t vice_png_peak_pending(const vice_png_stream* st);
+
+/* --- 5. Mathematical Core & Color Conversion --- */
+#define VICE_SMOOTH_ITERS 4
+
+int vice_upscale_lanczos_adaptive(const float* src, int w, int h, int c, int scale, float* dst);
+void vice_project_box(const float* y, float* raw, int w, int h, int s, int c);
+void vice_project_box_clamped(const float* y, float* raw, int w, int h, int s, int c);
+void vice_project_smooth(const float* y, float* raw, int w, int h, int s, int c, int iterations);
+void vice_project_multigrid(const float* y, float* raw, int w, int h, int s, int c, int cycles);
 
 float vice_srgb_to_linear(float v);
 float vice_linear_to_srgb(float v);
-/* Row-worker count the engine would use (1 = serial single-threaded core). */
-int vice_thread_workers(void);
 float vice_fast_linear_to_srgb(float v);
 float vice_fast_srgb_to_linear(float v);
 float vice_spatial_triangular_dither(int x, int y, int ch);
+int vice_thread_workers(void);
+
+/* --- 6. Compatibility Context C ABI --- */
+typedef struct vice_ctx vice_ctx;
+
+vice_ctx* vice_create(int in_w, int in_h, int scale, int channels);
+int vice_set_input(vice_ctx* ctx, const float* y, int n);
+int vice_submit_raw_tile(vice_ctx* ctx, int tx, int ty, const float* tile,
+                         int tw, int th, int n);
+int vice_project(vice_ctx* ctx);
+int vice_download_raw(vice_ctx* ctx, float* out, int n);
+int vice_process_band(vice_ctx* ctx, int band, unsigned char* out_rows,
+                      int* out_row_count);
+int vice_finish_png(vice_ctx* ctx, unsigned char* out, size_t cap,
+                    size_t* written);
+int vice_set_icc_profile(vice_ctx* ctx, const unsigned char* data, size_t size);
+double vice_last_residual(const vice_ctx* ctx);
+int vice_upscale(vice_ctx* ctx);
+void vice_destroy(vice_ctx* ctx);
 
 #ifdef __cplusplus
 }

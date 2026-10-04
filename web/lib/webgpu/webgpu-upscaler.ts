@@ -7,12 +7,7 @@
 import { WGSL_PASS1_H, WGSL_PASS2_V, WGSL_PASS3_PROJECT } from "./shaders";
 import { getWebGPUDevice } from "./webgpu-support";
 
-export interface WebGPUUpscaleOptions {
-  preset?: "photo" | "smooth" | "pixel-art";
-  dering?: number;
-  sharpness?: number;
-  shock?: number;
-}
+export interface WebGPUUpscaleOptions {}
 
 export interface WebGPUUpscaleResult {
   blob: Blob;
@@ -175,26 +170,15 @@ export async function runWebGPUUpscale(
     const u32View = new Uint32Array(uniformData);
     const f32View = new Float32Array(uniformData);
 
-    const preset =
-      options?.preset === "smooth"
-        ? 1
-        : options?.preset === "pixel-art"
-          ? 2
-          : 0;
     u32View[0] = inW;
     u32View[1] = inH;
     u32View[2] = outW;
     u32View[3] = outH;
     u32View[4] = scale;
-    u32View[5] = preset;
-    f32View[6] = Math.max(0, Math.min(1, options?.dering ?? 1.0));
-    f32View[7] = Math.max(0, Math.min(1, options?.sharpness ?? 0.35));
-    f32View[8] =
-      options?.shock !== undefined
-        ? Math.max(0, Math.min(1, options.shock))
-        : preset === 0
-          ? 0.35
-          : 0;
+    u32View[5] = 0; // unified standard mode
+    f32View[6] = 1.0;
+    f32View[7] = 0.35;
+    f32View[8] = 0.35;
 
     uniformBuf = device.createBuffer({
       size: 48,

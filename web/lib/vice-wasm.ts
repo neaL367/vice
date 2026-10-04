@@ -1,106 +1,61 @@
-// Loader for the prebuilt C++ core (public/wasm/core.js, MODULARIZE ES6).
-// Runtime URL by design: never bundled, loads only on the wasm path.
-// Missing asset (dev without wasm build) -> null -> TS fallback in worker.
+// Compatibility facade for existing callers.
+// Delegates internally to web/features/vice/engine/ focused modules.
 
-interface ViceCoreInstance {
-  _vice_create(inW: number, inH: number, scale: number, channels: number): number;
-  _vice_set_input(ctx: number, yPtr: number, n: number): number;
-  _vice_submit_raw_tile(
-    ctx: number,
-    tx: number,
-    ty: number,
-    tilePtr: number,
-    tw: number,
-    th: number,
-    n: number,
-  ): number;
-  _vice_upscale?(ctx: number): number;
-  _vice_upscale_ex?(ctx: number, tuningPtr: number): number;
-  _vice_tuning_defaults?(tuningPtr: number): void;
-  _vice_project(ctx: number): number;
-  _vice_download_raw(ctx: number, outPtr: number, n: number): number;
-  _vice_process_band(ctx: number, band: number, outPtr: number, countPtr: number): number;
-  _vice_finish_png(ctx: number, outPtr: number, cap: number, writtenPtr: number): number;
-  _vice_set_icc_profile?(ctx: number, dataPtr: number, size: number): number;
-  _vice_stream_create?(inW: number, inH: number, scale: number, channels: number, bandH: number): number;
-  _vice_stream_set_tuning?(sctx: number, tuningPtr: number): number;
-  _vice_stream_set_icc_profile?(sctx: number, dataPtr: number, size: number): number;
-  _vice_stream_push_input_rows?(sctx: number, rowsPtr: number, rowCount: number): number;
-  _vice_stream_has_next_band?(sctx: number): number;
-  _vice_stream_pull_band?(sctx: number, outPtr: number, countPtr: number): number;
-  _vice_stream_finish_png?(sctx: number, rgbaPtr: number, n: number, outPtr: number, cap: number, writtenPtr: number): number;
-  _vice_stream_last_residual?(sctx: number): number;
-  _vice_stream_set_fused?(sctx: number, mode: number): number;
-  _vice_stream_destroy?(sctx: number): void;
-  _vice_png_open?(w: number, h: number, inCh: number, outCh: number, iccPtr: number, iccSize: number): number;
-  _vice_png_write_rows?(st: number, rowsPtr: number, rowCount: number): number;
-  _vice_png_drain?(st: number, outPtr: number, cap: number, writtenPtr: number): number;
-  _vice_png_close?(st: number): number;
-  _vice_png_destroy?(st: number): void;
-  _vice_png_peak_pending?(st: number): number;
-  _vice_thread_workers?(): number;
-  _vice_last_residual(ctx: number): number;
-  _vice_destroy(ctx: number): void;
-  _malloc(size: number): number;
-  _free(ptr: number): void;
-  HEAPF32: Float32Array;
-  HEAPU8: Uint8Array;
-}
-
-type CoreFactory = () => Promise<ViceCoreInstance>;
+import { loadWasmModule, type ViceCoreInstance } from "../features/vice/engine/wasm-module";
+import { WasmMemory } from "../features/vice/engine/wasm-memory";
+import {
+  hasFullSupport,
+  hasNativeUpscale,
+  hasStreamSupport,
+  hasInfiniteSupport,
+  getThreadWorkers,
+} from "../features/vice/engine/capabilities";
 
 export class ViceCore {
+  private readonly mem: WasmMemory;
+
   private constructor(
     private readonly core: ViceCoreInstance,
     readonly outW: number,
     readonly outH: number,
     readonly channels: number,
     readonly threaded: boolean = false,
-  ) {}
+  ) {
+    this.mem = new WasmMemory(core);
+  }
 
   static async load(base: string): Promise<ViceCore | null> {
-    // Threaded core first, but only when the page is cross-origin isolated
-    // (SharedArrayBuffer gate); stale/missing asset -> single-threaded core.
-    if (typeof crossOriginIsolated !== "undefined" && crossOriginIsolated) {
-      try {
-        const mod = (await import(
-          /* turbopackIgnore: true */ `${base}wasm/core.threaded.js`
-        )) as { default: CoreFactory };
-        const core = await mod.default();
-        if (typeof core._vice_create === "function") {
-          return new ViceCore(core, 0, 0, 0, true);
-        }
-      } catch {
-        // Fall through to the single-threaded core.
-      }
-    }
-    try {
-      // Runtime URL: left as-is by bundlers (turbopackIgnore) and bun build.
-      const mod = (await import(/* turbopackIgnore: true */ `${base}wasm/core.js`)) as {
-        default: CoreFactory;
-      };
-      const core = await mod.default();
-      if (typeof core._vice_create !== "function") return null;
-      // Deferred dims: set on create().
-      return new ViceCore(core, 0, 0, 0);
-    } catch {
-      return null;
-    }
+    const loaded = await loadWasmModule(base);
+    if (!loaded) return null;
+    return new ViceCore(loaded.instance, 0, 0, 0, loaded.threaded);
+  }
+
+  get instance(): ViceCoreInstance {
+    return this.core;
+  }
+
+  get memory(): WasmMemory {
+    return this.mem;
   }
 
   threadWorkers(): number {
-    try {
-      return this.core._vice_thread_workers?.() ?? 1;
-    } catch {
-      return 1;
-    }
+    return getThreadWorkers(this.core);
   }
 
-  private writeFloats(data: Float32Array): number {
-    const ptr = this.core._malloc(data.length * 4);
-    if (!ptr) throw new Error("wasm malloc failed");
-    this.core.HEAPF32.set(data, ptr / 4);
-    return ptr;
+  hasNativeUpscale(): boolean {
+    return hasNativeUpscale(this.core);
+  }
+
+  hasFull(): boolean {
+    return hasFullSupport(this.core);
+  }
+
+  hasStream(): boolean {
+    return hasStreamSupport(this.core);
+  }
+
+  hasInfinite(): boolean {
+    return hasInfiniteSupport(this.core);
   }
 
   create(inW: number, inH: number, scale: number, channels: number): number {
@@ -110,73 +65,31 @@ export class ViceCore {
   }
 
   setInput(ctx: number, y: Float32Array): void {
-    const ptr = this.writeFloats(y);
+    const ptr = this.mem.writeFloats(y);
     try {
-      if (this.core._vice_set_input(ctx, ptr, y.length) !== 0) throw new Error("vice_set_input failed");
+      if (this.core._vice_set_input(ctx, ptr, y.length) !== 0) {
+        throw new Error("vice_set_input failed");
+      }
     } finally {
-      this.core._free(ptr);
+      this.mem.free(ptr);
     }
   }
 
   submitFullRaw(ctx: number, raw: Float32Array, outW: number, outH: number): void {
-    const ptr = this.writeFloats(raw);
+    const ptr = this.mem.writeFloats(raw);
     try {
-      if (this.core._vice_submit_raw_tile(ctx, 0, 0, ptr, outW, outH, raw.length) !== 0)
+      if (this.core._vice_submit_raw_tile(ctx, 0, 0, ptr, outW, outH, raw.length) !== 0) {
         throw new Error("vice_submit_raw_tile failed");
-    } finally {
-      this.core._free(ptr);
-    }
-  }
-
-  hasNativeUpscale(): boolean {
-    return typeof this.core._vice_upscale === "function";
-  }
-
-  upscale(
-    ctx: number,
-    options?: {
-      preset?: "photo" | "smooth" | "pixel-art";
-      dering?: number;
-      sharpness?: number;
-      shock?: number;
-    },
-  ): void {
-    if (this.core._vice_upscale_ex && options) {
-      const ptr = this.core._malloc(40);
-      if (!ptr) throw new Error("wasm malloc failed");
-      try {
-        if (this.core._vice_tuning_defaults) {
-          this.core._vice_tuning_defaults(ptr);
-        }
-        const view = new DataView(this.core.HEAPU8.buffer, ptr, 40);
-        if (options.dering !== undefined) {
-          view.setFloat32(24, Math.max(0, Math.min(1, options.dering)), true);
-        }
-        if (options.sharpness !== undefined) {
-          view.setFloat32(28, Math.max(0, Math.min(1, options.sharpness)), true);
-        }
-        if (options.preset !== undefined) {
-          const p =
-            options.preset === "smooth"
-              ? 1
-              : options.preset === "pixel-art"
-              ? 2
-              : 0;
-          view.setInt32(32, p, true);
-        }
-        if (options.shock !== undefined) {
-          view.setFloat32(36, Math.max(0, Math.min(1, options.shock)), true);
-        }
-        if (this.core._vice_upscale_ex(ctx, ptr) !== 0) {
-          throw new Error("vice_upscale_ex failed");
-        }
-        return;
-      } finally {
-        this.core._free(ptr);
       }
+    } finally {
+      this.mem.free(ptr);
     }
-    if (this.core._vice_upscale && this.core._vice_upscale(ctx) !== 0)
+  }
+
+  upscale(ctx: number): void {
+    if (this.core._vice_upscale && this.core._vice_upscale(ctx) !== 0) {
       throw new Error("vice_upscale failed");
+    }
   }
 
   project(ctx: number): void {
@@ -184,14 +97,14 @@ export class ViceCore {
   }
 
   downloadRaw(ctx: number, cells: number): Float32Array {
-    const ptr = this.core._malloc(cells * 4);
-    if (!ptr) throw new Error("wasm malloc failed");
+    const ptr = this.mem.malloc(cells * 4);
     try {
-      if (this.core._vice_download_raw(ctx, ptr, cells) !== 0)
+      if (this.core._vice_download_raw(ctx, ptr, cells) !== 0) {
         throw new Error("vice_download_raw failed");
-      return this.core.HEAPF32.slice(ptr / 4, ptr / 4 + cells);
+      }
+      return this.mem.readFloats(ptr, cells);
     } finally {
-      this.core._free(ptr);
+      this.mem.free(ptr);
     }
   }
 
@@ -201,52 +114,43 @@ export class ViceCore {
 
   setIccProfile(ctx: number, data: Uint8Array): void {
     if (!this.core._vice_set_icc_profile || data.length === 0) return;
-    const ptr = this.core._malloc(data.length);
-    if (!ptr) throw new Error("wasm malloc failed");
+    const ptr = this.mem.writeBytes(data);
     try {
-      this.core.HEAPU8.set(data, ptr);
       this.core._vice_set_icc_profile(ctx, ptr, data.length);
     } finally {
-      this.core._free(ptr);
+      this.mem.free(ptr);
     }
   }
 
   processBand(ctx: number, band: number, outW: number, _maxRows: number, channels: number): Uint8Array {
     const bytes = 64 * outW * channels;
-    const outPtr = this.core._malloc(bytes);
-    const countPtr = this.core._malloc(4);
-    if (!outPtr || !countPtr) throw new Error("wasm malloc failed");
+    const outPtr = this.mem.malloc(bytes);
+    const countPtr = this.mem.malloc(4);
     try {
-      if (this.core._vice_process_band(ctx, band, outPtr, countPtr) !== 0)
+      if (this.core._vice_process_band(ctx, band, outPtr, countPtr) !== 0) {
         throw new Error("vice_process_band failed");
-      const actualRows = new DataView(this.core.HEAPU8.buffer, countPtr, 4).getInt32(0, true);
+      }
+      const actualRows = this.mem.readInt32(countPtr);
       const writtenBytes = actualRows * outW * channels;
-      const res = new Uint8Array(writtenBytes);
-      res.set(this.core.HEAPU8.subarray(outPtr, outPtr + writtenBytes));
-      return res;
+      return this.mem.readBytes(outPtr, writtenBytes);
     } finally {
-      this.core._free(outPtr);
-      this.core._free(countPtr);
+      this.mem.free(outPtr);
+      this.mem.free(countPtr);
     }
   }
 
   finishPng(ctx: number, outW: number, outH: number, channels: number): Uint8Array {
     const cap = outW * outH * channels + 1024 * 1024;
-    const outPtr = this.core._malloc(cap);
-    const writtenPtr = this.core._malloc(8);
-    if (!outPtr || !writtenPtr) throw new Error("wasm malloc failed");
+    const outPtr = this.mem.malloc(cap);
+    const writtenPtr = this.mem.malloc(8);
     try {
       const rc = this.core._vice_finish_png(ctx, outPtr, cap, writtenPtr);
       if (rc !== 0) throw new Error(`vice_finish_png failed (${rc})`);
-      // size_t is 32-bit on wasm32. Access HEAPU8 fresh after potential memory growth.
-      const heap = this.core.HEAPU8;
-      const written = new DataView(heap.buffer, writtenPtr, 4).getUint32(0, true);
-      const out = new Uint8Array(written);
-      out.set(heap.subarray(outPtr, outPtr + written));
-      return out;
+      const written = this.mem.readUint32(writtenPtr);
+      return this.mem.readBytes(outPtr, written);
     } finally {
-      this.core._free(outPtr);
-      this.core._free(writtenPtr);
+      this.mem.free(outPtr);
+      this.mem.free(writtenPtr);
     }
   }
 
@@ -255,24 +159,6 @@ export class ViceCore {
   }
 
   // --- Streaming strip pipeline ----------------------------------------
-  // Band-sized float buffers; caller accumulates 8-bit rows in WASM and
-  // finishes with streamFinishPng. Missing exports (stale cached core.js)
-  // -> false -> caller falls back to the full-image path.
-
-  hasStream(): boolean {
-    const c = this.core;
-    return (
-      typeof c._vice_stream_create === "function" &&
-      typeof c._vice_stream_set_tuning === "function" &&
-      typeof c._vice_stream_set_icc_profile === "function" &&
-      typeof c._vice_stream_push_input_rows === "function" &&
-      typeof c._vice_stream_has_next_band === "function" &&
-      typeof c._vice_stream_pull_band === "function" &&
-      typeof c._vice_stream_finish_png === "function" &&
-      typeof c._vice_stream_last_residual === "function" &&
-      typeof c._vice_stream_destroy === "function"
-    );
-  }
 
   createStream(inW: number, inH: number, scale: number, channels: number, bandH: number): number {
     const sctx = this.core._vice_stream_create!(inW, inH, scale, channels, bandH);
@@ -280,64 +166,25 @@ export class ViceCore {
     return sctx;
   }
 
-  streamSetTuning(
-    sctx: number,
-    options?: {
-      preset?: "photo" | "smooth" | "pixel-art";
-      dering?: number;
-      sharpness?: number;
-      shock?: number;
-    },
-  ): void {
-    if (!this.core._vice_stream_set_tuning || !options) return;
-    const ptr = this.core._malloc(40);
-    if (!ptr) throw new Error("wasm malloc failed");
-    try {
-      if (this.core._vice_tuning_defaults) this.core._vice_tuning_defaults(ptr);
-      const view = new DataView(this.core.HEAPU8.buffer, ptr, 40);
-      if (options.dering !== undefined) {
-        view.setFloat32(24, Math.max(0, Math.min(1, options.dering)), true);
-      }
-      if (options.sharpness !== undefined) {
-        view.setFloat32(28, Math.max(0, Math.min(1, options.sharpness)), true);
-      }
-      if (options.preset !== undefined) {
-        view.setInt32(
-          32,
-          options.preset === "smooth" ? 1 : options.preset === "pixel-art" ? 2 : 0,
-          true,
-        );
-      }
-      if (options.shock !== undefined) {
-        view.setFloat32(36, Math.max(0, Math.min(1, options.shock)), true);
-      }
-      if (this.core._vice_stream_set_tuning(sctx, ptr) !== 0)
-        throw new Error("vice_stream_set_tuning failed");
-    } finally {
-      this.core._free(ptr);
-    }
-  }
-
   streamSetIcc(sctx: number, data: Uint8Array): void {
     if (!this.core._vice_stream_set_icc_profile || data.length === 0) return;
-    const ptr = this.core._malloc(data.length);
-    if (!ptr) throw new Error("wasm malloc failed");
+    const ptr = this.mem.writeBytes(data);
     try {
-      this.core.HEAPU8.set(data, ptr);
       this.core._vice_stream_set_icc_profile(sctx, ptr, data.length);
     } finally {
-      this.core._free(ptr);
+      this.mem.free(ptr);
     }
   }
 
   streamPushRows(sctx: number, rows: Float32Array, rowCount: number): void {
     if (rowCount <= 0 || !Number.isInteger(rowCount)) throw new Error("bad row count");
-    const ptr = this.writeFloats(rows);
+    const ptr = this.mem.writeFloats(rows);
     try {
-      if (this.core._vice_stream_push_input_rows!(sctx, ptr, rowCount) !== 0)
+      if (this.core._vice_stream_push_input_rows!(sctx, ptr, rowCount) !== 0) {
         throw new Error("vice_stream_push_input_rows failed");
+      }
     } finally {
-      this.core._free(ptr);
+      this.mem.free(ptr);
     }
   }
 
@@ -346,36 +193,31 @@ export class ViceCore {
   }
 
   streamPullBand(sctx: number, outPtr: number, maxRows: number): { rc: number; rows: number } {
-    const countPtr = this.core._malloc(4);
-    if (!countPtr) throw new Error("wasm malloc failed");
+    const countPtr = this.mem.malloc(4);
     try {
       const rc = this.core._vice_stream_pull_band!(sctx, outPtr, countPtr);
-      const rows = new DataView(this.core.HEAPU8.buffer, countPtr, 4).getInt32(0, true);
+      const rows = this.mem.readInt32(countPtr);
       if (rc < 0 || rows < 0 || rows > maxRows) {
         throw new Error(`vice_stream_pull_band failed (rc=${rc})`);
       }
       return { rc, rows };
     } finally {
-      this.core._free(countPtr);
+      this.mem.free(countPtr);
     }
   }
 
   streamFinishPng(sctx: number, rgbaPtr: number, cells: number): Uint8Array {
     const cap = cells + 1024 * 1024;
-    const outPtr = this.core._malloc(cap);
-    const writtenPtr = this.core._malloc(8);
-    if (!outPtr || !writtenPtr) throw new Error("wasm malloc failed");
+    const outPtr = this.mem.malloc(cap);
+    const writtenPtr = this.mem.malloc(8);
     try {
       const rc = this.core._vice_stream_finish_png!(sctx, rgbaPtr, cells, outPtr, cap, writtenPtr);
       if (rc !== 0) throw new Error(`vice_stream_finish_png failed (${rc})`);
-      const heap = this.core.HEAPU8;
-      const written = new DataView(heap.buffer, writtenPtr, 4).getUint32(0, true);
-      const out = new Uint8Array(written);
-      out.set(heap.subarray(outPtr, outPtr + written));
-      return out;
+      const written = this.mem.readUint32(writtenPtr);
+      return this.mem.readBytes(outPtr, written);
     } finally {
-      this.core._free(outPtr);
-      this.core._free(writtenPtr);
+      this.mem.free(outPtr);
+      this.mem.free(writtenPtr);
     }
   }
 
@@ -385,64 +227,45 @@ export class ViceCore {
 
   streamSetFused(sctx: number, mode: 0 | 1 | 2): void {
     if (!this.core._vice_stream_set_fused) throw new Error("stale core.js: no fused 4x");
-    if (this.core._vice_stream_set_fused(sctx, mode) !== 0)
+    if (this.core._vice_stream_set_fused(sctx, mode) !== 0) {
       throw new Error(`vice_stream_set_fused failed (mode=${mode})`);
+    }
   }
 
-  // --- Incremental PNG writer (infinite export) --------------------------
-  // Fixed memory budget: bands in, 256 KB chunks out. Missing exports
-  // (stale cached core.js) -> false -> caller refuses the save-to-disk path
-  // instead of silently accumulating a Blob.
-
-  hasInfinite(): boolean {
-    const c = this.core;
-    return (
-      this.hasStream() &&
-      typeof c._vice_stream_set_fused === "function" &&
-      typeof c._vice_png_open === "function" &&
-      typeof c._vice_png_write_rows === "function" &&
-      typeof c._vice_png_drain === "function" &&
-      typeof c._vice_png_close === "function" &&
-      typeof c._vice_png_destroy === "function"
-    );
-  }
+  // --- Incremental PNG writer -------------------------------------------
 
   pngOpen(w: number, h: number, inCh: number, outCh: number, icc?: Uint8Array): number {
     let iccPtr = 0;
     try {
       if (icc && icc.length > 0) {
-        iccPtr = this.core._malloc(icc.length);
-        if (!iccPtr) throw new Error("wasm malloc failed");
-        this.core.HEAPU8.set(icc, iccPtr);
+        iccPtr = this.mem.writeBytes(icc);
       }
       const st = this.core._vice_png_open!(w, h, inCh, outCh, iccPtr, icc?.length ?? 0);
       if (!st) throw new Error("vice_png_open failed (bad dims)");
       return st;
     } finally {
-      if (iccPtr) this.core._free(iccPtr);
+      if (iccPtr) this.mem.free(iccPtr);
     }
   }
 
   pngWriteRows(st: number, rowsPtr: number, rowCount: number): void {
-    if (this.core._vice_png_write_rows!(st, rowsPtr, rowCount) !== 0)
+    if (this.core._vice_png_write_rows!(st, rowsPtr, rowCount) !== 0) {
       throw new Error("vice_png_write_rows failed");
+    }
   }
 
   pngDrain(st: number, cap = 1 << 20): Uint8Array {
-    const outPtr = this.core._malloc(cap);
-    const writtenPtr = this.core._malloc(8);
-    if (!outPtr || !writtenPtr) throw new Error("wasm malloc failed");
+    const outPtr = this.mem.malloc(cap);
+    const writtenPtr = this.mem.malloc(8);
     try {
-      if (this.core._vice_png_drain!(st, outPtr, cap, writtenPtr) !== 0)
+      if (this.core._vice_png_drain!(st, outPtr, cap, writtenPtr) !== 0) {
         throw new Error("vice_png_drain failed");
-      const heap = this.core.HEAPU8;
-      const written = new DataView(heap.buffer, writtenPtr, 4).getUint32(0, true);
-      const out = new Uint8Array(written);
-      out.set(heap.subarray(outPtr, outPtr + written));
-      return out;
+      }
+      const written = this.mem.readUint32(writtenPtr);
+      return this.mem.readBytes(outPtr, written);
     } finally {
-      this.core._free(outPtr);
-      this.core._free(writtenPtr);
+      this.mem.free(outPtr);
+      this.mem.free(writtenPtr);
     }
   }
 
@@ -460,27 +283,22 @@ export class ViceCore {
   }
 
   mallocBytes(n: number): number {
-    const ptr = this.core._malloc(n);
-    if (!ptr) throw new Error("wasm malloc failed");
-    return ptr;
+    return this.mem.malloc(n);
   }
 
   freeBytes(ptr: number): void {
-    this.core._free(ptr);
+    this.mem.free(ptr);
   }
 
   copyBytes(srcPtr: number, dstPtr: number, n: number): void {
-    this.core.HEAPU8.copyWithin(dstPtr, srcPtr, srcPtr + n);
+    this.mem.copyBytes(srcPtr, dstPtr, n);
   }
 
   readBytes(ptr: number, n: number): Uint8Array {
-    return this.core.HEAPU8.slice(ptr, ptr + n);
+    return this.mem.readBytes(ptr, n);
   }
 
   writeBytes(data: Uint8Array): number {
-    const ptr = this.core._malloc(data.length);
-    if (!ptr) throw new Error("wasm malloc failed");
-    this.core.HEAPU8.set(data, ptr);
-    return ptr;
+    return this.mem.writeBytes(data);
   }
 }

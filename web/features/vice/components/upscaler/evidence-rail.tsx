@@ -2,12 +2,12 @@
 
 import { memo } from "react";
 import { MAX_STREAM_MP } from "../../../../lib/limits";
-import { useDeviceCapMp } from "../../hooks/use-device-cap";
+import { useDeviceStreamCapMp } from "../../hooks/use-device-cap";
 import { useUpscaler } from "./upscaler-context";
 
 export const EvidenceRail = memo(function EvidenceRail() {
   const { job, hasResults, selectedResult, hasFiles, stagedDims } = useUpscaler();
-  const capMp = useDeviceCapMp();
+  const streamCapMp = useDeviceStreamCapMp();
 
   let body: React.ReactNode;
   if (job.error !== "") {
@@ -44,7 +44,7 @@ export const EvidenceRail = memo(function EvidenceRail() {
     body = (
       <span className="truncate">
         Original {stagedDims.w}×{stagedDims.h} → {job.scale}× → {ow}×{oh} ·{" "}
-        {mp.toFixed(1)} MP of {capMp.toFixed(0)} MP
+        {mp.toFixed(1)} MP (max {streamCapMp.toFixed(0)} MP in-browser)
       </span>
     );
   } else {

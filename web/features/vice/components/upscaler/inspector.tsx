@@ -1,10 +1,70 @@
 "use client";
 
 import { memo } from "react";
-import { useDeviceCapMp, useDeviceStreamCapMp } from "../../hooks/use-device-cap";
-import type { VicePreset, ViceScale } from "../../types/vice";
+import { useDeviceStreamCapMp } from "../../hooks/use-device-cap";
+import type { ViceScale } from "../../types/vice";
 import { useUpscaler } from "./upscaler-context";
 import { SpinnerIcon } from "../studio-icons";
+
+function StreamExportAction({
+  running,
+  disabled,
+  onClick,
+  scale,
+  outMp,
+}: {
+  running: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+  scale: number;
+  outMp?: number;
+}) {
+  return (
+    <div className="flex flex-col gap-2">
+      <button
+        type="button"
+        onClick={onClick}
+        disabled={running || disabled}
+        className="inline-flex h-8 w-full items-center justify-center gap-2 rounded-md bg-foreground px-4 text-xs font-semibold text-background transition-opacity hover:opacity-90 active:scale-[0.98] disabled:opacity-40"
+      >
+        {running && <SpinnerIcon className="h-3 w-3 animate-spin" />}
+        <span>Choose destination &amp; upscale</span>
+      </button>
+      <div className="text-[11px] text-muted">
+        {scale}× output {outMp?.toFixed(1)} MP streams straight to disk — no memory cap, preview only in-app.
+      </div>
+    </div>
+  );
+}
+
+function BatchExportAction({
+  running,
+  disabled,
+  onClick,
+  fileCount,
+}: {
+  running: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+  fileCount: number;
+}) {
+  return (
+    <div className="flex flex-col gap-2">
+      <button
+        type="button"
+        onClick={onClick}
+        disabled={running || disabled}
+        className="inline-flex h-8 w-full items-center justify-center gap-2 rounded-md bg-foreground px-4 text-xs font-semibold text-background transition-opacity hover:opacity-90 active:scale-[0.98] disabled:opacity-40"
+      >
+        {running && <SpinnerIcon className="h-3 w-3 animate-spin" />}
+        <span>Choose folder &amp; upscale {fileCount}</span>
+      </button>
+      <div className="text-[11px] text-muted">
+        Each file streams to its own PNG — no memory cap, previews only in-app.
+      </div>
+    </div>
+  );
+}
 
 const SCALES: readonly ViceScale[] = [2, 3, 4];
 
@@ -95,11 +155,9 @@ function Segmented<T extends string | number>({
 
 function InspectorStaged() {
   const { job, stagedDims } = useUpscaler();
-  const capMp = useDeviceCapMp();
   const streamCapMp = useDeviceStreamCapMp();
   const outMp =
     stagedDims != null ? (stagedDims.w * job.scale * (stagedDims.h * job.scale)) / 1_000_000 : null;
-  const overCap = outMp != null && outMp > capMp;
   const overStreamCap = outMp != null && outMp > streamCapMp;
   const singleFile = job.files.length === 1;
   const canSave = overStreamCap && singleFile && job.canSaveToDisk;
@@ -114,15 +172,6 @@ function InspectorStaged() {
         onPick={job.setScale}
         disabled={job.running}
         format={(s) => `${s}×`}
-      />
-
-      <Segmented
-        label="Engine preset"
-        options={["photo", "smooth", "pixel-art"] as const}
-        value={job.preset}
-        onPick={(p: VicePreset) => job.setPreset(p)}
-        disabled={job.running}
-        format={(p) => (p === "pixel-art" ? "Pixel" : p === "smooth" ? "CGI" : "Photo")}
       />
 
       {job.scale === 4 && (
@@ -143,92 +192,24 @@ function InspectorStaged() {
         {outMp != null
           ? overStreamCap
             ? `${job.scale}× output: ${outMp.toFixed(1)} MP exceeds this device's ${streamCapMp.toFixed(0)} MP in-browser limit.`
-            : overCap
-              ? `${job.scale}× output: ${outMp.toFixed(1)} MP streams in tiles (above the ${capMp.toFixed(0)} MP full-fidelity tier).`
-              : `${job.scale}× output: ${outMp.toFixed(1)} MP of ${capMp.toFixed(0)} MP available.`
+            : `${job.scale}× output: ${outMp.toFixed(1)} MP · memory-bounded streaming.`
           : "Staging preview…"}
       </div>
 
-      <details className="group rounded-md border border-hairline">
-        <summary className="cursor-pointer list-none px-3 py-2 text-xs font-medium text-muted transition-colors hover:text-foreground">
-          Fine tune
-        </summary>
-        <div className="flex flex-col gap-3 border-t border-hairline px-3 py-3">
-          {(
-            [
-              { label: "Null-space sharpness", value: job.sharpness, set: job.setSharpness },
-              { label: "Shock edge steepness", value: job.shock, set: job.setShock },
-            ] as const
-          ).map(({ label, value, set }) => (
-            <div key={label}>
-              <div className="mb-1 flex items-center justify-between text-[11px] font-medium text-muted">
-                <label htmlFor={`tune-${label}`}>{label}</label>
-                <span className="font-mono text-foreground">{Math.round(value * 100)}%</span>
-              </div>
-              <input
-                id={`tune-${label}`}
-                type="range"
-                min="0"
-                max="1"
-                step="0.05"
-                value={value}
-                disabled={job.running}
-                onChange={(e) => set(parseFloat(e.target.value))}
-                className="h-1.5 w-full cursor-pointer appearance-none rounded bg-foreground/15 accent-foreground"
-              />
-            </div>
-          ))}
-          <div className="flex items-center justify-between text-[11px]">
-            <span className="font-medium text-muted">Anti-ringing clamping</span>
-            <button
-              type="button"
-              disabled={job.running}
-              onClick={() => job.setDering(job.dering > 0 ? 0 : 1)}
-              aria-pressed={job.dering > 0}
-              className={`rounded px-2.5 py-0.5 text-[10px] font-semibold transition-colors disabled:opacity-40 ${
-                job.dering > 0
-                  ? "bg-foreground text-background"
-                  : "border border-hairline text-muted"
-              }`}
-            >
-              {job.dering > 0 ? "Enabled" : "Off"}
-            </button>
-          </div>
-        </div>
-      </details>
-
       {overStreamCap ? (
         canSave ? (
-          <div className="flex flex-col gap-2">
-            <button
-              type="button"
-              onClick={() => void job.runToFile()}
-              disabled={job.running}
-              className="inline-flex h-8 w-full items-center justify-center gap-2 rounded-md bg-foreground px-4 text-xs font-semibold text-background transition-opacity hover:opacity-90 active:scale-[0.98] disabled:opacity-40"
-            >
-              {job.running && <SpinnerIcon className="h-3 w-3 animate-spin" />}
-              <span>Choose destination &amp; upscale</span>
-            </button>
-            <div className="text-[11px] text-muted">
-              {job.scale}× output {outMp?.toFixed(1)} MP streams straight to disk — no
-              memory cap, preview only in-app.
-            </div>
-          </div>
+          <StreamExportAction
+            running={job.running}
+            onClick={() => void job.runToFile()}
+            scale={job.scale}
+            outMp={outMp}
+          />
         ) : canSaveBatch ? (
-          <div className="flex flex-col gap-2">
-            <button
-              type="button"
-              onClick={() => void job.runBatchToFolder()}
-              disabled={job.running}
-              className="inline-flex h-8 w-full items-center justify-center gap-2 rounded-md bg-foreground px-4 text-xs font-semibold text-background transition-opacity hover:opacity-90 active:scale-[0.98] disabled:opacity-40"
-            >
-              {job.running && <SpinnerIcon className="h-3 w-3 animate-spin" />}
-              <span>Choose folder &amp; upscale {job.files.length}</span>
-            </button>
-            <div className="text-[11px] text-muted">
-              Each file streams to its own PNG — no memory cap, previews only in-app.
-            </div>
-          </div>
+          <BatchExportAction
+            running={job.running}
+            onClick={() => void job.runBatchToFolder()}
+            fileCount={job.files.length}
+          />
         ) : (
           <div className="text-xs text-error">
             {singleFile

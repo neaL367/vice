@@ -13,7 +13,6 @@ import { runWebGPUUpscale, warmupWebGPUPipelines } from "../../lib/webgpu/webgpu
 import type {
   ViceIncoming,
   ViceOutgoing,
-  VicePreset,
   ViceProgress,
   ViceResultMeta,
   ViceScale,
@@ -21,10 +20,6 @@ import type {
 
 export interface ViceJobOptions {
   chained4x?: boolean;
-  preset?: VicePreset;
-  dering?: number;
-  sharpness?: number;
-  shock?: number;
   streamThresholdPx?: number;
   fourXDetail?: boolean;
   // Infinite path: chunks from the worker are written here (FileSystem
@@ -176,10 +171,6 @@ function toRunRequest(
     scale,
     base,
     chained4x: options?.chained4x,
-    preset: options?.preset,
-    dering: options?.dering,
-    sharpness: options?.sharpness,
-    shock: options?.shock,
     streamThresholdPx: options?.streamThresholdPx,
     saveToDisk: options?.sinkWrite ? true : undefined,
     fourXDetail: options?.fourXDetail,
@@ -229,10 +220,6 @@ export async function runViceJob(
               backend: `WebGPU (${Math.round(gpuRes.durationMs)}ms)`,
               outW: gpuRes.outW,
               outH: gpuRes.outH,
-              preset: options?.preset,
-              dering: options?.dering,
-              sharpness: options?.sharpness,
-              shock: options?.shock,
               durationMs: Math.round(gpuRes.durationMs),
             },
           };
