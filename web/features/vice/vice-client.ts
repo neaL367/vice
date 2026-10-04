@@ -171,12 +171,18 @@ export async function runViceJob(
     return runOnWorkerThread(worker, jobId, file, scale, base, onProgress, options);
   }
 
-  // 2. Fallback: WebGPU compute shader when Worker cannot be spawned
+  // 2. Fallback: WebGPU compute shader when Worker cannot be spawned.
+  // Degraded by design: EXIF orientation is honored, alpha passes through
+  // the shaders untouched, but ICC profiles are dropped (canvas PNG encode
+  // has no iCCP API). The worker/WASM path remains the only ICC-safe engine.
   try {
     const gpuOk = await isWebGPUSupported();
     if (gpuOk && !options?.chained4x && typeof createImageBitmap !== "undefined") {
       onProgress({ band: 1, totalBands: 3, stage: "WebGPU Compute…", backend: "WebGPU" });
-      const bmp = await createImageBitmap(file);
+      const bmp = await createImageBitmap(file, {
+        colorSpaceConversion: "none",
+        imageOrientation: "from-image",
+      });
       try {
         const gpuRes = await runWebGPUUpscale(bmp, scale, options);
         if (gpuRes) {

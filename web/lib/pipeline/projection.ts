@@ -300,7 +300,9 @@ export function projectClamp(
   useMultiGrid = true,
 ): number {
   if (useMultiGrid) {
-    projectMultiGrid(y, raw, w, h, s, c, 1);
+    // 2 cycles to match C++ vice_project (api.cpp). 1 cycle leaves
+    // low-frequency halo unconverged: same residual, different pixels.
+    projectMultiGrid(y, raw, w, h, s, c, 2);
   } else if (smoothIterations > 0) {
     projectSmooth(y, raw, w, h, s, c, smoothIterations);
   }

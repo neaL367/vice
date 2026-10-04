@@ -259,6 +259,41 @@ describe("wasm parity", () => {
     core.destroy(ctx);
   });
 
+  test("TS upscale+projectClamp matches WASM upscale+project pixels", async () => {
+    // Full-pipeline parity: same residual is not enough (both converge),
+    // pixels must match. Guards multigrid cycle count, shock, and alpha
+    // handling drift between the TS mirror and the C++ core.
+    const { ViceCore } = await import("./vice-wasm");
+    const { lanczosAdaptiveScale } = await import("./pipeline/kernels");
+    const { projectClamp } = await import("./pipeline/projection");
+    const core = await ViceCore.load("../public/");
+    if (!core) return;
+
+    const cases = [
+      { w: 8, h: 6, scale: 2, c: 4, opts: { preset: "photo" as const, dering: 1.0, sharpness: 0.35, shock: 0.35 } },
+      { w: 7, h: 5, scale: 3, c: 3, opts: { preset: "smooth" as const, dering: 1.0, sharpness: 0.35, shock: 0 } },
+    ];
+    for (const { w, h, scale, c, opts } of cases) {
+      const y = new Float32Array(w * h * c);
+      for (let i = 0; i < y.length; i++) y[i] = ((i * 7 + 3) % 19) / 19;
+
+      const tsRaw = lanczosAdaptiveScale(y, w, h, c, scale, opts);
+      projectClamp(y, tsRaw, w, h, scale, c);
+
+      const ctx = core.create(w, h, scale, c);
+      core.setInput(ctx, y);
+      core.upscale(ctx, opts);
+      core.project(ctx);
+      const wasmRaw = core.downloadRaw(ctx, w * scale * h * scale * c);
+      core.destroy(ctx);
+
+      let worst = 0;
+      for (let i = 0; i < tsRaw.length; i++)
+        worst = Math.max(worst, Math.abs(tsRaw[i] - wasmRaw[i]));
+      expect(worst).toBeLessThan(1e-5);
+    }
+  });
+
   test("TS lanczosAdaptiveScale matches WASM upscale with identical tuning", async () => {
     const { ViceCore } = await import("./vice-wasm");
     const { lanczosAdaptiveScale } = await import("./pipeline/kernels");
