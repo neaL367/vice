@@ -184,7 +184,7 @@ export async function runWebGPUUpscale(
         ? 2
         : 0;
     f32View[6] = Math.max(0, Math.min(1, options?.dering ?? 1.0));
-    f32View[7] = Math.max(0, Math.min(1, options?.sharpness ?? 0.2));
+    f32View[7] = Math.max(0, Math.min(1, options?.sharpness ?? 0.35));
 
     uniformBuf = device.createBuffer({
       size: 32,

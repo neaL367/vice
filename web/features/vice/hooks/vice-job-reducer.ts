@@ -29,7 +29,7 @@ export const initialState: ViceJobState = {
   chained4x: false,
   preset: "photo",
   dering: 1.0,
-  sharpness: 0.2,
+  sharpness: 0.35,
   progress: "",
   running: false,
   error: "",

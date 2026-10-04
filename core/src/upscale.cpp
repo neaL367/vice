@@ -292,5 +292,54 @@ int vice_upscale_lanczos_adaptive_ex(const float* src, int w, int h, int c, int 
     std::memcpy(dst, sharp_tmp.data(), sharp_tmp.size() * sizeof(float));
   }
 
+  // Pass 4: Vice 2.0 Coherence-Enhancing Shock PDE
+  if (tuning->preset == 0 && (tuning->sharpness > 0.0f || tuning->boost > 0.0f)) {
+    float shock_strength = 0.35f + 0.35f * tuning->sharpness;
+    float dt = 0.12f * std::min(1.0f, shock_strength);
+    std::vector<float> shock_tmp((size_t)W * H * c);
+
+    for (int iter = 0; iter < 2; ++iter) {
+      for (int y = 0; y < H; ++y) {
+        int ym1 = clamp_idx(y - 1, H - 1);
+        int yp1 = clamp_idx(y + 1, H - 1);
+        size_t row_y = (size_t)y * W;
+        size_t row_ym1 = (size_t)ym1 * W;
+        size_t row_yp1 = (size_t)yp1 * W;
+
+        for (int x = 0; x < W; ++x) {
+          int xm1 = clamp_idx(x - 1, W - 1);
+          int xp1 = clamp_idx(x + 1, W - 1);
+
+          for (int ch = 0; ch < c; ++ch) {
+            float center = dst[(row_y + x) * c + ch];
+            float l = dst[(row_y + xm1) * c + ch];
+            float r = dst[(row_y + xp1) * c + ch];
+            float t = dst[(row_ym1 + x) * c + ch];
+            float b = dst[(row_yp1 + x) * c + ch];
+            float tl = dst[(row_ym1 + xm1) * c + ch];
+            float tr = dst[(row_ym1 + xp1) * c + ch];
+            float bl = dst[(row_yp1 + xm1) * c + ch];
+            float br = dst[(row_yp1 + xp1) * c + ch];
+
+            float ix = 0.5f * (r - l);
+            float iy = 0.5f * (b - t);
+            float grad_sq = ix * ix + iy * iy;
+            float grad_norm = std::sqrt(grad_sq + 1e-5f);
+
+            float ixx = r - 2.0f * center + l;
+            float iyy = b - 2.0f * center + t;
+            float ixy = 0.25f * (br - bl - tr + tl);
+
+            float i_eta_eta = (ix * ix * ixx + 2.0f * ix * iy * ixy + iy * iy * iyy) / (grad_sq + 1e-5f);
+            float shock = -std::tanh(5.0f * i_eta_eta) * grad_norm;
+            float updated = center + dt * shock;
+            shock_tmp[(row_y + x) * c + ch] = std::max(0.0f, std::min(1.0f, updated));
+          }
+        }
+      }
+      std::memcpy(dst, shock_tmp.data(), shock_tmp.size() * sizeof(float));
+    }
+  }
+
   return 0;
 }

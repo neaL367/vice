@@ -119,7 +119,7 @@ export function lanczosAdaptiveScale(
   }
 
   const dering = Math.max(0, Math.min(1, options?.dering ?? 1.0));
-  const sharpness = Math.max(0, Math.min(1, options?.sharpness ?? 0.2));
+  const sharpness = Math.max(0, Math.min(1, options?.sharpness ?? 0.35));
   // Preset 1 (Smooth / CGI): suppress acutance boosting to avoid ringing on rendered surfaces
   const boostMult = preset === "smooth" ? 0 : 0.45;
 
