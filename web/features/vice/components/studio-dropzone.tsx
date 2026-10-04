@@ -1,5 +1,5 @@
 import { memo } from "react";
-import { MAX_OUTPUT_MP } from "../../../lib/limits";
+import { MAX_STREAM_MP } from "../../../lib/limits";
 import { FocusSquareIcon } from "./studio-icons";
 
 interface StudioDropzoneProps {
@@ -23,7 +23,7 @@ export const StudioDropzone = memo(function StudioDropzone({
           Drop images here
         </h2>
         <p className="mt-1.5 text-xs text-muted">
-          or click anywhere to browse from device · PNG, JPEG, WebP · up to {MAX_OUTPUT_MP} MP output
+          or click anywhere to browse from device · PNG, JPEG, WebP · up to {MAX_STREAM_MP} MP output
         </p>
       </div>
     </label>

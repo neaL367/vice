@@ -59,8 +59,8 @@ export function reflectIndex(x: number, n: number): number {
 }
 
 // Prototype overlap-add tiling, wired into the worker TS fallback for large
-// outputs (>4 MP). WASM path stays full-image up to the device cap
-// (24 MP ceiling, see lib/limits.ts).
+// outputs (>4 MP). The WASM streaming strip path covers large outputs
+// natively; see lib/limits.ts for caps.
 export function planOverlap(inW: number, inH: number, t: number, o: number): OverlapTile[] {
   const step = Math.max(1, t - o);
   const xs: number[] = [];

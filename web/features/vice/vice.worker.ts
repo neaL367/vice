@@ -10,7 +10,7 @@ import {
 import { lanczosAdaptiveScale, type LanczosAdaptiveOptions } from "../../lib/pipeline/kernels";
 import { tiledUpscaleLanczos } from "../../lib/pipeline/tiler";
 import { projectClamp } from "../../lib/pipeline/projection";
-import { maxOutputPixels } from "../../lib/limits";
+import { maxOutputPixels, maxStreamPixels } from "../../lib/limits";
 import { ViceCore } from "../../lib/vice-wasm";
 import { extractIccProfile } from "../../lib/icc";
 import type {
@@ -72,13 +72,19 @@ export async function runViceUpscale(
   const icc = fileBuf ? await extractIccProfile(fileBuf).catch(() => null) : null;
 
   const outPx = bmp.width * bmp.height * scale * scale;
-  const capPx = maxOutputPixels();
-  if (outPx > capPx) {
+  const fullCapPx = opts.streamThresholdPx ?? maxOutputPixels();
+  const streamCapPx = maxStreamPixels();
+  if (outPx > streamCapPx) {
     const mp = (outPx / 1_000_000).toFixed(1);
-    const capMp = (capPx / 1_000_000).toFixed(0);
     bmp.close();
     throw new Error(
-      `Output ${mp} MP exceeds this device's ${capMp} MP limit. Use a smaller image or scale.`,
+      `Output ${mp} MP exceeds this device's ${(streamCapPx / 1_000_000).toFixed(0)} MP streaming limit. Use a smaller image or scale.`,
+    );
+  }
+  if (scale === 4 && opts.chained4x && outPx > fullCapPx) {
+    bmp.close();
+    throw new Error(
+      `Chained 2×2× above ${(fullCapPx / 1_000_000).toFixed(0)} MP is not supported. Disable it for a direct 4× upscale.`,
     );
   }
 
@@ -94,7 +100,6 @@ export async function runViceUpscale(
   ctx.drawImage(bmp, 0, 0);
   bmp.close();
   const img = ctx.getImageData(0, 0, cv.width, cv.height);
-  const lin = straightSrgbToPremultLinear(img.data, cv.width, cv.height);
   const w = cv.width;
   const h = cv.height;
   throwIfAborted(opts.signal);
@@ -105,6 +110,94 @@ export async function runViceUpscale(
   // 1. Native C++ WebAssembly engine: ultra-fast in-memory Lanczos-3 with diagonal steering
   const core = opts.base ? await ensureCore(opts.base) : null;
   if (core && core.hasNativeUpscale()) {
+    // 1a. Streaming strip path: band-sized floats, 8-bit accumulation, one
+    // PNG encode. Bounded memory above the full-image cap; box-only band
+    // projection (same guarantee, no multigrid). Direct scales only.
+    const useStream =
+      core.hasStream() && !(scale === 4 && opts.chained4x) && outPx > fullCapPx;
+    if (useStream) {
+      const streamBackend = "Lanczos-3 stream";
+      const BAND = 64;
+      const CHUNK = 256;
+      onProgress({ band: 0, totalBands: H, stage: "Streaming…", backend: streamBackend });
+      throwIfAborted(opts.signal);
+      const sctx = core.createStream(w, h, scale, 4, BAND);
+      const bandPtr = core.mallocBytes(BAND * W * 4);
+      const rgbaPtr = core.mallocBytes(W * H * 4);
+      let emitted = 0;
+      try {
+        core.streamSetTuning(sctx, {
+          preset: opts.preset,
+          dering: opts.dering,
+          sharpness: opts.sharpness,
+          shock: opts.shock,
+        });
+        if (icc) core.streamSetIcc(sctx, icc);
+        const pump = () => {
+          while (core.streamHasNext(sctx)) {
+            const { rc, rows } = core.streamPullBand(sctx, bandPtr, BAND);
+            core.copyBytes(bandPtr, rgbaPtr + emitted * W * 4, rows * W * 4);
+            emitted += rows;
+            if (emitted % 512 === 0 || rc === 1) {
+              onProgress({
+                band: Math.min(emitted, H),
+                totalBands: H,
+                stage: "Streaming…",
+                backend: streamBackend,
+              });
+            }
+            throwIfAborted(opts.signal);
+            if (rc === 1) break;
+          }
+        };
+        let pushed = 0;
+        while (pushed < h) {
+          const rows = Math.min(CHUNK, h - pushed);
+          const strip = ctx.getImageData(0, pushed, w, rows);
+          core.streamPushRows(
+            sctx,
+            straightSrgbToPremultLinear(strip.data, w, rows),
+            rows,
+          );
+          pushed += rows;
+          throwIfAborted(opts.signal);
+          pump();
+        }
+        while (emitted < H) {
+          if (!core.streamHasNext(sctx)) {
+            throw new Error("stream stalled: input exhausted with rows unemitted");
+          }
+          pump();
+        }
+        const residual = core.lastStreamResidual(sctx);
+        onProgress({ band: H, totalBands: H, stage: "Encoding…", backend: streamBackend });
+        throwIfAborted(opts.signal);
+        const png = core.streamFinishPng(sctx, rgbaPtr, W * H * 4);
+        const blob = new Blob([png as unknown as BlobPart], { type: "image/png" });
+        onProgress({ band: H, totalBands: H, stage: "done", backend: streamBackend });
+        return {
+          blob,
+          meta: {
+            residual,
+            backend: streamBackend,
+            outW: W,
+            outH: H,
+            hasIcc: !!icc,
+            chained4x: false,
+            preset: opts.preset,
+            dering: opts.dering,
+            sharpness: opts.sharpness,
+            shock: opts.shock,
+          },
+        };
+      } finally {
+        core.freeBytes(bandPtr);
+        core.freeBytes(rgbaPtr);
+        core.streamDestroy(sctx);
+      }
+    }
+
+    const linWasm = straightSrgbToPremultLinear(img.data, cv.width, cv.height);
     if (scale === 4 && opts.chained4x) {
       // Chained 2x twice per spec section 3: box4 = box2 o box2
       onProgress({ band: 1, totalBands: 4, stage: "Pass 1 (2×)…", backend });
@@ -112,7 +205,7 @@ export async function runViceUpscale(
       const cctx1 = core.create(w, h, 2, 4);
       let mid: Float32Array;
       try {
-        core.setInput(cctx1, lin);
+        core.setInput(cctx1, linWasm);
         core.upscale(cctx1, {
           preset: opts.preset,
           dering: opts.dering,
@@ -179,7 +272,7 @@ export async function runViceUpscale(
     throwIfAborted(opts.signal);
     const cctx = core.create(w, h, scale, 4);
     try {
-      core.setInput(cctx, lin);
+      core.setInput(cctx, linWasm);
       core.upscale(cctx, {
         preset: opts.preset,
         dering: opts.dering,
@@ -226,6 +319,8 @@ export async function runViceUpscale(
   // 2. Pure Mathematical Super-Resolution TypeScript fallback:
   // Separable Edge-Adaptive Lanczos-3 with Diagonal Steering and Noise-Gated Acutance.
   // Large outputs go through the tiled overlap-add path to bound peak memory.
+  // Linearized lazily: the streaming branch above never builds this buffer.
+  const lin = straightSrgbToPremultLinear(img.data, cv.width, cv.height);
   const upscaleTS = (
     src: Float32Array,
     w: number,
@@ -358,6 +453,7 @@ if (isWorkerScope()) {
         dering: msg.dering,
         sharpness: msg.sharpness,
         shock: msg.shock,
+        streamThresholdPx: msg.streamThresholdPx,
       },
     ).then(
       ({ blob, meta }) => {

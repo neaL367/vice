@@ -251,12 +251,20 @@ struct vice_stream_ctx {
   int in_buf_start_y;
   int in_buf_row_count;
   ViceTuning tuning;
+  std::vector<unsigned char> icc;
+  double worst = 0.0;
 };
 
 vice_stream_ctx* vice_stream_create(int in_w, int in_h, int scale, int channels, int band_h) {
   if (in_w <= 0 || in_h <= 0 || (scale != 2 && scale != 3 && scale != 4) ||
       (channels != 3 && channels != 4) || band_h <= 0)
     return nullptr;
+  if (band_h > 4096) band_h = 4096;
+  uint64_t outw = (uint64_t)in_w * (uint64_t)scale;
+  uint64_t outh = (uint64_t)in_h * (uint64_t)scale;
+  if (outw > 100000 || outh > 100000) return nullptr;
+  uint64_t outcells = outw * outh * (uint64_t)channels;
+  if (outcells > (uint64_t)SIZE_MAX) return nullptr;
   auto* sctx = new (std::nothrow) vice_stream_ctx();
   if (!sctx) return nullptr;
   sctx->in_w = in_w;
@@ -272,6 +280,23 @@ vice_stream_ctx* vice_stream_create(int in_w, int in_h, int scale, int channels,
   sctx->in_buf_row_count = 0;
   vice_tuning_defaults(&sctx->tuning);
   return sctx;
+}
+
+int vice_stream_set_tuning(vice_stream_ctx* sctx, const ViceTuning* tuning) {
+  if (!sctx || !tuning) return -1;
+  sctx->tuning = *tuning;
+  return 0;
+}
+
+int vice_stream_set_icc_profile(vice_stream_ctx* sctx, const unsigned char* data, size_t size) {
+  if (!sctx) return -1;
+  if (!data || size == 0) {
+    sctx->icc.clear();
+    return 0;
+  }
+  if (size > 16 * 1024 * 1024) return -1;
+  sctx->icc.assign(data, data + size);
+  return 0;
 }
 
 int vice_stream_push_input_rows(vice_stream_ctx* sctx, const float* in_rows, int row_count) {
@@ -423,6 +448,27 @@ int vice_stream_pull_band(vice_stream_ctx* sctx, unsigned char* out_bytes, int* 
     }
   }
 
+  // Track worst block error for vice_stream_last_residual (band rows are
+  // whole blocks: band_h and out_h are multiples of scale).
+  for (int by = 0; by < cur_band_h / s; ++by) {
+    int global_in_y = (out_y0 / s) + by;
+    int local_in_y = global_in_y - req_in_y0;
+    if (local_in_y < 0 || local_in_y >= req_in_rows) continue;
+    for (int bx = 0; bx < sctx->in_w; ++bx) {
+      for (int c = 0; c < sctx->channels; ++c) {
+        double sum = 0.0;
+        for (int dy = 0; dy < s; ++dy)
+          for (int dx = 0; dx < s; ++dx)
+            sum += band_raw[(((size_t)by * s + dy) * sctx->out_w + bx * s + dx) *
+                             sctx->channels +
+                         c];
+        double want = in_strip[((size_t)local_in_y * sctx->in_w + bx) * sctx->channels + c];
+        double e = std::abs(sum * inv_s2 - want);
+        if (e > sctx->worst) sctx->worst = e;
+      }
+    }
+  }
+
   // Convert to 8-bit output directly into caller output buffer
   for (int y = 0; y < cur_band_h; ++y) {
     int global_y = out_y0 + y;
@@ -450,4 +496,24 @@ int vice_stream_pull_band(vice_stream_ctx* sctx, unsigned char* out_bytes, int* 
 
 void vice_stream_destroy(vice_stream_ctx* sctx) {
   delete sctx;
+}
+
+double vice_stream_last_residual(const vice_stream_ctx* sctx) {
+  return sctx ? sctx->worst : -1.0;
+}
+
+int vice_stream_finish_png(vice_stream_ctx* sctx, const unsigned char* rgba_rows, int n,
+                           unsigned char* out, size_t cap, size_t* written) {
+  if (!sctx || !rgba_rows || !out || !written) return -1;
+  size_t want = (size_t)sctx->out_w * sctx->out_h * sctx->channels;
+  if (n != (int)want && (size_t)n != want) return -1;
+  std::vector<unsigned char> png;
+  const unsigned char* icc_ptr = sctx->icc.empty() ? nullptr : sctx->icc.data();
+  if (vice_encode_png_ex(rgba_rows, sctx->out_w, sctx->out_h, sctx->channels,
+                         icc_ptr, sctx->icc.size(), png) != 0)
+    return -1;
+  if (png.size() > cap) return -2;
+  std::memcpy(out, png.data(), png.size());
+  *written = png.size();
+  return 0;
 }

@@ -93,12 +93,20 @@ void vice_project_smooth(const float* y, float* raw, int w, int h, int s, int c,
 void vice_project_multigrid(const float* y, float* raw, int w, int h, int s, int c, int cycles);
 
 /* Streaming strip / band context for memory-bounded processing of gigapixel images.
-   Requires only a rolling ring buffer in memory at any time (~16MB to 32MB). */
+   Float buffers stay band-sized; the caller accumulates 8-bit rows (1 B/px/ch)
+   and finishes with vice_stream_finish_png. Band projection is box-only
+   (no multigrid): same residual guarantee, slightly different low frequencies
+   than the full-image path. */
 typedef struct vice_stream_ctx vice_stream_ctx;
 vice_stream_ctx* vice_stream_create(int in_w, int in_h, int scale, int channels, int band_h);
+int vice_stream_set_tuning(vice_stream_ctx* sctx, const struct ViceTuning* tuning);
+int vice_stream_set_icc_profile(vice_stream_ctx* sctx, const unsigned char* data, size_t size);
 int vice_stream_push_input_rows(vice_stream_ctx* sctx, const float* in_rows, int row_count);
 int vice_stream_has_next_band(const vice_stream_ctx* sctx);
 int vice_stream_pull_band(vice_stream_ctx* sctx, unsigned char* out_bytes, int* written_rows);
+int vice_stream_finish_png(vice_stream_ctx* sctx, const unsigned char* rgba_rows, int n,
+                           unsigned char* out, size_t cap, size_t* written);
+double vice_stream_last_residual(const vice_stream_ctx* sctx);
 void vice_stream_destroy(vice_stream_ctx* sctx);
 
 float vice_srgb_to_linear(float v);

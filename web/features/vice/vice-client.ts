@@ -25,6 +25,7 @@ export interface ViceJobOptions {
   dering?: number;
   sharpness?: number;
   shock?: number;
+  streamThresholdPx?: number;
 }
 
 const workerReadyMap = new WeakMap<Worker, Promise<void>>();
@@ -146,6 +147,7 @@ export function runOnWorkerThread(
       dering: options?.dering,
       sharpness: options?.sharpness,
       shock: options?.shock,
+      streamThresholdPx: options?.streamThresholdPx,
     };
     worker.postMessage(req);
   });

@@ -2,7 +2,7 @@
 
 import { memo, type ReactNode } from "react";
 import { ViewTransition } from "react";
-import { MAX_OUTPUT_MP } from "../../../../lib/limits";
+import { MAX_STREAM_MP } from "../../../../lib/limits";
 import type { VicePreset, ViceScale } from "../../types/vice";
 import { DownloadIcon, SpinnerIcon, UploadIcon } from "../studio-icons";
 import { StudioDropzone } from "../studio-dropzone";
@@ -74,7 +74,7 @@ function RootImpl({ children }: { children: ReactNode }) {
               Drop images to upscale
             </p>
             <p className="text-xs text-muted">
-              PNG, JPEG, WebP · Up to {MAX_OUTPUT_MP} MP output
+              PNG, JPEG, WebP · Up to {MAX_STREAM_MP} MP output
             </p>
           </div>
         </div>

@@ -17,8 +17,10 @@
  * - <= 2: 6 MP (~0.6 GB)
  * - unknown (Safari/Firefox, incl. mobile): 12 MP conservative.
  *
- * The C++ streaming strip pipeline (vice_stream_*) is a prototype and is not
- * wired to the web app, which runs full-image projection through WASM.
+ * The C++ streaming strip pipeline (vice_stream_*) handles everything above
+ * the full-image tiers: band-sized floats, 8-bit accumulation, one PNG
+ * encode. Band projection is box-only (no multigrid) — same guarantee,
+ * slightly different low frequencies.
  */
 export const MAX_OUTPUT_PIXELS = 24_000_000;
 
@@ -38,3 +40,37 @@ export function maxOutputPixels(): number {
 
 /** Same ceiling in megapixels, for static display copy. */
 export const MAX_OUTPUT_MP = MAX_OUTPUT_PIXELS / 1_000_000;
+
+/**
+ * Streaming ceiling: band-sized float buffers keep the WASM math ~flat, but
+ * the 8-bit accumulation + PNG encode + output blob + result preview all
+ * scale with output size, so the cap is about total tab weight, not just
+ * OOM survival.
+ *
+ * Measured 2026-10-04, headless Chromium, 16 GB / 8-core desktop, noisy JPEG
+ * input, default routing (streaming above the 24 MP full-image tier),
+ * isolated browser-tree RSS:
+ * - 64 MP out: 66 s wall, peak 2.13 GB, settles 2.09 GB
+ * (vs 36 MP full-image: 43 s, 2.62 GB — streaming trades ~1.5x time for a
+ * lower, flatter peak; the WASM heap never shrinks either way).
+ * - >= 8 or SSR/unknown-runtime: 64 MP
+ * - 4: 32 MP | <= 2: 16 MP
+ * - unknown device class: 32 MP.
+ */
+export const MAX_STREAM_PIXELS = 64_000_000;
+
+export function maxStreamPixels(): number {
+  if (typeof navigator !== "undefined") {
+    const dm = (navigator as Navigator & { deviceMemory?: unknown }).deviceMemory;
+    if (typeof dm === "number" && dm > 0) {
+      if (dm <= 2) return 16_000_000;
+      if (dm < 8) return 32_000_000;
+      return MAX_STREAM_PIXELS;
+    }
+    return 32_000_000;
+  }
+  return MAX_STREAM_PIXELS;
+}
+
+/** Same streaming ceiling in megapixels, for static display copy. */
+export const MAX_STREAM_MP = MAX_STREAM_PIXELS / 1_000_000;

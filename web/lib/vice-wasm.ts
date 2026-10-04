@@ -22,6 +22,15 @@ interface ViceCoreInstance {
   _vice_process_band(ctx: number, band: number, outPtr: number, countPtr: number): number;
   _vice_finish_png(ctx: number, outPtr: number, cap: number, writtenPtr: number): number;
   _vice_set_icc_profile?(ctx: number, dataPtr: number, size: number): number;
+  _vice_stream_create?(inW: number, inH: number, scale: number, channels: number, bandH: number): number;
+  _vice_stream_set_tuning?(sctx: number, tuningPtr: number): number;
+  _vice_stream_set_icc_profile?(sctx: number, dataPtr: number, size: number): number;
+  _vice_stream_push_input_rows?(sctx: number, rowsPtr: number, rowCount: number): number;
+  _vice_stream_has_next_band?(sctx: number): number;
+  _vice_stream_pull_band?(sctx: number, outPtr: number, countPtr: number): number;
+  _vice_stream_finish_png?(sctx: number, rgbaPtr: number, n: number, outPtr: number, cap: number, writtenPtr: number): number;
+  _vice_stream_last_residual?(sctx: number): number;
+  _vice_stream_destroy?(sctx: number): void;
   _vice_last_residual(ctx: number): number;
   _vice_destroy(ctx: number): void;
   _malloc(size: number): number;
@@ -211,5 +220,164 @@ export class ViceCore {
 
   destroy(ctx: number): void {
     this.core._vice_destroy(ctx);
+  }
+
+  // --- Streaming strip pipeline ----------------------------------------
+  // Band-sized float buffers; caller accumulates 8-bit rows in WASM and
+  // finishes with streamFinishPng. Missing exports (stale cached core.js)
+  // -> false -> caller falls back to the full-image path.
+
+  hasStream(): boolean {
+    const c = this.core;
+    return (
+      typeof c._vice_stream_create === "function" &&
+      typeof c._vice_stream_set_tuning === "function" &&
+      typeof c._vice_stream_set_icc_profile === "function" &&
+      typeof c._vice_stream_push_input_rows === "function" &&
+      typeof c._vice_stream_has_next_band === "function" &&
+      typeof c._vice_stream_pull_band === "function" &&
+      typeof c._vice_stream_finish_png === "function" &&
+      typeof c._vice_stream_last_residual === "function" &&
+      typeof c._vice_stream_destroy === "function"
+    );
+  }
+
+  createStream(inW: number, inH: number, scale: number, channels: number, bandH: number): number {
+    const sctx = this.core._vice_stream_create!(inW, inH, scale, channels, bandH);
+    if (!sctx) throw new Error("vice_stream_create failed (bad dims)");
+    return sctx;
+  }
+
+  streamSetTuning(
+    sctx: number,
+    options?: {
+      preset?: "photo" | "smooth" | "pixel-art";
+      dering?: number;
+      sharpness?: number;
+      shock?: number;
+    },
+  ): void {
+    if (!this.core._vice_stream_set_tuning || !options) return;
+    const ptr = this.core._malloc(40);
+    if (!ptr) throw new Error("wasm malloc failed");
+    try {
+      if (this.core._vice_tuning_defaults) this.core._vice_tuning_defaults(ptr);
+      const view = new DataView(this.core.HEAPU8.buffer, ptr, 40);
+      if (options.dering !== undefined) {
+        view.setFloat32(24, Math.max(0, Math.min(1, options.dering)), true);
+      }
+      if (options.sharpness !== undefined) {
+        view.setFloat32(28, Math.max(0, Math.min(1, options.sharpness)), true);
+      }
+      if (options.preset !== undefined) {
+        view.setInt32(
+          32,
+          options.preset === "smooth" ? 1 : options.preset === "pixel-art" ? 2 : 0,
+          true,
+        );
+      }
+      if (options.shock !== undefined) {
+        view.setFloat32(36, Math.max(0, Math.min(1, options.shock)), true);
+      }
+      if (this.core._vice_stream_set_tuning(sctx, ptr) !== 0)
+        throw new Error("vice_stream_set_tuning failed");
+    } finally {
+      this.core._free(ptr);
+    }
+  }
+
+  streamSetIcc(sctx: number, data: Uint8Array): void {
+    if (!this.core._vice_stream_set_icc_profile || data.length === 0) return;
+    const ptr = this.core._malloc(data.length);
+    if (!ptr) throw new Error("wasm malloc failed");
+    try {
+      this.core.HEAPU8.set(data, ptr);
+      this.core._vice_stream_set_icc_profile(sctx, ptr, data.length);
+    } finally {
+      this.core._free(ptr);
+    }
+  }
+
+  streamPushRows(sctx: number, rows: Float32Array, rowCount: number): void {
+    if (rowCount <= 0 || !Number.isInteger(rowCount)) throw new Error("bad row count");
+    const ptr = this.writeFloats(rows);
+    try {
+      if (this.core._vice_stream_push_input_rows!(sctx, ptr, rowCount) !== 0)
+        throw new Error("vice_stream_push_input_rows failed");
+    } finally {
+      this.core._free(ptr);
+    }
+  }
+
+  streamHasNext(sctx: number): boolean {
+    return this.core._vice_stream_has_next_band!(sctx) === 1;
+  }
+
+  streamPullBand(sctx: number, outPtr: number, maxRows: number): { rc: number; rows: number } {
+    const countPtr = this.core._malloc(4);
+    if (!countPtr) throw new Error("wasm malloc failed");
+    try {
+      const rc = this.core._vice_stream_pull_band!(sctx, outPtr, countPtr);
+      const rows = new DataView(this.core.HEAPU8.buffer, countPtr, 4).getInt32(0, true);
+      if (rc < 0 || rows < 0 || rows > maxRows) {
+        throw new Error(`vice_stream_pull_band failed (rc=${rc})`);
+      }
+      return { rc, rows };
+    } finally {
+      this.core._free(countPtr);
+    }
+  }
+
+  streamFinishPng(sctx: number, rgbaPtr: number, cells: number): Uint8Array {
+    const cap = cells + 1024 * 1024;
+    const outPtr = this.core._malloc(cap);
+    const writtenPtr = this.core._malloc(8);
+    if (!outPtr || !writtenPtr) throw new Error("wasm malloc failed");
+    try {
+      const rc = this.core._vice_stream_finish_png!(sctx, rgbaPtr, cells, outPtr, cap, writtenPtr);
+      if (rc !== 0) throw new Error(`vice_stream_finish_png failed (${rc})`);
+      const heap = this.core.HEAPU8;
+      const written = new DataView(heap.buffer, writtenPtr, 4).getUint32(0, true);
+      const out = new Uint8Array(written);
+      out.set(heap.subarray(outPtr, outPtr + written));
+      return out;
+    } finally {
+      this.core._free(outPtr);
+      this.core._free(writtenPtr);
+    }
+  }
+
+  streamDestroy(sctx: number): void {
+    this.core._vice_stream_destroy!(sctx);
+  }
+
+  lastStreamResidual(sctx: number): number {
+    if (!this.core._vice_stream_last_residual) return NaN;
+    return this.core._vice_stream_last_residual(sctx);
+  }
+
+  mallocBytes(n: number): number {
+    const ptr = this.core._malloc(n);
+    if (!ptr) throw new Error("wasm malloc failed");
+    return ptr;
+  }
+
+  freeBytes(ptr: number): void {
+    this.core._free(ptr);
+  }
+
+  copyBytes(srcPtr: number, dstPtr: number, n: number): void {
+    this.core.HEAPU8.copyWithin(dstPtr, srcPtr, srcPtr + n);
+  }
+
+  readBytes(ptr: number, n: number): Uint8Array {
+    return this.core.HEAPU8.slice(ptr, ptr + n);
+  }
+
+  writeBytes(data: Uint8Array): number {
+    const ptr = this.core._malloc(data.length);
+    if (!ptr) throw new Error("wasm malloc failed");
+    this.core.HEAPU8.set(data, ptr);
+    return ptr;
   }
 }

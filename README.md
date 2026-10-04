@@ -114,15 +114,21 @@ WASM core in `web/lib/vice-wasm.test.ts`.
 
 - 2×, 3×, and 4× super-resolution (Edge-Adaptive Lanczos-3 + coherence-shock
   PDE) with exact box projection.
-- Device-dependent output cap (24 MP ceiling, e.g. 4900×4900; 12 MP on 4 GB
-  devices or unknown device class, 6 MP at ≤ 2 GB), defined in
-  `web/lib/limits.ts` and enforced in the worker. Measured 2026-10-04 in
-  headless Chromium: 25 MP peaks at 1.94 GB / 29 s, 36 MP at 2.62 GB / 43 s
-  (~68 MB per output MP; the WASM heap never shrinks, so the tab retains
-  ~peak). The old 36 MP cap sat too close to the 2 GB WASM ceiling and is gone.
-- The C++ streaming strip pipeline (`vice_stream_*`) is a prototype for out-of-core band
-  processing without whole-image multigrid smoothing; the web app executes full-image
-  projection through the WASM worker up to the device cap.
+- Two engine tiers, routed automatically in the worker. Up to the
+  device-dependent full-image cap (24 MP ceiling; 12 MP on 4 GB devices or
+  unknown device class, 6 MP at ≤ 2 GB) the WASM engine runs whole-image
+  multigrid + clamp-aware box projection. Above it, the streaming strip
+  pipeline (`vice_stream_*`) takes over up to the streaming cap (64 MP
+  ceiling; 32 MP on 4 GB/unknown, 16 MP at ≤ 2 GB): band-sized float buffers,
+  8-bit accumulation, one native PNG encode with iCCP. Band projection is
+  box-only (no multigrid) — same residual guarantee, slightly different low
+  frequencies (measured ≤ 7 LSB worst on photographic fixtures). Chained 2××2×
+  stays on the full-image path. Measured 2026-10-04 in headless Chromium,
+  isolated browser-tree RSS: full-image 25 MP peaks at 1.94 GB / 29 s and
+  36 MP at 2.62 GB / 43 s (~68 MB per output MP); streaming 64 MP peaks at
+  2.13 GB / 66 s. The WASM heap never shrinks, so the tab retains ~peak
+  either way; the old flat 36 MP cap sat too close to the 2 GB WASM ceiling
+  and is gone. Caps live in `web/lib/limits.ts`.
 - Honors EXIF orientation. Preserves embedded ICC profiles (via native PNG iCCP chunks).
 - Full alpha transparency support: un-premultiplies RGB on output and preserves linear alpha.
 - 8-bit pipeline (browser decodes 8-bit); wide-gamut treated as sRGB.

@@ -56,6 +56,7 @@ export interface ViceRunOptions {
   dering?: number;
   sharpness?: number;
   shock?: number;
+  streamThresholdPx?: number; // test hook: force streaming above this output px
 }
 
 // --- Worker-thread RPC ----------------------------------------------------
@@ -72,6 +73,7 @@ export interface ViceRunMsg {
   dering?: number;
   sharpness?: number;
   shock?: number;
+  streamThresholdPx?: number;
 }
 export interface ViceCancelMsg {
   type: "cancel";

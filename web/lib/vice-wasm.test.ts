@@ -294,6 +294,110 @@ describe("wasm parity", () => {
     }
   });
 
+  test("streaming strip matches full-image path within box-only tolerance", async () => {
+    // The strip pipeline uses the same upscaler but box-only band projection
+    // (no multigrid), so pixels differ slightly by design. Measured
+    // 2026-10: flat identical, grad/chirp <= 2 LSB worst, step edge <= 7 LSB
+    // worst / sub-LSB mean. White-noise adversarial input can flip isolated
+    // near-rail pixels (both paths stay exact), so fixtures here are
+    // photographic: flat, gradient, edge, chirp.
+    const { ViceCore } = await import("./vice-wasm");
+    const core = await ViceCore.load("../public/");
+    if (!core) return;
+    expect(core.hasStream()).toBe(true);
+
+    const cases = [
+      { w: 8, h: 6, scale: 2, c: 4, kind: "grad" },
+      { w: 8, h: 6, scale: 2, c: 4, kind: "flat" },
+      { w: 8, h: 6, scale: 2, c: 4, kind: "edge" },
+      { w: 9, h: 7, scale: 3, c: 3, kind: "chirp" },
+    ] as const;
+    for (const { w, h, scale, c, kind } of cases) {
+      const y = new Float32Array(w * h * c);
+      for (let yy = 0; yy < h; yy++)
+        for (let xx = 0; xx < w; xx++)
+          for (let ch = 0; ch < c; ch++) {
+            y[(yy * w + xx) * c + ch] =
+              kind === "flat"
+                ? 0.5
+                : kind === "edge"
+                  ? xx < w / 2
+                    ? 0.1
+                    : 0.9
+                  : kind === "chirp"
+                    ? 0.5 + 0.4 * Math.sin(xx * 0.3) * Math.sin(yy * 0.23)
+                    : 0.1 + 0.8 * (xx / (w - 1)) * (yy / (h - 1));
+          }
+      const opts = { preset: "photo" as const, dering: 1.0, sharpness: 0.35, shock: 0.35 };
+      const W = w * scale;
+      const H = h * scale;
+
+      // Full-image 8-bit reference via processBand.
+      const ctx = core.create(w, h, scale, c);
+      core.setInput(ctx, y);
+      core.upscale(ctx, opts);
+      core.project(ctx);
+      const full = new Uint8Array(W * H * c);
+      let foff = 0;
+      for (let b = 0; ; b++) {
+        const rows = core.processBand(ctx, b, W, H, c);
+        if (rows.length === 0) break;
+        full.set(rows, foff);
+        foff += rows.length;
+      }
+      expect(foff).toBe(W * H * c);
+      core.destroy(ctx);
+
+      // Streaming protocol: 3-row pushes, 64-row band pulls.
+      const sctx = core.createStream(w, h, scale, c, 64);
+      core.streamSetTuning(sctx, opts);
+      core.streamSetIcc(sctx, new Uint8Array([9, 8, 7, 6]));
+      const inRow = w * c;
+      for (let yy = 0; yy < h; yy += 3) {
+        const n = Math.min(3, h - yy);
+        core.streamPushRows(sctx, y.subarray(yy * inRow, (yy + n) * inRow), n);
+      }
+      const got = new Uint8Array(W * H * c);
+      const bandPtr = core.mallocBytes(64 * W * c);
+      let emitted = 0;
+      while (emitted < H) {
+        if (!core.streamHasNext(sctx)) throw new Error("stream stalled");
+        const { rows } = core.streamPullBand(sctx, bandPtr, 64);
+        got.set(core.readBytes(bandPtr, rows * W * c), emitted * W * c);
+        emitted += rows;
+      }
+      expect(emitted).toBe(H);
+      core.freeBytes(bandPtr);
+      expect(core.lastStreamResidual(sctx)).toBeLessThan(1e-5);
+
+      // PNG finish over the accumulated rows carries the stored ICC profile.
+      const rgbaPtr = core.writeBytes(got);
+      const png = core.streamFinishPng(sctx, rgbaPtr, got.length);
+      core.freeBytes(rgbaPtr);
+      core.streamDestroy(sctx);
+      expect(png.length).toBeGreaterThan(8);
+      expect(png[0]).toBe(137);
+      let foundIccp = false;
+      for (let i = 0; i + 4 <= png.length; i++) {
+        if (png[i] === 0x69 && png[i + 1] === 0x43 && png[i + 2] === 0x43 && png[i + 3] === 0x50) {
+          foundIccp = true;
+          break;
+        }
+      }
+      expect(foundIccp).toBe(true);
+
+      let worst = 0;
+      let sum = 0;
+      for (let i = 0; i < full.length; i++) {
+        const d = Math.abs(full[i] - got[i]) / 255;
+        if (d > worst) worst = d;
+        sum += d;
+      }
+      expect(worst).toBeLessThan(0.05);
+      expect(sum / full.length).toBeLessThan(0.01);
+    }
+  });
+
   test("TS lanczosAdaptiveScale matches WASM upscale with identical tuning", async () => {
     const { ViceCore } = await import("./vice-wasm");
     const { lanczosAdaptiveScale } = await import("./pipeline/kernels");

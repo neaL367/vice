@@ -254,6 +254,70 @@ static void test_streaming_strip() {
   printf("streaming_strip ok total_emitted=%d\n", total_emitted);
 }
 
+static void test_stream_options() {
+  // Guards: bad dims and absurd band sizes are rejected.
+  CHECK(vice_stream_create(0, 48, 2, 4, 16) == nullptr);
+  CHECK(vice_stream_create(32, 48, 5, 4, 16) == nullptr);
+  CHECK(vice_stream_create(32, 48, 2, 2, 16) == nullptr);
+  CHECK(vice_stream_create(200000, 200000, 2, 4, 16) == nullptr);
+
+  // Tuning setter takes effect: smooth preset suppresses boost without error.
+  {
+    vice_stream_ctx* sctx = vice_stream_create(16, 16, 2, 3, 16);
+    CHECK(sctx != nullptr);
+    ViceTuning t;
+    vice_tuning_defaults(&t);
+    t.preset = 1;
+    t.sharpness = 0.0f;
+    t.shock = 0.0f;
+    CHECK(vice_stream_set_tuning(sctx, &t) == 0);
+    CHECK(vice_stream_set_tuning(sctx, nullptr) != 0);
+    CHECK(vice_stream_set_tuning(nullptr, &t) != 0);
+    std::vector<float> chunk(16 * 16 * 3, 0.4f);
+    CHECK(vice_stream_push_input_rows(sctx, chunk.data(), 16) == 0);
+    std::vector<unsigned char> band(16 * 32 * 3);
+    int rows = 0;
+    CHECK(vice_stream_pull_band(sctx, band.data(), &rows) >= 0);
+    CHECK(rows > 0);
+    vice_stream_destroy(sctx);
+  }
+
+  // ICC finish: stored profile lands in the PNG as iCCP.
+  {
+    vice_stream_ctx* sctx = vice_stream_create(8, 8, 2, 4, 16);
+    CHECK(sctx != nullptr);
+    const unsigned char fake[] = {1, 2, 3, 4, 5, 6, 7, 8};
+    CHECK(vice_stream_set_icc_profile(sctx, fake, sizeof(fake)) == 0);
+    CHECK(vice_stream_set_icc_profile(sctx, nullptr, 0) == 0); // clear ok
+    CHECK(vice_stream_set_icc_profile(sctx, fake, sizeof(fake)) == 0);
+    std::vector<float> chunk(8 * 8 * 4, 0.5f);
+    CHECK(vice_stream_push_input_rows(sctx, chunk.data(), 8) == 0);
+    std::vector<unsigned char> rgba(16 * 16 * 4);
+    std::vector<unsigned char> band(16 * 16 * 4);
+    int got = 0;
+    while (got < 16) {
+      int rows = 0;
+      int rc = vice_stream_pull_band(sctx, band.data(), &rows);
+      CHECK(rc >= 0 && rows > 0);
+      std::memcpy(rgba.data() + (size_t)got * 16 * 4, band.data(), (size_t)rows * 16 * 4);
+      got += rows;
+    }
+    std::vector<unsigned char> cap(16 * 16 * 4 + 1024 * 1024);
+    size_t written = 0;
+    CHECK(vice_stream_finish_png(sctx, rgba.data(), (int)rgba.size(), cap.data(), cap.size(), &written) == 0);
+    CHECK(written > 8 && cap[0] == 137 && cap[1] == 80);
+    CHECK(vice_stream_last_residual(sctx) < 1e-5);
+    bool found = false;
+    for (size_t i = 0; i + 4 <= written; i++)
+      if (cap[i] == 'i' && cap[i + 1] == 'C' && cap[i + 2] == 'C' && cap[i + 3] == 'P') { found = true; break; }
+    CHECK(found);
+    // Wrong row count is rejected.
+    CHECK(vice_stream_finish_png(sctx, rgba.data(), 10, cap.data(), cap.size(), &written) != 0);
+    vice_stream_destroy(sctx);
+  }
+  printf("stream_options ok\n");
+}
+
 static void test_transparency() {
   // White at 50% alpha: in linear premultiplied float space:
   // RGB = 1.0 * 0.5 = 0.5, A = 0.5.
@@ -335,6 +399,7 @@ int main() {
   test_project_smooth();
   test_project_multigrid();
   test_streaming_strip();
+  test_stream_options();
   test_transparency();
   test_saturated_residual();
   printf("ALL PASS\n");
