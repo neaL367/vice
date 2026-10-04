@@ -12,7 +12,7 @@ import {
   type RefObject,
 } from "react";
 import type { ViceResult } from "../../types/vice";
-import type { CompareMode, PixelMode, ViewportDimensions } from "./comparison-types";
+import type { CompareMode, PixelMode, ViewportDimensions, ZoomPreset } from "./comparison-types";
 
 export interface ComparisonContextValue {
   result: ViceResult;
@@ -22,6 +22,8 @@ export interface ComparisonContextValue {
   setPos: (p: number) => void;
   zoom: number;
   setZoom: (z: number) => void;
+  zoomPreset: ZoomPreset;
+  setZoomPreset: (p: ZoomPreset) => void;
   mode: CompareMode;
   setMode: (m: CompareMode) => void;
   isHoldingBefore: boolean;
@@ -45,7 +47,12 @@ export interface ComparisonContextValue {
   isSliderOffLeft: boolean;
   isSliderOffRight: boolean;
   isSliderOffscreen: boolean;
-  applyZoom: (newZoom: number, focalClientX?: number, focalClientY?: number) => void;
+  applyZoom: (
+    newZoom: number,
+    focalClientX?: number,
+    focalClientY?: number,
+    preset?: ZoomPreset,
+  ) => void;
   bringSliderToView: () => void;
   onWheel: (e: React.WheelEvent) => void;
   onDoubleClick: (e: React.MouseEvent) => void;
@@ -86,13 +93,14 @@ export function ComparisonProvider({
   // Pure local interactive state (resets cleanly when key={result.id} remounts)
   const [pos, setPos] = useState(50);
   const [zoom, setZoom] = useState(1);
+  const [zoomPreset, setZoomPreset] = useState<ZoomPreset>("fit");
   const [mode, setMode] = useState<CompareMode>("split");
   const [isHoldingBefore, setIsHoldingBefore] = useState(false);
   const [viewportSize, setViewportSize] = useState<ViewportDimensions>({
     width: 0,
     height: 0,
   });
-  const [pixelMode, setPixelMode] = useState<PixelMode>("auto");
+  const [pixelMode, setPixelMode] = useState<PixelMode>("smooth");
 
   // DOM Refs for drag & gesture tracking without trigger re-renders
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -149,12 +157,10 @@ export function ComparisonProvider({
   const stageW = Math.max(20, Math.round(baseW * zoom));
   const stageH = Math.max(20, Math.round(baseH * zoom));
   const zoom1to1 = baseW > 0 ? Math.max(1, Math.round((result.outW / baseW) * 100) / 100) : 1;
-  const is1to1 = Math.abs(zoom - zoom1to1) < 0.05;
+  const is1to1 = zoomPreset === "1:1" || Math.abs(zoom - zoom1to1) < 0.05;
 
-  // Pixel inspection evaluation
-  const isPixelated =
-    pixelMode === "crisp" ||
-    (pixelMode === "auto" && (zoom >= 2 || (zoom >= zoom1to1 && zoom > 1.2)));
+  // Pixel inspection evaluation (explicitly controlled by user toggle, never auto-hijacked)
+  const isPixelated = pixelMode === "crisp";
 
   const imageRenderingClass = isPixelated
     ? "pointer-events-none absolute inset-0 h-full w-full object-fill [image-rendering:pixelated]"
@@ -235,10 +241,24 @@ export function ComparisonProvider({
   }, []);
 
   const applyZoom = useCallback(
-    (newZoom: number, focalClientX?: number, focalClientY?: number) => {
+    (newZoom: number, focalClientX?: number, focalClientY?: number, preset?: ZoomPreset) => {
       const vp = viewportRef.current;
       const stage = stageRef.current;
       const clampedZoom = Math.max(1, Math.min(16, Math.round(newZoom * 100) / 100));
+
+      if (preset !== undefined) {
+        setZoomPreset(preset);
+      } else if (clampedZoom === 1) {
+        setZoomPreset("fit");
+      } else if (Math.abs(clampedZoom - 2) < 0.02) {
+        setZoomPreset("2");
+      } else if (Math.abs(clampedZoom - 4) < 0.02) {
+        setZoomPreset("4");
+      } else if (Math.abs(clampedZoom - zoom1to1) < 0.02) {
+        setZoomPreset("1:1");
+      } else {
+        setZoomPreset(null);
+      }
 
       if (!vp || !stage) {
         setZoom(clampedZoom);
@@ -300,7 +320,7 @@ export function ComparisonProvider({
         }
       });
     },
-    [],
+    [zoom1to1],
   );
 
   // Synchronizing with window keyboard events (proper cleanup)
@@ -338,10 +358,10 @@ export function ComparisonProvider({
   const onDoubleClick = (e: React.MouseEvent) => {
     e.preventDefault();
     if (zoom > 1.05) {
-      applyZoom(1);
+      applyZoom(1, undefined, undefined, "fit");
     } else {
       const targetZoom = zoom1to1 > 1.4 ? zoom1to1 : 2.5;
-      applyZoom(targetZoom, e.clientX, e.clientY);
+      applyZoom(targetZoom, e.clientX, e.clientY, zoom1to1 > 1.4 ? "1:1" : undefined);
     }
   };
 
@@ -437,6 +457,8 @@ export function ComparisonProvider({
       setPos,
       zoom,
       setZoom,
+      zoomPreset,
+      setZoomPreset,
       mode,
       setMode,
       isHoldingBefore,
@@ -478,6 +500,7 @@ export function ComparisonProvider({
       onSelectId,
       pos,
       zoom,
+      zoomPreset,
       mode,
       isHoldingBefore,
       viewportSize,

@@ -279,6 +279,7 @@ export const ComparisonHud = memo(function ComparisonHud() {
     mode,
     setMode,
     zoom,
+    zoomPreset,
     zoom1to1,
     is1to1,
     applyZoom,
@@ -332,11 +333,11 @@ export const ComparisonHud = memo(function ComparisonHud() {
         <div role="group" aria-label="Zoom" className="flex items-center gap-0.5">
           <button
             type="button"
-            onClick={() => applyZoom(1)}
-            aria-pressed={zoom === 1}
+            onClick={() => applyZoom(1, undefined, undefined, "fit")}
+            aria-pressed={zoomPreset === "fit"}
             title="Fit image to screen"
             className={`flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium transition-all ${
-              zoom === 1
+              zoomPreset === "fit"
                 ? "bg-foreground text-background font-semibold shadow-2xs"
                 : "text-muted hover:text-foreground hover:bg-foreground/[0.04]"
             }`}
@@ -347,11 +348,11 @@ export const ComparisonHud = memo(function ComparisonHud() {
 
           <button
             type="button"
-            onClick={() => applyZoom(zoom1to1)}
-            aria-pressed={is1to1}
+            onClick={() => applyZoom(zoom1to1, undefined, undefined, "1:1")}
+            aria-pressed={zoomPreset === "1:1"}
             title={`View at 1:1 physical pixel scale (${result.outW}×${result.outH})`}
             className={`rounded-full px-2.5 py-1 text-xs font-medium transition-all ${
-              is1to1
+              zoomPreset === "1:1"
                 ? "bg-foreground text-background font-semibold shadow-2xs"
                 : "text-muted hover:text-foreground hover:bg-foreground/[0.04]"
             }`}
@@ -361,10 +362,10 @@ export const ComparisonHud = memo(function ComparisonHud() {
 
           <button
             type="button"
-            onClick={() => applyZoom(2)}
-            aria-pressed={Math.abs(zoom - 2) < 0.1 && !is1to1}
+            onClick={() => applyZoom(2, undefined, undefined, "2")}
+            aria-pressed={zoomPreset === "2"}
             className={`rounded-full px-2.5 py-1 text-xs font-medium transition-all ${
-              Math.abs(zoom - 2) < 0.1 && !is1to1
+              zoomPreset === "2"
                 ? "bg-foreground text-background font-semibold shadow-2xs"
                 : "text-muted hover:text-foreground hover:bg-foreground/[0.04]"
             }`}
@@ -374,10 +375,10 @@ export const ComparisonHud = memo(function ComparisonHud() {
 
           <button
             type="button"
-            onClick={() => applyZoom(4)}
-            aria-pressed={Math.abs(zoom - 4) < 0.1 && !is1to1}
+            onClick={() => applyZoom(4, undefined, undefined, "4")}
+            aria-pressed={zoomPreset === "4"}
             className={`rounded-full px-2.5 py-1 text-xs font-medium transition-all ${
-              Math.abs(zoom - 4) < 0.1 && !is1to1
+              zoomPreset === "4"
                 ? "bg-foreground text-background font-semibold shadow-2xs"
                 : "text-muted hover:text-foreground hover:bg-foreground/[0.04]"
             }`}
