@@ -347,91 +347,109 @@ export function ComparisonProvider({
     };
   }, []);
 
-  const onWheel = (e: React.WheelEvent) => {
-    if (e.ctrlKey || e.metaKey) {
+  const onWheel = useCallback(
+    (e: React.WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        const factor = e.deltaY < 0 ? 1.25 : 0.8;
+        applyZoom(zoom * factor, e.clientX, e.clientY);
+      }
+    },
+    [applyZoom, zoom],
+  );
+
+  const onDoubleClick = useCallback(
+    (e: React.MouseEvent) => {
       e.preventDefault();
-      const factor = e.deltaY < 0 ? 1.25 : 0.8;
-      applyZoom(zoom * factor, e.clientX, e.clientY);
-    }
-  };
+      if (zoom > 1.05) {
+        applyZoom(1, undefined, undefined, "fit");
+      } else {
+        const targetZoom = zoom1to1 > 1.4 ? zoom1to1 : 2.5;
+        applyZoom(targetZoom, e.clientX, e.clientY, zoom1to1 > 1.4 ? "1:1" : undefined);
+      }
+    },
+    [applyZoom, zoom, zoom1to1],
+  );
 
-  const onDoubleClick = (e: React.MouseEvent) => {
-    e.preventDefault();
-    if (zoom > 1.05) {
-      applyZoom(1, undefined, undefined, "fit");
-    } else {
-      const targetZoom = zoom1to1 > 1.4 ? zoom1to1 : 2.5;
-      applyZoom(targetZoom, e.clientX, e.clientY, zoom1to1 > 1.4 ? "1:1" : undefined);
-    }
-  };
-
-  const onHandlePointerDown = (e: React.PointerEvent) => {
+  const onHandlePointerDown = useCallback((e: React.PointerEvent) => {
     e.stopPropagation();
     isDraggingHandleRef.current = true;
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-  };
+  }, []);
 
-  const onHandlePointerMove = (e: React.PointerEvent) => {
-    if (isDraggingHandleRef.current) {
-      updateSplitPos(e.clientX);
-    }
-  };
+  const onHandlePointerMove = useCallback(
+    (e: React.PointerEvent) => {
+      if (isDraggingHandleRef.current) {
+        updateSplitPos(e.clientX);
+      }
+    },
+    [updateSplitPos],
+  );
 
-  const onHandlePointerUp = (e: React.PointerEvent) => {
-    if (isDraggingHandleRef.current) {
-      isDraggingHandleRef.current = false;
-      try {
-        (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
-      } catch {}
-    }
-  };
-
-  const onViewportPointerDown = (e: React.PointerEvent) => {
-    if (isDraggingHandleRef.current) return;
-    if (zoom > 1 && viewportRef.current) {
-      isPanningRef.current = true;
-      panStartRef.current = {
-        x: e.clientX,
-        y: e.clientY,
-        scrollLeft: viewportRef.current.scrollLeft,
-        scrollTop: viewportRef.current.scrollTop,
-      };
-      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    } else if (zoom === 1 && mode === "split") {
-      updateSplitPos(e.clientX);
-      isDraggingHandleRef.current = true;
-      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    }
-  };
-
-  const onViewportPointerMove = (e: React.PointerEvent) => {
-    if (isPanningRef.current && viewportRef.current) {
-      const dx = e.clientX - panStartRef.current.x;
-      const dy = e.clientY - panStartRef.current.y;
-      viewportRef.current.scrollLeft = panStartRef.current.scrollLeft - dx;
-      viewportRef.current.scrollTop = panStartRef.current.scrollTop - dy;
-      updateSliderOffscreen();
-    } else if (isDraggingHandleRef.current) {
-      updateSplitPos(e.clientX);
-    }
-  };
-
-  const onViewportPointerUp = (e: React.PointerEvent) => {
-    if (isPanningRef.current) {
-      isPanningRef.current = false;
-      try {
-        (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
-      } catch {}
-      updateSliderOffscreen();
-    }
+  const onHandlePointerUp = useCallback((e: React.PointerEvent) => {
     if (isDraggingHandleRef.current) {
       isDraggingHandleRef.current = false;
       try {
         (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
       } catch {}
-      updateSliderOffscreen();
     }
-  };
+  }, []);
+
+  const onViewportPointerDown = useCallback(
+    (e: React.PointerEvent) => {
+      if (isDraggingHandleRef.current) return;
+      if (zoom > 1 && viewportRef.current) {
+        isPanningRef.current = true;
+        panStartRef.current = {
+          x: e.clientX,
+          y: e.clientY,
+          scrollLeft: viewportRef.current.scrollLeft,
+          scrollTop: viewportRef.current.scrollTop,
+        };
+        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+      } else if (zoom === 1 && mode === "split") {
+        updateSplitPos(e.clientX);
+        isDraggingHandleRef.current = true;
+        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+      }
+    },
+    [zoom, mode, updateSplitPos],
+  );
+
+  const onViewportPointerMove = useCallback(
+    (e: React.PointerEvent) => {
+      if (isPanningRef.current && viewportRef.current) {
+        const dx = e.clientX - panStartRef.current.x;
+        const dy = e.clientY - panStartRef.current.y;
+        viewportRef.current.scrollLeft = panStartRef.current.scrollLeft - dx;
+        viewportRef.current.scrollTop = panStartRef.current.scrollTop - dy;
+        updateSliderOffscreen();
+      } else if (isDraggingHandleRef.current) {
+        updateSplitPos(e.clientX);
+      }
+    },
+    [updateSliderOffscreen, updateSplitPos],
+  );
+
+  const onViewportPointerUp = useCallback(
+    (e: React.PointerEvent) => {
+      if (isPanningRef.current) {
+        isPanningRef.current = false;
+        try {
+          (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+        } catch {}
+        updateSliderOffscreen();
+      }
+      if (isDraggingHandleRef.current) {
+        isDraggingHandleRef.current = false;
+        try {
+          (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+        } catch {}
+        updateSliderOffscreen();
+      }
+    },
+    [updateSliderOffscreen],
+  );
 
   const onViewportScroll = useCallback(() => {
     updateSliderOffscreen();
@@ -522,6 +540,14 @@ export function ComparisonProvider({
       isSliderOffscreen,
       applyZoom,
       bringSliderToView,
+      onWheel,
+      onDoubleClick,
+      onHandlePointerDown,
+      onHandlePointerMove,
+      onHandlePointerUp,
+      onViewportPointerDown,
+      onViewportPointerMove,
+      onViewportPointerUp,
       onViewportScroll,
     ],
   );
