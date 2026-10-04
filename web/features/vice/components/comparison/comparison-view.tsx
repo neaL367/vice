@@ -89,6 +89,14 @@ export const ComparisonSplit = memo(function ComparisonSplit() {
         className={imageRenderingClass}
       />
 
+      {/* Side Labels */}
+      <span className="pointer-events-none absolute left-3 top-3 z-10 rounded-full bg-background/80 px-2.5 py-0.5 text-[11px] font-medium text-foreground backdrop-blur-md shadow-2xs">
+        Original
+      </span>
+      <span className="pointer-events-none absolute right-3 top-3 z-10 rounded-full bg-background/80 px-2.5 py-0.5 text-[11px] font-semibold text-foreground backdrop-blur-md shadow-2xs">
+        Vice {result.scale}×
+      </span>
+
       {/* Spacebar preview indicator */}
       {isHoldingBefore && (
         <div className="pointer-events-none absolute bottom-4 left-1/2 z-20 -translate-x-1/2 rounded-full bg-background/90 px-4 py-1.5 text-xs font-semibold text-foreground shadow-md backdrop-blur-md">
@@ -96,12 +104,13 @@ export const ComparisonSplit = memo(function ComparisonSplit() {
         </div>
       )}
 
-      {/* Vertical Divider with Pure CSS Sticky Grab Handle */}
+      {/* Vertical Divider with Centered Grab Handle */}
       <div
         style={{ left: `${effectivePos}%` }}
-        className="pointer-events-none absolute inset-y-0 -translate-x-1/2 flex flex-col items-center"
+        className="pointer-events-none absolute inset-y-0 -translate-x-1/2 z-20"
       >
-        <div className="h-full w-0.5 bg-white shadow-[0_0_10px_rgba(0,0,0,0.6)]" />
+        {/* 1.5px glowing white divider line */}
+        <div className="absolute inset-y-0 left-1/2 -translate-x-1/2 w-0.5 bg-white shadow-[0_0_10px_rgba(0,0,0,0.8)]" />
 
         {/* Generous touch/drag hit area spanning entire height */}
         <div
@@ -109,10 +118,11 @@ export const ComparisonSplit = memo(function ComparisonSplit() {
           onPointerMove={onHandlePointerMove}
           onPointerUp={onHandlePointerUp}
           onPointerCancel={onHandlePointerUp}
-          className="pointer-events-auto absolute inset-y-0 -left-5 -right-5 cursor-ew-resize"
+          style={{ touchAction: "none" }}
+          className="pointer-events-auto absolute inset-y-0 -left-6 -right-6 cursor-ew-resize"
         />
 
-        {/* Dynamic Grab Handle with pure CSS sticky vertical centering */}
+        {/* Centered Grab Handle */}
         <div
           onPointerDown={onHandlePointerDown}
           onPointerMove={onHandlePointerMove}
@@ -124,7 +134,8 @@ export const ComparisonSplit = memo(function ComparisonSplit() {
           }}
           title="Drag to compare · Double-click to center slider"
           aria-label="Drag divider"
-          className="pointer-events-auto sticky top-1/2 -translate-y-1/2 flex h-9 w-9 items-center justify-center rounded-full border border-hairline/80 bg-background text-foreground shadow-xl backdrop-blur-md transition-transform hover:scale-110 active:scale-95 cursor-ew-resize"
+          style={{ touchAction: "none" }}
+          className="pointer-events-auto absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 flex h-9 w-9 items-center justify-center rounded-full border border-hairline/80 bg-background text-foreground shadow-2xl backdrop-blur-md transition-transform hover:scale-110 active:scale-95 cursor-ew-resize select-none"
         >
           <ChevronLeftRightIcon className="h-4 w-4" />
         </div>
@@ -198,6 +209,7 @@ export const ComparisonViewport = memo(function ComparisonViewport() {
   const {
     viewportRef,
     onWheel,
+    onViewportScroll,
     onViewportPointerDown,
     onViewportPointerMove,
     onViewportPointerUp,
@@ -217,7 +229,7 @@ export const ComparisonViewport = memo(function ComparisonViewport() {
           type="button"
           onClick={bringSliderToView}
           title="Bring slider here"
-          className="pointer-events-auto absolute left-6 top-1/2 -translate-y-1/2 z-30 flex items-center gap-1.5 rounded-full border border-hairline/80 bg-background/95 px-3 py-1.5 text-xs font-semibold text-foreground shadow-xl backdrop-blur-md transition-all hover:scale-105 active:scale-95 cursor-pointer"
+          className="pointer-events-auto absolute left-6 top-1/2 -translate-y-1/2 z-30 flex items-center gap-1.5 rounded-full border border-hairline/80 bg-background/95 px-3 py-1.5 text-xs font-semibold text-foreground shadow-xl backdrop-blur-md transition-all hover:scale-105 active:scale-95 cursor-pointer animate-in fade-in"
         >
           <span>← Bring Slider</span>
         </button>
@@ -227,7 +239,7 @@ export const ComparisonViewport = memo(function ComparisonViewport() {
           type="button"
           onClick={bringSliderToView}
           title="Bring slider here"
-          className="pointer-events-auto absolute right-6 top-1/2 -translate-y-1/2 z-30 flex items-center gap-1.5 rounded-full border border-hairline/80 bg-background/95 px-3 py-1.5 text-xs font-semibold text-foreground shadow-xl backdrop-blur-md transition-all hover:scale-105 active:scale-95 cursor-pointer"
+          className="pointer-events-auto absolute right-6 top-1/2 -translate-y-1/2 z-30 flex items-center gap-1.5 rounded-full border border-hairline/80 bg-background/95 px-3 py-1.5 text-xs font-semibold text-foreground shadow-xl backdrop-blur-md transition-all hover:scale-105 active:scale-95 cursor-pointer animate-in fade-in"
         >
           <span>Bring Slider →</span>
         </button>
@@ -236,6 +248,7 @@ export const ComparisonViewport = memo(function ComparisonViewport() {
       <div
         ref={viewportRef}
         onWheel={onWheel}
+        onScroll={onViewportScroll}
         onPointerDown={onViewportPointerDown}
         onPointerMove={onViewportPointerMove}
         onPointerUp={onViewportPointerUp}

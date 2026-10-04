@@ -55,6 +55,7 @@ export interface ComparisonContextValue {
   onViewportPointerDown: (e: React.PointerEvent) => void;
   onViewportPointerMove: (e: React.PointerEvent) => void;
   onViewportPointerUp: (e: React.PointerEvent) => void;
+  onViewportScroll: () => void;
 }
 
 const ComparisonContext = createContext<ComparisonContextValue | null>(null);
@@ -99,6 +100,16 @@ export function ComparisonProvider({
   const isDraggingHandleRef = useRef(false);
   const isPanningRef = useRef(false);
   const panStartRef = useRef({ x: 0, y: 0, scrollLeft: 0, scrollTop: 0 });
+  const posRef = useRef(pos);
+  posRef.current = pos;
+
+  const [sliderOffscreen, setSliderOffscreen] = useState<{
+    isSliderOffLeft: boolean;
+    isSliderOffRight: boolean;
+  }>({
+    isSliderOffLeft: false,
+    isSliderOffRight: false,
+  });
 
   // Pure derived calculations during render (no redundant state)
   const origW = Math.round(result.outW / result.scale);
@@ -169,14 +180,47 @@ export function ComparisonProvider({
   const panelW = Math.max(20, Math.round(panelBaseW * zoom));
   const panelH = Math.max(20, Math.round(panelBaseH * zoom));
 
+  const updateSliderOffscreen = useCallback((overridePos?: number) => {
+    if (!viewportRef.current || !stageRef.current || zoom <= 1 || mode !== "split") {
+      setSliderOffscreen((prev) => {
+        if (!prev.isSliderOffLeft && !prev.isSliderOffRight) return prev;
+        return { isSliderOffLeft: false, isSliderOffRight: false };
+      });
+      return;
+    }
+
+    const vp = viewportRef.current;
+    const stage = stageRef.current;
+    const vpRect = vp.getBoundingClientRect();
+    const stageRect = stage.getBoundingClientRect();
+    if (stageRect.width <= 0) return;
+
+    const activePos = overridePos ?? posRef.current;
+    const sliderClientX = stageRect.left + (activePos / 100) * stageRect.width;
+
+    // Grab handle is 36px wide (18px radius). Consider off-screen when handle edge is past viewport bounds.
+    const offLeft = sliderClientX < vpRect.left + 18;
+    const offRight = sliderClientX > vpRect.right - 18;
+
+    setSliderOffscreen((prev) => {
+      if (prev.isSliderOffLeft === offLeft && prev.isSliderOffRight === offRight) {
+        return prev;
+      }
+      return { isSliderOffLeft: offLeft, isSliderOffRight: offRight };
+    });
+  }, [zoom, mode]);
+
   const updateSplitPos = useCallback((clientX: number) => {
     if (!stageRef.current) return;
     const stageRect = stageRef.current.getBoundingClientRect();
     if (stageRect.width <= 0) return;
     const offset = clientX - stageRect.left;
     const pct = Math.max(0, Math.min(100, (offset / stageRect.width) * 100));
-    setPos(Math.round(pct * 10) / 10);
-  }, []);
+    const rounded = Math.round(pct * 10) / 10;
+    posRef.current = rounded;
+    setPos(rounded);
+    updateSliderOffscreen(rounded);
+  }, [updateSliderOffscreen]);
 
   const bringSliderToView = useCallback(() => {
     if (!viewportRef.current || !stageRef.current) return;
@@ -188,7 +232,10 @@ export function ComparisonProvider({
     const visibleCenterX = vpRect.left + vpRect.width / 2;
     const offset = visibleCenterX - stageRect.left;
     const pct = Math.max(5, Math.min(95, (offset / stageRect.width) * 100));
-    setPos(Math.round(pct * 10) / 10);
+    const rounded = Math.round(pct * 10) / 10;
+    posRef.current = rounded;
+    setPos(rounded);
+    setSliderOffscreen({ isSliderOffLeft: false, isSliderOffRight: false });
   }, []);
 
   const applyZoom = useCallback(
@@ -207,6 +254,7 @@ export function ComparisonProvider({
         requestAnimationFrame(() => {
           vp.scrollLeft = 0;
           vp.scrollTop = 0;
+          setSliderOffscreen({ isSliderOffLeft: false, isSliderOffRight: false });
         });
         return;
       }
@@ -250,7 +298,10 @@ export function ComparisonProvider({
         if (clampedZoom > 1 && targetStageW > 0) {
           const visibleCenterX = actualScrollLeft + nextVp.clientWidth / 2;
           const newPos = Math.max(5, Math.min(95, (visibleCenterX / targetStageW) * 100));
-          setPos(Math.round(newPos * 10) / 10);
+          const rounded = Math.round(newPos * 10) / 10;
+          posRef.current = rounded;
+          setPos(rounded);
+          setSliderOffscreen({ isSliderOffLeft: false, isSliderOffRight: false });
         }
       });
     },
@@ -344,6 +395,7 @@ export function ComparisonProvider({
       const dy = e.clientY - panStartRef.current.y;
       viewportRef.current.scrollLeft = panStartRef.current.scrollLeft - dx;
       viewportRef.current.scrollTop = panStartRef.current.scrollTop - dy;
+      updateSliderOffscreen();
     } else if (isDraggingHandleRef.current) {
       updateSplitPos(e.clientX);
     }
@@ -355,26 +407,30 @@ export function ComparisonProvider({
       try {
         (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
       } catch {}
+      updateSliderOffscreen();
     }
     if (isDraggingHandleRef.current) {
       isDraggingHandleRef.current = false;
       try {
         (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
       } catch {}
+      updateSliderOffscreen();
     }
   };
 
+  const onViewportScroll = useCallback(() => {
+    updateSliderOffscreen();
+  }, [updateSliderOffscreen]);
+
+  // Synchronize slider visibility when zoom, pos, stage size, or viewport changes
+  useEffect(() => {
+    updateSliderOffscreen();
+  }, [updateSliderOffscreen, pos, zoom, mode, stageW, stageH, viewportSize]);
+
   const effectivePos = isHoldingBefore ? 100 : pos;
 
-  let isSliderOffLeft = false;
-  let isSliderOffRight = false;
-  if (viewportRef.current && stageRef.current && zoom > 1 && mode === "split") {
-    const vpRect = viewportRef.current.getBoundingClientRect();
-    const stageRect = stageRef.current.getBoundingClientRect();
-    const sliderClientX = stageRect.left + (pos / 100) * stageRect.width;
-    isSliderOffLeft = sliderClientX < vpRect.left + 40;
-    isSliderOffRight = sliderClientX > vpRect.right - 40;
-  }
+  const isSliderOffLeft = sliderOffscreen.isSliderOffLeft;
+  const isSliderOffRight = sliderOffscreen.isSliderOffRight;
   const isSliderOffscreen = isSliderOffLeft || isSliderOffRight;
 
   const value = useMemo<ComparisonContextValue>(
@@ -419,6 +475,7 @@ export function ComparisonProvider({
       onViewportPointerDown,
       onViewportPointerMove,
       onViewportPointerUp,
+      onViewportScroll,
     }),
     [
       result,
@@ -447,6 +504,7 @@ export function ComparisonProvider({
       isSliderOffscreen,
       applyZoom,
       bringSliderToView,
+      onViewportScroll,
     ],
   );
 
