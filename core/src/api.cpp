@@ -111,8 +111,8 @@ static double measure_residual(const vice_ctx* ctx, const std::vector<float>& bu
 
 int vice_project(vice_ctx* ctx) {
   if (!ctx) return -1;
-  vice_project_smooth(ctx->y.data(), ctx->raw.data(), ctx->in_w, ctx->in_h,
-                      ctx->scale, ctx->channels, VICE_SMOOTH_ITERS);
+  vice_project_multigrid(ctx->y.data(), ctx->raw.data(), ctx->in_w, ctx->in_h,
+                         ctx->scale, ctx->channels, 2);
   for (int iter = 0; iter < 3; ++iter) {
     vice_project_box(ctx->y.data(), ctx->raw.data(), ctx->in_w, ctx->in_h,
                      ctx->scale, ctx->channels);
@@ -230,4 +230,179 @@ int vice_download_raw(vice_ctx* ctx, float* out, int n) {
   if (n != (int)want && (size_t)n != want) return -1;
   std::memcpy(out, ctx->raw.data(), want * sizeof(float));
   return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Streaming Strip Pipeline (Out-of-Core Processing for Gigapixel Images)
+// ---------------------------------------------------------------------------
+
+struct vice_stream_ctx {
+  int in_w, in_h, scale, channels;
+  int out_w, out_h;
+  int band_h;
+  int in_rows_pushed;
+  int out_rows_emitted;
+  std::vector<float> in_buf;
+  int in_buf_start_y;
+  int in_buf_row_count;
+  ViceTuning tuning;
+};
+
+vice_stream_ctx* vice_stream_create(int in_w, int in_h, int scale, int channels, int band_h) {
+  if (in_w <= 0 || in_h <= 0 || (scale != 2 && scale != 3 && scale != 4) ||
+      (channels != 3 && channels != 4) || band_h <= 0)
+    return nullptr;
+  auto* sctx = new (std::nothrow) vice_stream_ctx();
+  if (!sctx) return nullptr;
+  sctx->in_w = in_w;
+  sctx->in_h = in_h;
+  sctx->scale = scale;
+  sctx->channels = channels;
+  sctx->out_w = in_w * scale;
+  sctx->out_h = in_h * scale;
+  sctx->band_h = ((band_h + scale - 1) / scale) * scale;
+  sctx->in_rows_pushed = 0;
+  sctx->out_rows_emitted = 0;
+  sctx->in_buf_start_y = 0;
+  sctx->in_buf_row_count = 0;
+  vice_tuning_defaults(&sctx->tuning);
+  return sctx;
+}
+
+int vice_stream_push_input_rows(vice_stream_ctx* sctx, const float* in_rows, int row_count) {
+  if (!sctx || !in_rows || row_count <= 0) return -1;
+  size_t row_stride = (size_t)sctx->in_w * sctx->channels;
+  size_t new_floats = (size_t)row_count * row_stride;
+  size_t old_size = sctx->in_buf.size();
+  sctx->in_buf.resize(old_size + new_floats);
+  std::memcpy(sctx->in_buf.data() + old_size, in_rows, new_floats * sizeof(float));
+  sctx->in_buf_row_count += row_count;
+  sctx->in_rows_pushed += row_count;
+  return 0;
+}
+
+int vice_stream_has_next_band(const vice_stream_ctx* sctx) {
+  if (!sctx || sctx->out_rows_emitted >= sctx->out_h) return 0;
+  int next_out_y1 = std::min(sctx->out_h, sctx->out_rows_emitted + sctx->band_h);
+  double max_src_y = ((double)(next_out_y1 - 1) + 0.5) / (double)sctx->scale - 0.5;
+  int needed_in_y_max = std::min(sctx->in_h - 1, (int)std::floor(max_src_y) + 4);
+  return (sctx->in_rows_pushed > needed_in_y_max || sctx->in_rows_pushed >= sctx->in_h) ? 1 : 0;
+}
+
+int vice_stream_pull_band(vice_stream_ctx* sctx, unsigned char* out_bytes, int* written_rows) {
+  if (!sctx || !out_bytes || !written_rows) return -1;
+  if (sctx->out_rows_emitted >= sctx->out_h) {
+    *written_rows = 0;
+    return 1;
+  }
+
+  int out_y0 = sctx->out_rows_emitted;
+  int cur_band_h = std::min(sctx->band_h, sctx->out_h - out_y0);
+  int out_y1 = out_y0 + cur_band_h;
+
+  double min_src_y = ((double)out_y0 + 0.5) / (double)sctx->scale - 0.5;
+  double max_src_y = ((double)(out_y1 - 1) + 0.5) / (double)sctx->scale - 0.5;
+  int req_in_y0 = std::max(0, (int)std::floor(min_src_y) - 3);
+  int req_in_y1 = std::min(sctx->in_h, (int)std::floor(max_src_y) + 5);
+  int req_in_rows = req_in_y1 - req_in_y0;
+
+  if (sctx->in_rows_pushed < req_in_y1 && sctx->in_rows_pushed < sctx->in_h) {
+    *written_rows = 0;
+    return -2;
+  }
+
+  size_t in_row_stride = (size_t)sctx->in_w * sctx->channels;
+  std::vector<float> in_strip((size_t)req_in_rows * in_row_stride);
+  for (int iy = 0; iy < req_in_rows; ++iy) {
+    int src_global_y = req_in_y0 + iy;
+    int local_buf_y = src_global_y - sctx->in_buf_start_y;
+    if (local_buf_y >= 0 && local_buf_y < sctx->in_buf_row_count) {
+      std::memcpy(in_strip.data() + (size_t)iy * in_row_stride,
+                  sctx->in_buf.data() + (size_t)local_buf_y * in_row_stride,
+                  in_row_stride * sizeof(float));
+    }
+  }
+
+  size_t out_row_stride = (size_t)sctx->out_w * sctx->channels;
+  int strip_out_h = req_in_rows * sctx->scale;
+  std::vector<float> strip_upscaled((size_t)strip_out_h * out_row_stride);
+
+  vice_upscale_lanczos_adaptive_ex(in_strip.data(), sctx->in_w, req_in_rows,
+                                   sctx->channels, sctx->scale,
+                                   strip_upscaled.data(), &sctx->tuning);
+
+  int strip_global_out_y0 = req_in_y0 * sctx->scale;
+  int local_band_offset = out_y0 - strip_global_out_y0;
+
+  std::vector<float> band_raw((size_t)cur_band_h * out_row_stride);
+  for (int by = 0; by < cur_band_h; ++by) {
+    int src_row = local_band_offset + by;
+    if (src_row >= 0 && src_row < strip_out_h) {
+      std::memcpy(band_raw.data() + (size_t)by * out_row_stride,
+                  strip_upscaled.data() + (size_t)src_row * out_row_stride,
+                  out_row_stride * sizeof(float));
+    }
+  }
+
+  // Exact box consistency on band blocks
+  int s = sctx->scale;
+  double inv_s2 = 1.0 / (double(s) * s);
+  for (int by = 0; by < cur_band_h / s; ++by) {
+    int global_in_y = (out_y0 / s) + by;
+    int local_in_y = global_in_y - req_in_y0;
+    if (local_in_y < 0 || local_in_y >= req_in_rows) continue;
+
+    for (int bx = 0; bx < sctx->in_w; ++bx) {
+      for (int c = 0; c < sctx->channels; ++c) {
+        double sum = 0.0;
+        for (int dy = 0; dy < s; ++dy) {
+          for (int dx = 0; dx < s; ++dx) {
+            sum += band_raw[(((size_t)by * s + dy) * sctx->out_w + bx * s + dx) * sctx->channels + c];
+          }
+        }
+        float orig = in_strip[((size_t)local_in_y * sctx->in_w + bx) * sctx->channels + c];
+        float d = (float)(orig - sum * inv_s2);
+        for (int dy = 0; dy < s; ++dy) {
+          for (int dx = 0; dx < s; ++dx) {
+            band_raw[(((size_t)by * s + dy) * sctx->out_w + bx * s + dx) * sctx->channels + c] += d;
+          }
+        }
+      }
+    }
+  }
+
+  // Convert to 8-bit sRGB with dither directly into caller output buffer
+  for (int y = 0; y < cur_band_h; ++y) {
+    int global_y = out_y0 + y;
+    for (int x = 0; x < sctx->out_w; ++x) {
+      for (int c = 0; c < sctx->channels; ++c) {
+        float lin = clamp01(band_raw[((size_t)y * sctx->out_w + x) * sctx->channels + c]);
+        float srgb = vice_fast_linear_to_srgb(lin);
+        float dither = vice_spatial_triangular_dither(x, global_y, c);
+        int q = (int)(srgb * 255.0f + dither + 0.5f);
+        if (q < 0) q = 0;
+        if (q > 255) q = 255;
+        out_bytes[((size_t)y * sctx->out_w + x) * sctx->channels + c] = (unsigned char)q;
+      }
+    }
+  }
+
+  sctx->out_rows_emitted += cur_band_h;
+  *written_rows = cur_band_h;
+
+  // Evict consumed input rows
+  int min_in_y_needed_next = std::max(0, (int)std::floor(((double)sctx->out_rows_emitted + 0.5) / (double)sctx->scale - 0.5) - 3);
+  int rows_to_drop = min_in_y_needed_next - sctx->in_buf_start_y;
+  if (rows_to_drop > 0 && rows_to_drop <= sctx->in_buf_row_count) {
+    size_t floats_to_drop = (size_t)rows_to_drop * in_row_stride;
+    sctx->in_buf.erase(sctx->in_buf.begin(), sctx->in_buf.begin() + floats_to_drop);
+    sctx->in_buf_start_y += rows_to_drop;
+    sctx->in_buf_row_count -= rows_to_drop;
+  }
+
+  return sctx->out_rows_emitted >= sctx->out_h ? 1 : 0;
+}
+
+void vice_stream_destroy(vice_stream_ctx* sctx) {
+  delete sctx;
 }

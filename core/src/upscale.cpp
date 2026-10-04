@@ -111,6 +111,12 @@ int vice_upscale_lanczos_adaptive_ex(const float* src, int w, int h, int c, int 
   // Pass 1: Horizontal scale (w x h -> W x h)
   std::vector<float> tmp((size_t)W * h * c);
 
+  struct SampleCoordX {
+    int base_idx;
+    float frac;
+    const float* weights;
+  };
+  std::vector<SampleCoordX> x_coords(W);
   for (int x = 0; x < W; ++x) {
     double src_x = ((double)x + 0.5) / (double)scale - 0.5;
     int base_idx = (int)std::floor(src_x);
@@ -118,11 +124,20 @@ int vice_upscale_lanczos_adaptive_ex(const float* src, int w, int h, int c, int 
     int lut_idx = (int)(frac * (double)LANCZOS_LUT_STEPS);
     if (lut_idx < 0) lut_idx = 0;
     if (lut_idx >= LANCZOS_LUT_STEPS) lut_idx = LANCZOS_LUT_STEPS - 1;
-    const float* weights = &g_lanczos_table.table[lut_idx * 6];
+    x_coords[x].base_idx = base_idx;
+    x_coords[x].frac = (float)frac;
+    x_coords[x].weights = &g_lanczos_table.table[lut_idx * 6];
+  }
 
-    for (int y = 0; y < h; ++y) {
-      const size_t row_src = (size_t)y * w;
-      const size_t row_dst = (size_t)y * W;
+  for (int y = 0; y < h; ++y) {
+    const size_t row_src = (size_t)y * w;
+    const size_t row_dst = (size_t)y * W;
+
+    for (int x = 0; x < W; ++x) {
+      const SampleCoordX& sc = x_coords[x];
+      const int base_idx = sc.base_idx;
+      const float frac = sc.frac;
+      const float* weights = sc.weights;
 
       for (int ch = 0; ch < c; ++ch) {
         float val = 0.0f;
@@ -152,7 +167,7 @@ int vice_upscale_lanczos_adaptive_ex(const float* src, int w, int h, int c, int 
           float edge_energy = std::max(local_delta, WIDE_W * wide_delta);
 
           if (edge_energy > NOISE_FLOOR) {
-            float linear_center = p0 + (float)frac * (p1 - p0);
+            float linear_center = p0 + frac * (p1 - p0);
             float wide_center = 0.5f * (pm1 + p2);
             float curvature = linear_center - wide_center;
             float boost = BOOST * std::min(1.0f, (edge_energy - NOISE_FLOOR) * BOOST_SLOPE);

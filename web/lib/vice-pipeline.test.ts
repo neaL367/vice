@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { linearToSrgb, srgbToLinear } from "./pipeline/color";
 import { bilinearScale, lanczosAdaptiveScale } from "./pipeline/kernels";
-import { measureResidual, projectBox, projectClamp } from "./pipeline/projection";
+import { measureResidual, projectBox, projectClamp, projectMultiGrid } from "./pipeline/projection";
 import { planOverlap, reflectIndex, tiledUpscaleLanczos } from "./pipeline/tiler";
 
 describe("vice-pipeline", () => {
@@ -135,5 +135,19 @@ describe("vice-pipeline", () => {
         expect(measureResidual(y, raw, w, h, s, c)).toBeLessThan(1e-5);
       }
     }
+  });
+
+  test("hierarchical multi-grid consistency solver satisfies exact box downscale", () => {
+    const w = 16;
+    const h = 12;
+    const s = 2;
+    const c = 4;
+    const y = new Float32Array(w * h * c);
+    const raw = new Float32Array(w * s * h * s * c);
+    for (let i = 0; i < y.length; i++) y[i] = (i % 13) / 13;
+    for (let i = 0; i < raw.length; i++) raw[i] = (i % 29) / 29;
+
+    projectMultiGrid(y, raw, w, h, s, c, 2);
+    expect(measureResidual(y, raw, w, h, s, c)).toBeLessThan(1e-5);
   });
 });

@@ -124,16 +124,21 @@ export function lanczosAdaptiveScale(
 
   // Pass 1: Horizontal scale (w x h -> W x h)
   const tmp = new Float32Array(W * h * c);
+  const xCoords = new Array<{ baseIdx: number; frac: number; lutOffset: number }>(W);
   for (let x = 0; x < W; x++) {
     const srcX = (x + 0.5) / scale - 0.5;
     const baseIdx = Math.floor(srcX);
     const frac = srcX - baseIdx;
     const lutIdx = Math.min(LANCZOS_LUT_STEPS - 1, Math.max(0, (frac * LANCZOS_LUT_STEPS) | 0));
-    const lutOffset = lutIdx * 6;
+    xCoords[x] = { baseIdx, frac, lutOffset: lutIdx * 6 };
+  }
 
-    for (let y = 0; y < h; y++) {
-      const rowSrc = y * w;
-      const rowDst = y * W;
+  for (let y = 0; y < h; y++) {
+    const rowSrc = y * w;
+    const rowDst = y * W;
+
+    for (let x = 0; x < W; x++) {
+      const { baseIdx, frac, lutOffset } = xCoords[x];
 
       for (let ch = 0; ch < c; ch++) {
         let val = 0;

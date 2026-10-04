@@ -201,6 +201,56 @@ static void test_project_smooth() {
   }
 }
 
+static void test_project_multigrid() {
+  int w = 16, h = 12, s = 2, c = 4;
+  int W = w * s, H = h * s;
+  std::vector<float> y(w * h * c), raw(W * H * c);
+  for (size_t i = 0; i < y.size(); i++) y[i] = (float)(i % 13) / 13.0f;
+  for (size_t i = 0; i < raw.size(); i++) raw[i] = (float)(i % 29) / 29.0f;
+  vice_project_multigrid(y.data(), raw.data(), w, h, s, c, 2);
+  double worst = 0;
+  for (int by = 0; by < h; by++) {
+    for (int bx = 0; bx < w; bx++) {
+      for (int ch = 0; ch < c; ch++) {
+        double sum = 0;
+        for (int dy = 0; dy < s; dy++)
+          for (int dx = 0; dx < s; dx++)
+            sum += raw[((size_t)(by * s + dy) * W + bx * s + dx) * c + ch];
+        double mean = sum / (s * s);
+        worst = std::max(worst, std::abs(mean - y[((size_t)by * w + bx) * c + ch]));
+      }
+    }
+  }
+  printf("multigrid worst=%g\n", worst);
+  CHECK(worst < 1e-5);
+}
+
+static void test_streaming_strip() {
+  int in_w = 32, in_h = 48, scale = 2, c = 4, band_h = 16;
+  int out_w = in_w * scale, out_h = in_h * scale;
+  vice_stream_ctx* sctx = vice_stream_create(in_w, in_h, scale, c, band_h);
+  CHECK(sctx != nullptr);
+
+  std::vector<float> chunk(16 * in_w * c, 0.4f);
+  CHECK(vice_stream_push_input_rows(sctx, chunk.data(), 16) == 0);
+  CHECK(vice_stream_push_input_rows(sctx, chunk.data(), 16) == 0);
+  CHECK(vice_stream_push_input_rows(sctx, chunk.data(), 16) == 0);
+
+  int total_emitted = 0;
+  std::vector<unsigned char> out_band(band_h * out_w * c);
+  while (total_emitted < out_h) {
+    CHECK(vice_stream_has_next_band(sctx) == 1);
+    int written_rows = 0;
+    int res = vice_stream_pull_band(sctx, out_band.data(), &written_rows);
+    CHECK(res >= 0);
+    CHECK(written_rows > 0);
+    total_emitted += written_rows;
+  }
+  CHECK(total_emitted == out_h);
+  vice_stream_destroy(sctx);
+  printf("streaming_strip ok total_emitted=%d\n", total_emitted);
+}
+
 int main() {
   test_project_exact();
   test_scales();
@@ -210,6 +260,8 @@ int main() {
   test_metrics();
   test_upscale_lanczos_adaptive();
   test_project_smooth();
+  test_project_multigrid();
+  test_streaming_strip();
   printf("ALL PASS\n");
   return 0;
 }

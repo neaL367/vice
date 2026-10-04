@@ -71,3 +71,81 @@ void vice_project_smooth(const float* y, float* raw, int w, int h, int s, int c,
     }
   }
 }
+
+void vice_project_multigrid(const float* y, float* raw, int w, int h, int s, int c,
+                            int cycles) {
+  const int W = w * s;
+  const int H = h * s;
+  const double inv = 1.0 / (double(s) * s);
+
+  for (int cyc = 0; cyc < cycles; ++cyc) {
+    std::vector<float> d0((size_t)w * h * c);
+    for (int by = 0; by < h; ++by) {
+      for (int bx = 0; bx < w; ++bx) {
+        for (int ch = 0; ch < c; ++ch) {
+          double sum = 0.0;
+          for (int dy = 0; dy < s; ++dy) {
+            for (int dx = 0; dx < s; ++dx) {
+              sum += raw[((by * s + dy) * W + bx * s + dx) * c + ch];
+            }
+          }
+          d0[((size_t)by * w + bx) * c + ch] =
+              y[((size_t)by * w + bx) * c + ch] - (float)(sum * inv);
+        }
+      }
+    }
+
+    if (w >= 4 && h >= 4) {
+      const int cw = w / 2;
+      const int ch = h / 2;
+      std::vector<float> d1((size_t)cw * ch * c, 0.0f);
+      for (int cy = 0; cy < ch; ++cy) {
+        for (int cx = 0; cx < cw; ++cx) {
+          for (int ch_idx = 0; ch_idx < c; ++ch_idx) {
+            float block_sum = 0.0f;
+            for (int ry = 0; ry < 2; ++ry) {
+              for (int rx = 0; rx < 2; ++rx) {
+                int fy = cy * 2 + ry;
+                int fx = cx * 2 + rx;
+                block_sum += d0[((size_t)fy * w + fx) * c + ch_idx];
+              }
+            }
+            d1[((size_t)cy * cw + cx) * c + ch_idx] = block_sum * 0.25f;
+          }
+        }
+      }
+
+      const float coarse_scale = (float)(s * 2);
+      for (int py = 0; py < H; ++py) {
+        float fcy = ((float)py + 0.5f) / coarse_scale - 0.5f;
+        int cy0 = (int)(fcy < 0 ? -1 : fcy);
+        float tcy = fcy - (float)cy0;
+        int cya = cy0 < 0 ? 0 : (cy0 >= ch ? ch - 1 : cy0);
+        int cyb = cy0 + 1 >= ch ? ch - 1 : (cy0 + 1 < 0 ? 0 : cy0 + 1);
+
+        for (int px = 0; px < W; ++px) {
+          float fcx = ((float)px + 0.5f) / coarse_scale - 0.5f;
+          int cx0 = (int)(fcx < 0 ? -1 : fcx);
+          float tcx = fcx - (float)cx0;
+          int cxa = cx0 < 0 ? 0 : (cx0 >= cw ? cw - 1 : cx0);
+          int cxb = cx0 + 1 >= cw ? cw - 1 : (cx0 + 1 < 0 ? 0 : cx0 + 1);
+
+          for (int ch_idx = 0; ch_idx < c; ++ch_idx) {
+            float a = d1[((size_t)cya * cw + cxa) * c + ch_idx];
+            float b = d1[((size_t)cya * cw + cxb) * c + ch_idx];
+            float cc = d1[((size_t)cyb * cw + cxa) * c + ch_idx];
+            float e = d1[((size_t)cyb * cw + cxb) * c + ch_idx];
+            float top = a + (b - a) * tcx;
+            float bot = cc + (e - cc) * tcx;
+            float corr = top + (bot - top) * tcy;
+            raw[((size_t)py * W + px) * c + ch_idx] += corr * 0.85f;
+          }
+        }
+      }
+    }
+
+    vice_project_smooth(y, raw, w, h, s, c, 1);
+  }
+
+  vice_project_box(y, raw, w, h, s, c);
+}

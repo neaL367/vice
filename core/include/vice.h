@@ -82,6 +82,20 @@ void vice_project_box(const float* y, float* raw, int w, int h, int s, int c);
 void vice_project_smooth(const float* y, float* raw, int w, int h, int s, int c, int iterations);
 /* Smooth back-projection rounds used by vice_project. */
 #define VICE_SMOOTH_ITERS 4
+
+/* Hierarchical 2-level multi-grid consistency solver: coarse-to-fine residual restriction
+   and prolongation eliminates low-frequency haloing and accelerates convergence. */
+void vice_project_multigrid(const float* y, float* raw, int w, int h, int s, int c, int cycles);
+
+/* Streaming strip / band context for memory-bounded processing of gigapixel images.
+   Requires only a rolling ring buffer in memory at any time (~16MB to 32MB). */
+typedef struct vice_stream_ctx vice_stream_ctx;
+vice_stream_ctx* vice_stream_create(int in_w, int in_h, int scale, int channels, int band_h);
+int vice_stream_push_input_rows(vice_stream_ctx* sctx, const float* in_rows, int row_count);
+int vice_stream_has_next_band(const vice_stream_ctx* sctx);
+int vice_stream_pull_band(vice_stream_ctx* sctx, unsigned char* out_bytes, int* written_rows);
+void vice_stream_destroy(vice_stream_ctx* sctx);
+
 float vice_srgb_to_linear(float v);
 float vice_linear_to_srgb(float v);
 float vice_fast_linear_to_srgb(float v);
