@@ -106,6 +106,7 @@ export function UpscalerProvider({ children }: { children: ReactNode }) {
         ctx.fillRect(0, 0, canvas.width, canvas.height);
       }
       ctx.drawImage(img, 0, 0);
+      const quality = exportFormat === "webp" ? 1.0 : 0.95;
       canvas.toBlob(
         (blob) => {
           if (!active || !blob) return;
@@ -113,7 +114,7 @@ export function UpscalerProvider({ children }: { children: ReactNode }) {
           setCustomFormatUrl({ format: exportFormat, url, id: selectedResult.id });
         },
         mime,
-        0.92,
+        quality,
       );
     };
     return () => {

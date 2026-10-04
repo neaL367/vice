@@ -193,4 +193,37 @@ describe("wasm parity", () => {
       core.destroy(ctx);
     }
   });
+
+  test("ViceCore finishPng applies lossless compression and auto-prunes opaque alpha to RGB", async () => {
+    const { ViceCore } = await import("./vice-wasm");
+    const core = await ViceCore.load("../public/");
+    if (!core) return;
+    const w = 16;
+    const h = 16;
+    const c = 4;
+    const y = new Float32Array(w * h * c);
+    // Fill RGB with gradient and Alpha with 1.0 (opaque)
+    for (let i = 0; i < w * h; i++) {
+      y[i * c + 0] = (i % 16) / 16;
+      y[i * c + 1] = ((i * 3) % 16) / 16;
+      y[i * c + 2] = ((i * 7) % 16) / 16;
+      y[i * c + 3] = 1.0; // 100% opaque
+    }
+
+    const ctx = core.create(w, h, 2, c);
+    core.setInput(ctx, y);
+    core.upscale(ctx);
+    core.project(ctx);
+
+    const png = core.finishPng(ctx, w * 2, h * 2, c);
+    expect(png[0]).toBe(137); // PNG signature
+    expect(png[1]).toBe(80);
+
+    // Byte 25 in standard PNG IHDR is the Color Type: 2 for RGB, 6 for RGBA
+    // With lossless alpha pruning, opaque images are encoded as RGB (type 2)
+    const colorType = png[25];
+    expect(colorType).toBe(2);
+
+    core.destroy(ctx);
+  });
 });

@@ -70,6 +70,7 @@ static unsigned filter_row(const unsigned char* row, const unsigned char* prev,
       case 0: v = row[i]; break;
       case 1: v = row[i] - a; break;
       case 2: v = row[i] - b; break;
+      case 3: v = row[i] - ((a + b) >> 1); break;
       case 4: v = row[i] - paeth_pred(a, b, cc); break;
       default: v = row[i]; break;
     }
@@ -91,6 +92,20 @@ int vice_encode_png_ex(const unsigned char* rgba, int w, int h, int channels,
   if (w <= 0 || h <= 0 || (channels != 3 && channels != 4)) return -1;
   if (!rgba) return -1;
   out.clear();
+
+  // Lossless Alpha Pruning: if an RGBA image has 100% opaque alpha (all 255),
+  // drop alpha channel to encode 3-channel RGB. Saves 25% data with ZERO quality loss.
+  bool has_alpha = false;
+  if (channels == 4) {
+    for (size_t i = 0; i < (size_t)w * h; ++i) {
+      if (rgba[i * 4 + 3] < 255) {
+        has_alpha = true;
+        break;
+      }
+    }
+  }
+  const int out_channels = (channels == 4 && has_alpha) ? 4 : 3;
+
   const unsigned char sig[8] = {137, 80, 78, 71, 13, 10, 26, 10};
   out.insert(out.end(), sig, sig + 8);
   unsigned char ihdr[13];
@@ -103,7 +118,7 @@ int vice_encode_png_ex(const unsigned char* rgba, int w, int h, int channels,
   ihdr[6] = (unsigned char)(h >> 8);
   ihdr[7] = (unsigned char)h;
   ihdr[8] = 8;
-  ihdr[9] = (channels == 4) ? 6 : 2;
+  ihdr[9] = (out_channels == 4) ? 6 : 2;
   ihdr[10] = ihdr[11] = ihdr[12] = 0;
   chunk(out, "IHDR", ihdr, 13);
 
@@ -114,7 +129,7 @@ int vice_encode_png_ex(const unsigned char* rgba, int w, int h, int channels,
     mz_ulong comp_bound = mz_compressBound((mz_ulong)icc_size);
     std::vector<unsigned char> comp_icc((size_t)comp_bound);
     mz_ulong comp_len = comp_bound;
-    if (mz_compress2(comp_icc.data(), &comp_len, icc_data, (mz_ulong)icc_size, 6) == MZ_OK) {
+    if (mz_compress2(comp_icc.data(), &comp_len, icc_data, (mz_ulong)icc_size, 9) == MZ_OK) {
       std::vector<unsigned char> iccp_payload;
       iccp_payload.reserve(name_len + 1 + comp_len);
       iccp_payload.insert(iccp_payload.end(), (const unsigned char*)profile_name, (const unsigned char*)profile_name + name_len);
@@ -124,34 +139,53 @@ int vice_encode_png_ex(const unsigned char* rgba, int w, int h, int channels,
     }
   }
 
-  size_t stride = (size_t)w * channels;
+  const size_t in_stride = (size_t)w * channels;
+  const size_t out_stride = (size_t)w * out_channels;
+  std::vector<unsigned char> packed_row;
+  if (channels == 4 && out_channels == 3) {
+    packed_row.resize(out_stride);
+  }
+
   std::vector<unsigned char> raw;
-  raw.reserve((stride + 1) * (size_t)h);
-  std::vector<unsigned char> cand(stride + 1), prev(stride, 0);
-  std::vector<unsigned char> crow(stride + 1);
+  raw.reserve((out_stride + 1) * (size_t)h);
+  std::vector<unsigned char> cand(out_stride + 1), prev(out_stride, 0);
+  std::vector<unsigned char> crow(out_stride + 1);
   bool have_prev = false;
+
   for (int y = 0; y < h; y++) {
-    const unsigned char* row = rgba + (size_t)y * stride;
+    const unsigned char* in_row = rgba + (size_t)y * in_stride;
+    const unsigned char* row = in_row;
+    if (channels == 4 && out_channels == 3) {
+      for (int x = 0; x < w; ++x) {
+        packed_row[x * 3 + 0] = in_row[x * 4 + 0];
+        packed_row[x * 3 + 1] = in_row[x * 4 + 1];
+        packed_row[x * 3 + 2] = in_row[x * 4 + 2];
+      }
+      row = packed_row.data();
+    }
+
     unsigned best_sad = 0;
     int best_f = 0;
-    for (int f : {0, 1, 2, 4}) {
+    // Test all 5 standard PNG filters: 0=None, 1=Sub, 2=Up, 3=Average, 4=Paeth
+    for (int f : {0, 1, 2, 3, 4}) {
       unsigned sad = filter_row(row, have_prev ? prev.data() : nullptr, cand.data(),
-                                stride, channels, f);
+                                out_stride, out_channels, f);
       if (f == 0 || sad < best_sad) {
         best_sad = sad;
         best_f = f;
-        std::memcpy(crow.data(), cand.data(), stride + 1);
+        std::memcpy(crow.data(), cand.data(), out_stride + 1);
       }
     }
-    raw.insert(raw.end(), crow.data(), crow.data() + stride + 1);
-    std::memcpy(prev.data(), row, stride);
+    raw.insert(raw.end(), crow.data(), crow.data() + out_stride + 1);
+    std::memcpy(prev.data(), row, out_stride);
     have_prev = true;
   }
 
   mz_ulong bound = mz_compressBound((mz_ulong)raw.size());
   std::vector<unsigned char> z((size_t)bound);
   mz_ulong zlen = bound;
-  if (mz_compress2(z.data(), &zlen, raw.data(), (mz_ulong)raw.size(), 6) != MZ_OK)
+  // Level 9 = Maximum DEFLATE compression with exhaustive match search
+  if (mz_compress2(z.data(), &zlen, raw.data(), (mz_ulong)raw.size(), 9) != MZ_OK)
     return -1;
   chunk(out, "IDAT", z.data(), (size_t)zlen);
   chunk(out, "IEND", nullptr, 0);
