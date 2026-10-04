@@ -3,6 +3,30 @@
  * - Pass 1: Horizontal Lanczos-3 in Linear Light + Deringing Clamping
  * - Pass 2: Vertical Lanczos-3 with Diagonal Steering + Null-Space Sharpness
  * - Pass 3: Consistency Projection P(I_high) = I_low + sRGB Encoding
+ *
+ * DIVERGENCE vs the C++ core (audited, no GPU in CI to execute):
+ * The tanh/eps/alpha/shock-uniform fixes match the core exactly, but the
+ * following structural differences remain BY CONSTRUCTION — do not "fix"
+ * them without a GPU run of web/e2e/webgpu.spec.ts:
+ * 1. Sharpness stencil: C++ blurs axis neighbors (n/s/w/e); the shader
+ *    reuses p0/p1 (vertical) + tl/br (diagonal steering samples). Same
+ *    formula shape, different neighborhood, different pixels.
+ * 2. Shock stencil: C++ uses full 3x3 central differences on the output;
+ *    the shader reuses the reduced steering stencil (wider x-span, mixed
+ *    y-span). Same PDE, different discretization. (The 0.12*shock scale
+ *    IS equivalent: 0.12*min(1,S) == 0.12*S for S in [0,1].)
+ * 3. Steering gate: C++ decides per channel; the shader steers all channels
+ *    when ANY channel trips 0.15 (weights/avgs stay per-channel).
+ * 4. Projection is box-only (PASS3, 24-iter bisection): no multigrid, no
+ *    smooth pass. Same residual guarantee, different low frequencies —
+ *    same divergence class as the streaming strip path.
+ * 5. Alpha/translucency UNVERIFIED: rgb is linearized straight from the
+ *    texture with no un-premultiply step (the WASM path un-premultiplies
+ *    properly). Opaque and fully-transparent corners are covered by the
+ *    matrix; translucent gradients are not trusted on this path.
+ * 6. Acutance constants (0.45 boost, 0.008 floor, slope 6, wide 0.5) are
+ *    hardcoded shipped defaults in both the shader and the TS mirror; a
+ *    lab retune would need threading through Params like shock.
  */
 
 export const WGSL_COMMON = /* wgsl */ `

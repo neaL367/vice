@@ -7,8 +7,12 @@ import { join } from "node:path";
 // WebGPU-only quality matrix. The WebGPU route is a degraded fallback
 // (box-only projection, no multigrid; no ICC embedding), so this file
 // guards against total divergence rather than asserting WASM parity.
-// Skips cleanly where no adapter exists (e.g. headless CI here).
-// Thresholds are provisional: tighten on real-GPU CI after measuring.
+// Skips cleanly where no adapter exists. Environment record: this repo's
+// machine has no WebGPU at all (navigator.gpu absent in headless shell,
+// full Chromium 153, and headed Chromium alike), so thresholds below are
+// provisional. To lock them: run this spec on a GPU machine, copy the
+// WEBGPU MATRIX log line, set bounds with ~2x headroom. Structural
+// divergences vs the C++ core are documented in lib/webgpu/shaders.ts.
 
 interface WebGPUCaseResult {
   outW: number;
@@ -64,6 +68,8 @@ test("webgpu photo path: dims, flats, alpha, residual", async ({ page }) => {
     const w = window as unknown as { __webgpuProbe: WebGPUProbe };
     return w.__webgpuProbe.runMatrix();
   });
+  // Log measured values: GPU CI output is the source for locked bounds.
+  console.log(`WEBGPU MATRIX: ${JSON.stringify(m)}`);
   const photo = m["photoBW"];
   expect([photo.outW, photo.outH]).toEqual([16, 16]);
   expect(photo.residual).toBeLessThan(0.01);
