@@ -61,6 +61,9 @@ void vice_tuning_defaults(ViceTuning* t) {
   t->wide_weight = 0.5f;
   t->steer_thresh = 0.15f;
   t->steer_weight = 0.2f;
+  t->dering = 1.0f;
+  t->sharpness = 0.2f;
+  t->preset = 0;
 }
 
 int vice_upscale_lanczos_adaptive(const float* src, int w, int h, int c, int scale, float* dst) {
@@ -77,12 +80,33 @@ int vice_upscale_lanczos_adaptive_ex(const float* src, int w, int h, int c, int 
 
   const int W = w * scale;
   const int H = h * scale;
+
+  // Preset 2: Pixel Art (exact nearest-neighbor integer box expansion)
+  if (tuning->preset == 2) {
+    for (int by = 0; by < h; ++by) {
+      for (int bx = 0; bx < w; ++bx) {
+        for (int dy = 0; dy < scale; ++dy) {
+          for (int dx = 0; dx < scale; ++dx) {
+            for (int ch = 0; ch < c; ++ch) {
+              dst[(((size_t)by * scale + dy) * W + bx * scale + dx) * c + ch] =
+                  src[((size_t)by * w + bx) * c + ch];
+            }
+          }
+        }
+      }
+    }
+    return 0;
+  }
+
   const float NOISE_FLOOR = tuning->noise_floor;
-  const float BOOST = tuning->boost;
+  // Preset 1 (Smooth / CGI): suppress acutance boosting to avoid ringing on rendered surfaces
+  const float BOOST = tuning->preset == 1 ? 0.0f : tuning->boost;
   const float BOOST_SLOPE = tuning->boost_slope;
   const float WIDE_W = tuning->wide_weight;
   const float STEER_T = tuning->steer_thresh;
   const float STEER_W = tuning->steer_weight;
+  const float DERING = std::max(0.0f, std::min(1.0f, tuning->dering));
+  const float SHARPNESS = std::max(0.0f, std::min(1.0f, tuning->sharpness));
 
   // Pass 1: Horizontal scale (w x h -> W x h)
   std::vector<float> tmp((size_t)W * h * c);
@@ -122,21 +146,25 @@ int vice_upscale_lanczos_adaptive_ex(const float* src, int w, int h, int c, int 
         }
 
         // Noise-gated multi-scale acutance boost
-        float local_delta = std::abs(p1 - p0);
-        float wide_delta = std::abs(p2 - pm1);
-        float edge_energy = std::max(local_delta, WIDE_W * wide_delta);
+        if (BOOST > 0.0f) {
+          float local_delta = std::abs(p1 - p0);
+          float wide_delta = std::abs(p2 - pm1);
+          float edge_energy = std::max(local_delta, WIDE_W * wide_delta);
 
-        if (edge_energy > NOISE_FLOOR) {
-          float linear_center = p0 + (float)frac * (p1 - p0);
-          float wide_center = 0.5f * (pm1 + p2);
-          float curvature = linear_center - wide_center;
-          float boost = BOOST * std::min(1.0f, (edge_energy - NOISE_FLOOR) * BOOST_SLOPE);
-          val += boost * curvature;
+          if (edge_energy > NOISE_FLOOR) {
+            float linear_center = p0 + (float)frac * (p1 - p0);
+            float wide_center = 0.5f * (pm1 + p2);
+            float curvature = linear_center - wide_center;
+            float boost = BOOST * std::min(1.0f, (edge_energy - NOISE_FLOOR) * BOOST_SLOPE);
+            val += boost * curvature;
+          }
         }
 
-        // Anti-ringing local envelope clamp
-        if (val < min4) val = min4;
-        if (val > max4) val = max4;
+        // Anti-ringing local envelope clamp (interpolated by DERING weight)
+        if (DERING > 0.0f) {
+          float clamped = val < min4 ? min4 : (val > max4 ? max4 : val);
+          val = (1.0f - DERING) * val + DERING * clamped;
+        }
         tmp[(row_dst + x) * c + ch] = val;
       }
     }
@@ -179,16 +207,18 @@ int vice_upscale_lanczos_adaptive_ex(const float* src, int w, int h, int c, int 
         }
 
         // Noise-gated multi-scale vertical acutance
-        float local_delta = std::abs(p1 - p0);
-        float wide_delta = std::abs(p2 - pm1);
-        float edge_energy = std::max(local_delta, WIDE_W * wide_delta);
+        if (BOOST > 0.0f) {
+          float local_delta = std::abs(p1 - p0);
+          float wide_delta = std::abs(p2 - pm1);
+          float edge_energy = std::max(local_delta, WIDE_W * wide_delta);
 
-        if (edge_energy > NOISE_FLOOR) {
-          float linear_center = p0 + (float)frac * (p1 - p0);
-          float wide_center = 0.5f * (pm1 + p2);
-          float curvature = linear_center - wide_center;
-          float boost = BOOST * std::min(1.0f, (edge_energy - NOISE_FLOOR) * BOOST_SLOPE);
-          val += boost * curvature;
+          if (edge_energy > NOISE_FLOOR) {
+            float linear_center = p0 + (float)frac * (p1 - p0);
+            float wide_center = 0.5f * (pm1 + p2);
+            float curvature = linear_center - wide_center;
+            float boost = BOOST * std::min(1.0f, (edge_energy - NOISE_FLOOR) * BOOST_SLOPE);
+            val += boost * curvature;
+          }
         }
 
         // Diagonal Edge Steering: evaluate 45° vs 135° cross gradients
@@ -213,12 +243,38 @@ int vice_upscale_lanczos_adaptive_ex(const float* src, int w, int h, int c, int 
           val = (1.0f - steer_weight) * val + steer_weight * diag_avg;
         }
 
-        // Anti-ringing local envelope clamp
-        if (val < min4) val = min4;
-        if (val > max4) val = max4;
+        // Anti-ringing local envelope clamp (interpolated by DERING weight)
+        if (DERING > 0.0f) {
+          float clamped = val < min4 ? min4 : (val > max4 ? max4 : val);
+          val = (1.0f - DERING) * val + DERING * clamped;
+        }
         dst[(row_dst + x) * c + ch] = val;
       }
     }
+  }
+
+  // Pass 3: Null-Space Micro-Texture Sharpness Enhancement
+  if (SHARPNESS > 0.001f) {
+    std::vector<float> sharp_tmp((size_t)W * H * c);
+    for (int y = 0; y < H; ++y) {
+      int y_prev = clamp_idx(y - 1, H - 1);
+      int y_next = clamp_idx(y + 1, H - 1);
+      for (int x = 0; x < W; ++x) {
+        int x_prev = clamp_idx(x - 1, W - 1);
+        int x_next = clamp_idx(x + 1, W - 1);
+        for (int ch = 0; ch < c; ++ch) {
+          float center = dst[((size_t)y * W + x) * c + ch];
+          float n = dst[((size_t)y_prev * W + x) * c + ch];
+          float s = dst[((size_t)y_next * W + x) * c + ch];
+          float w_px = dst[((size_t)y * W + x_prev) * c + ch];
+          float e = dst[((size_t)y * W + x_next) * c + ch];
+          float blur = 0.5f * center + 0.125f * (n + s + w_px + e);
+          float hp = center - blur;
+          sharp_tmp[((size_t)y * W + x) * c + ch] = center + SHARPNESS * hp;
+        }
+      }
+    }
+    std::memcpy(dst, sharp_tmp.data(), sharp_tmp.size() * sizeof(float));
   }
 
   return 0;

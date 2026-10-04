@@ -5,10 +5,10 @@
 import {
   BYTE_TO_LINEAR_LUT,
   fastLinearToSrgb,
-  lanczosAdaptiveScale,
-  projectClamp,
   spatialTriangularDither,
-} from "../../lib/vice-pipeline";
+} from "../../lib/pipeline/color";
+import { lanczosAdaptiveScale } from "../../lib/pipeline/kernels";
+import { projectClamp } from "../../lib/pipeline/projection";
 import { MAX_OUTPUT_PIXELS } from "../../lib/limits";
 import { ViceCore } from "../../lib/vice-wasm";
 import { extractIccProfile } from "../../lib/icc";
@@ -108,7 +108,11 @@ export async function runViceUpscale(
       let mid: Float32Array;
       try {
         core.setInput(cctx1, lin);
-        core.upscale(cctx1);
+        core.upscale(cctx1, {
+          preset: opts.preset,
+          dering: opts.dering,
+          sharpness: opts.sharpness,
+        });
         core.project(cctx1);
         mid = core.downloadRaw(cctx1, w * 2 * h * 2 * 4);
       } finally {
@@ -120,7 +124,11 @@ export async function runViceUpscale(
       const cctx2 = core.create(w * 2, h * 2, 2, 4);
       try {
         core.setInput(cctx2, mid);
-        core.upscale(cctx2);
+        core.upscale(cctx2, {
+          preset: opts.preset,
+          dering: opts.dering,
+          sharpness: opts.sharpness,
+        });
         onProgress({ band: 3, totalBands: 4, stage: "Projecting…", backend });
         throwIfAborted(opts.signal);
         core.project(cctx2);
@@ -146,6 +154,9 @@ export async function runViceUpscale(
             outH: H,
             hasIcc: !!icc,
             chained4x: true,
+            preset: opts.preset,
+            dering: opts.dering,
+            sharpness: opts.sharpness,
           },
         };
       } finally {
@@ -158,7 +169,11 @@ export async function runViceUpscale(
     const cctx = core.create(w, h, scale, 4);
     try {
       core.setInput(cctx, lin);
-      core.upscale(cctx);
+      core.upscale(cctx, {
+        preset: opts.preset,
+        dering: opts.dering,
+        sharpness: opts.sharpness,
+      });
       onProgress({ band: 2, totalBands: 3, stage: "Projecting…", backend });
       throwIfAborted(opts.signal);
       core.project(cctx);
@@ -185,6 +200,9 @@ export async function runViceUpscale(
           outH: H,
           hasIcc: !!icc,
           chained4x: false,
+          preset: opts.preset,
+          dering: opts.dering,
+          sharpness: opts.sharpness,
         },
       };
     } finally {
@@ -197,12 +215,24 @@ export async function runViceUpscale(
   let raw: Float32Array;
   let residual: number;
   if (scale === 4 && opts.chained4x) {
-    const mid = lanczosAdaptiveScale(lin, w, h, 4, 2);
+    const mid = lanczosAdaptiveScale(lin, w, h, 4, 2, {
+      preset: opts.preset,
+      dering: opts.dering,
+      sharpness: opts.sharpness,
+    });
     projectClamp(lin, mid, w, h, 2, 4, 3);
-    raw = lanczosAdaptiveScale(mid, w * 2, h * 2, 4, 2);
+    raw = lanczosAdaptiveScale(mid, w * 2, h * 2, 4, 2, {
+      preset: opts.preset,
+      dering: opts.dering,
+      sharpness: opts.sharpness,
+    });
     residual = projectClamp(mid, raw, w * 2, h * 2, 2, 4, 3);
   } else {
-    raw = lanczosAdaptiveScale(lin, w, h, 4, scale);
+    raw = lanczosAdaptiveScale(lin, w, h, 4, scale, {
+      preset: opts.preset,
+      dering: opts.dering,
+      sharpness: opts.sharpness,
+    });
     residual = projectClamp(lin, raw, w, h, scale, 4, 3);
   }
   throwIfAborted(opts.signal);
@@ -220,6 +250,9 @@ export async function runViceUpscale(
       outH: H,
       hasIcc: !!icc,
       chained4x: !!opts.chained4x,
+      preset: opts.preset,
+      dering: opts.dering,
+      sharpness: opts.sharpness,
     },
   };
 }
@@ -285,7 +318,14 @@ if (isWorkerScope()) {
       (progress) => {
         scope.postMessage({ type: "progress", jobId: msg.jobId, progress });
       },
-      { signal: ctrl.signal, base: msg.base, chained4x: msg.chained4x },
+      {
+        signal: ctrl.signal,
+        base: msg.base,
+        chained4x: msg.chained4x,
+        preset: msg.preset,
+        dering: msg.dering,
+        sharpness: msg.sharpness,
+      },
     ).then(
       ({ blob, meta }) => {
         controllers.delete(msg.jobId);

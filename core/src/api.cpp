@@ -129,11 +129,21 @@ int vice_project(vice_ctx* ctx) {
   return 0;
 }
 
-int vice_upscale(vice_ctx* ctx) {
+int vice_upscale_ex(vice_ctx* ctx, const ViceTuning* tuning) {
   if (!ctx || ctx->y.empty() || ctx->raw.empty()) return -1;
-  return vice_upscale_lanczos_adaptive(ctx->y.data(), ctx->in_w, ctx->in_h,
-                                       ctx->channels, ctx->scale,
-                                       ctx->raw.data());
+  ViceTuning t;
+  if (tuning) {
+    t = *tuning;
+  } else {
+    vice_tuning_defaults(&t);
+  }
+  return vice_upscale_lanczos_adaptive_ex(ctx->y.data(), ctx->in_w, ctx->in_h,
+                                          ctx->channels, ctx->scale,
+                                          ctx->raw.data(), &t);
+}
+
+int vice_upscale(vice_ctx* ctx) {
+  return vice_upscale_ex(ctx, nullptr);
 }
 
 int vice_process_band(vice_ctx* ctx, int band, unsigned char* out_rows,

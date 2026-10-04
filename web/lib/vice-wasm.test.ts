@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { projectBox, projectSmooth, SMOOTH_ITERS } from "./vice-pipeline";
+import { projectBox, projectSmooth, SMOOTH_ITERS } from "./pipeline/projection";
 
 // WASM-vs-TS parity: same C++ source as native, compiled with Emscripten.
 // Catches toolchain divergence (fast-math, SIMD, f32 precision).
@@ -171,5 +171,26 @@ describe("wasm parity", () => {
     const png = core.finishPng(ctx2, w * 4, h * 4, c);
     expect(png[0]).toBe(137);
     core.destroy(ctx2);
+  });
+
+  test("ViceCore upscale with tuning options (pixel-art, dering, sharpness) satisfies box consistency", async () => {
+    const { ViceCore } = await import("./vice-wasm");
+    const core = await ViceCore.load("../public/");
+    if (!core) return;
+    const w = 8;
+    const h = 8;
+    const c = 4;
+    const y = new Float32Array(w * h * c);
+    for (let i = 0; i < y.length; i++) y[i] = (i % 17) / 17;
+
+    for (const preset of ["photo", "smooth", "pixel-art"] as const) {
+      const ctx = core.create(w, h, 2, c);
+      core.setInput(ctx, y);
+      core.upscale(ctx, { preset, dering: 0.8, sharpness: 0.4 });
+      core.project(ctx);
+      const residual = core.lastResidual(ctx);
+      expect(residual).toBeLessThan(0.05);
+      core.destroy(ctx);
+    }
   });
 });

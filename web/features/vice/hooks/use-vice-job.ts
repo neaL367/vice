@@ -9,6 +9,7 @@ import {
 } from "react";
 import type {
   ViceFile,
+  VicePreset,
   ViceProgress,
   ViceResult,
   ViceResultMeta,
@@ -16,11 +17,12 @@ import type {
 } from "../types/vice";
 import {
   cancelWorkerJob,
-  runOnWorkerThread,
+  runViceJob,
   spawnViceWorker,
   waitForWorkerReady,
   warmViceWorker,
 } from "../vice-client";
+import { initialState, viceJobReducer } from "./vice-job-reducer";
 
 const MAX_FILES = 10;
 const IMAGE_RE = /^image\/(png|jpeg|webp)$/;
@@ -29,8 +31,6 @@ function stageLabel(stage: string): string | null {
   if (stage === "done") return "Done";
   return null;
 }
-
-import { initialState, viceJobReducer } from "./vice-job-reducer";
 
 // ---------------------------------------------------------------------------
 // Hook
@@ -179,29 +179,18 @@ export function useViceJob() {
       w: Worker | null,
       onProg: (p: ViceProgress) => void,
     ): Promise<{ blob: Blob; meta: ViceResultMeta }> => {
-      if (!w) return runInline(file, onProg, batchCtrl.signal);
       const jobId = ++jobIdRef.current;
+      const opts = {
+        chained4x: state.chained4x,
+        preset: state.preset,
+        dering: state.dering,
+        sharpness: state.sharpness,
+      };
       try {
-        if (w !== readyRef.current) {
-          await waitForWorkerReady(w);
-          readyRef.current = w;
-        }
-        return await runOnWorkerThread(
-          w,
-          jobId,
-          file,
-          state.scale,
-          baseRef.current,
-          onProg,
-          state.chained4x
-        );
+        return await runViceJob(w, jobId, file, state.scale, baseRef.current, onProg, opts);
       } catch (e) {
         if (e instanceof DOMException && e.name === "AbortError") throw e;
-        console.warn("[Vice] Worker execution failed, attempting inline fallback:", e);
-        workerBrokenRef.current = true;
-        readyRef.current = null;
-        w.terminate();
-        if (workerRef.current === w) workerRef.current = null;
+        console.warn("[Vice] Primary job runner failed, falling back inline:", e);
         return runInline(file, onProg, batchCtrl.signal);
       }
     };
@@ -216,6 +205,9 @@ export function useViceJob() {
         signal,
         base: baseRef.current,
         chained4x: state.chained4x,
+        preset: state.preset,
+        dering: state.dering,
+        sharpness: state.sharpness,
       });
     };
 
@@ -310,6 +302,24 @@ export function useViceJob() {
     });
   }, []);
 
+  const setPreset = useCallback((preset: VicePreset) => {
+    startTransition(() => {
+      dispatch({ type: "SET_PRESET", preset });
+    });
+  }, []);
+
+  const setDering = useCallback((dering: number) => {
+    startTransition(() => {
+      dispatch({ type: "SET_DERING", dering });
+    });
+  }, []);
+
+  const setSharpness = useCallback((sharpness: number) => {
+    startTransition(() => {
+      dispatch({ type: "SET_SHARPNESS", sharpness });
+    });
+  }, []);
+
   return {
     files: state.files,
     results: state.results,
@@ -320,6 +330,12 @@ export function useViceJob() {
     setScale,
     chained4x: state.chained4x,
     setChained4x,
+    preset: state.preset,
+    setPreset,
+    dering: state.dering,
+    setDering,
+    sharpness: state.sharpness,
+    setSharpness,
     progress: state.progress,
     running: state.running,
     error: state.error,

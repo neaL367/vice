@@ -15,6 +15,8 @@ interface ViceCoreInstance {
     n: number,
   ): number;
   _vice_upscale?(ctx: number): number;
+  _vice_upscale_ex?(ctx: number, tuningPtr: number): number;
+  _vice_tuning_defaults?(tuningPtr: number): void;
   _vice_project(ctx: number): number;
   _vice_download_raw(ctx: number, outPtr: number, n: number): number;
   _vice_process_band(ctx: number, band: number, outPtr: number, countPtr: number): number;
@@ -89,7 +91,45 @@ export class ViceCore {
     return typeof this.core._vice_upscale === "function";
   }
 
-  upscale(ctx: number): void {
+  upscale(
+    ctx: number,
+    options?: {
+      preset?: "photo" | "smooth" | "pixel-art";
+      dering?: number;
+      sharpness?: number;
+    },
+  ): void {
+    if (this.core._vice_upscale_ex && options) {
+      const ptr = this.core._malloc(36);
+      if (!ptr) throw new Error("wasm malloc failed");
+      try {
+        if (this.core._vice_tuning_defaults) {
+          this.core._vice_tuning_defaults(ptr);
+        }
+        const view = new DataView(this.core.HEAPU8.buffer, ptr, 36);
+        if (options.dering !== undefined) {
+          view.setFloat32(24, Math.max(0, Math.min(1, options.dering)), true);
+        }
+        if (options.sharpness !== undefined) {
+          view.setFloat32(28, Math.max(0, Math.min(1, options.sharpness)), true);
+        }
+        if (options.preset !== undefined) {
+          const p =
+            options.preset === "smooth"
+              ? 1
+              : options.preset === "pixel-art"
+              ? 2
+              : 0;
+          view.setInt32(32, p, true);
+        }
+        if (this.core._vice_upscale_ex(ctx, ptr) !== 0) {
+          throw new Error("vice_upscale_ex failed");
+        }
+        return;
+      } finally {
+        this.core._free(ptr);
+      }
+    }
     if (this.core._vice_upscale && this.core._vice_upscale(ctx) !== 0)
       throw new Error("vice_upscale failed");
   }

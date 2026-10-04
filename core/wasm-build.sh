@@ -27,7 +27,7 @@ emcc -O3 -msimd128 -flto -fno-exceptions -fno-rtti \
   -sMAXIMUM_MEMORY=2147483648 \
   -sASSERTIONS=1 \
   -sENVIRONMENT=web,worker,node \
-  -sEXPORTED_FUNCTIONS=_vice_create,_vice_set_input,_vice_submit_raw_tile,_vice_upscale,_vice_upscale_lanczos_adaptive,_vice_upscale_lanczos_adaptive_ex,_vice_tuning_defaults,_vice_project,_vice_download_raw,_vice_process_band,_vice_finish_png,_vice_set_icc_profile,_vice_last_residual,_vice_destroy,_vice_project_box,_vice_project_smooth,_vice_srgb_to_linear,_vice_linear_to_srgb,_vice_fast_linear_to_srgb,_vice_fast_srgb_to_linear,_vice_spatial_triangular_dither,_malloc,_free \
+  -sEXPORTED_FUNCTIONS=_vice_create,_vice_set_input,_vice_submit_raw_tile,_vice_upscale,_vice_upscale_ex,_vice_upscale_lanczos_adaptive,_vice_upscale_lanczos_adaptive_ex,_vice_tuning_defaults,_vice_project,_vice_download_raw,_vice_process_band,_vice_finish_png,_vice_set_icc_profile,_vice_last_residual,_vice_destroy,_vice_project_box,_vice_project_smooth,_vice_srgb_to_linear,_vice_linear_to_srgb,_vice_fast_linear_to_srgb,_vice_fast_srgb_to_linear,_vice_spatial_triangular_dither,_malloc,_free \
   -sEXPORTED_RUNTIME_METHODS=HEAPF32,HEAPU8
 
 ls -la "$OUT/core.js" "$OUT/core.wasm"

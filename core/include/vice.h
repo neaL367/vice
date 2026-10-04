@@ -53,6 +53,9 @@ void vice_destroy(vice_ctx* ctx);
    Upscales ctx->y directly into ctx->raw with diagonal steering and noise-gated acutance. */
 int vice_upscale(vice_ctx* ctx);
 
+/* Native Lanczos-3 adaptive upscaler on context with explicit tuning parameters. */
+int vice_upscale_ex(vice_ctx* ctx, const struct ViceTuning* tuning);
+
 /* Pure helpers exposed for tests and standalone native pipelines. */
 int vice_upscale_lanczos_adaptive(const float* src, int w, int h, int c, int scale, float* dst);
 
@@ -66,6 +69,9 @@ typedef struct ViceTuning {
   float wide_weight;  /* weight of the 4-tap span in edge energy */
   float steer_thresh; /* diagonal asymmetry needed to steer */
   float steer_weight; /* max blend toward the diagonal average */
+  float dering;       /* anti-ringing clamp strength [0.0, 1.0] (default 1.0) */
+  float sharpness;    /* null-space high-pass sharpness boost [0.0, 1.0] (default 0.2) */
+  int   preset;       /* 0 = adaptive lanczos (photo), 1 = smooth (CGI), 2 = pixel art */
 } ViceTuning;
 void vice_tuning_defaults(ViceTuning* t);
 int vice_upscale_lanczos_adaptive_ex(const float* src, int w, int h, int c, int scale, float* dst,

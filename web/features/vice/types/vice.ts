@@ -3,6 +3,7 @@
 // for the pipeline scale, job state, and worker-thread RPC messages.
 
 export type ViceScale = 2 | 3 | 4;
+export type VicePreset = "photo" | "smooth" | "pixel-art";
 
 export interface ViceFile {
   file: File;
@@ -22,6 +23,9 @@ export interface ViceResult {
   scale: ViceScale;
   hasIcc?: boolean;
   chained4x?: boolean;
+  preset?: VicePreset;
+  dering?: number;
+  sharpness?: number;
 }
 
 export interface ViceProgress {
@@ -38,12 +42,18 @@ export interface ViceResultMeta {
   outH: number;
   hasIcc?: boolean;
   chained4x?: boolean;
+  preset?: VicePreset;
+  dering?: number;
+  sharpness?: number;
 }
 
 export interface ViceRunOptions {
   signal?: AbortSignal;
   base?: string; // page base URL (trailing slash). Absent -> bilinear only.
   chained4x?: boolean; // if scale is 4, run as 2x twice
+  preset?: VicePreset;
+  dering?: number;
+  sharpness?: number;
 }
 
 // --- Worker-thread RPC ----------------------------------------------------
@@ -56,6 +66,9 @@ export interface ViceRunMsg {
   scale: ViceScale;
   base: string; // page base URL, trailing slash. Asset root for model + ORT.
   chained4x?: boolean;
+  preset?: VicePreset;
+  dering?: number;
+  sharpness?: number;
 }
 export interface ViceCancelMsg {
   type: "cancel";

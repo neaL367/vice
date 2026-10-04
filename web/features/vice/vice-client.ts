@@ -8,13 +8,23 @@
 // path keeps `{ type: "module" }` intact and the browser loads real ESM.
 // Falls back inline when the asset is missing (dev without predev) or the
 // thread can't spawn — CSP, old browser, SSR import (never constructed there).
+import { isWebGPUSupported } from "../../lib/webgpu/webgpu-support";
+import { runWebGPUUpscale, warmupWebGPUPipelines } from "../../lib/webgpu/webgpu-upscaler";
 import type {
   ViceIncoming,
   ViceOutgoing,
+  VicePreset,
   ViceProgress,
   ViceResultMeta,
   ViceScale,
 } from "./types/vice";
+
+export interface ViceJobOptions {
+  chained4x?: boolean;
+  preset?: VicePreset;
+  dering?: number;
+  sharpness?: number;
+}
 
 const workerReadyMap = new WeakMap<Worker, Promise<void>>();
 
@@ -25,7 +35,6 @@ export function spawnViceWorker(): Worker | null {
       type: "module",
     });
 
-    // Synchronously listen for boot handshake so the event is never missed.
     const readyPromise = new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
         cleanup();
@@ -57,8 +66,6 @@ export function spawnViceWorker(): Worker | null {
   }
 }
 
-// Boot handshake: resolves when the thread posts ready, rejects on error
-// or silence. Uses the promise captured at spawn time to avoid race conditions.
 export function waitForWorkerReady(worker: Worker, timeoutMs = 8000): Promise<void> {
   const existing = workerReadyMap.get(worker);
   if (existing) return existing;
@@ -95,7 +102,7 @@ export function runOnWorkerThread(
   scale: ViceScale,
   base: string,
   onProgress: (p: ViceProgress) => void,
-  chained4x?: boolean,
+  options?: ViceJobOptions,
 ): Promise<{ blob: Blob; meta: ViceResultMeta }> {
   return new Promise((resolve, reject) => {
     const cleanup = () => {
@@ -127,9 +134,72 @@ export function runOnWorkerThread(
     };
     worker.addEventListener("message", onMessage);
     worker.addEventListener("error", onError);
-    const req: ViceIncoming = { type: "run", jobId, file, scale, base, chained4x };
+    const req: ViceIncoming = {
+      type: "run",
+      jobId,
+      file,
+      scale,
+      base,
+      chained4x: options?.chained4x,
+      preset: options?.preset,
+      dering: options?.dering,
+      sharpness: options?.sharpness,
+    };
     worker.postMessage(req);
   });
+}
+
+/**
+ * Universal job runner:
+ * 1. Checks if WebGPU is supported -> executes real-time compute pass (~8ms).
+ * 2. Falls back automatically to multi-threaded WASM Worker (~200ms).
+ */
+export async function runViceJob(
+  worker: Worker | null,
+  jobId: number,
+  file: File,
+  scale: ViceScale,
+  base: string,
+  onProgress: (p: ViceProgress) => void,
+  options?: ViceJobOptions,
+): Promise<{ blob: Blob; meta: ViceResultMeta }> {
+  // 1. Try ultra-fast WebGPU compute path if hardware is available
+  try {
+    const gpuOk = await isWebGPUSupported();
+    if (gpuOk && typeof createImageBitmap !== "undefined") {
+      onProgress({ band: 1, totalBands: 3, stage: "WebGPU Compute…", backend: "WebGPU" });
+      const bmp = await createImageBitmap(file);
+      try {
+        const gpuRes = await runWebGPUUpscale(bmp, scale, options);
+        if (gpuRes) {
+          onProgress({ band: 3, totalBands: 3, stage: "done", backend: "WebGPU" });
+          return {
+            blob: gpuRes.blob,
+            meta: {
+              residual: gpuRes.residual,
+              backend: `WebGPU (${Math.round(gpuRes.durationMs)}ms)`,
+              outW: gpuRes.outW,
+              outH: gpuRes.outH,
+              preset: options?.preset,
+              dering: options?.dering,
+              sharpness: options?.sharpness,
+            },
+          };
+        }
+      } finally {
+        bmp.close();
+      }
+    }
+  } catch (gpuErr) {
+    console.warn("[Vice] WebGPU compute failed, falling back to WASM worker:", gpuErr);
+  }
+
+  // 2. Fall back to multi-threaded WASM Worker
+  if (worker) {
+    return runOnWorkerThread(worker, jobId, file, scale, base, onProgress, options);
+  }
+
+  throw new Error("No compute backend available");
 }
 
 export function cancelWorkerJob(worker: Worker, jobId: number): void {
@@ -137,10 +207,10 @@ export function cancelWorkerJob(worker: Worker, jobId: number): void {
   worker.postMessage(msg);
 }
 
-// Fire-and-forget ORT warmup. No response by design; run() observes the
-// cached session (or its cached failure) when the user starts the job.
+// Fire-and-forget ORT and WebGPU warmup.
 export function warmViceWorker(worker: Worker, base: string): void {
   const msg: ViceIncoming = { type: "warm", jobId: 0, base };
   worker.postMessage(msg);
+  warmupWebGPUPipelines();
 }
 
