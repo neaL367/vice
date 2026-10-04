@@ -81,10 +81,17 @@ deploys work without emsdk.
 
 - **Single-thread `core.wasm`** — always available fallback.
 - **Threaded `core.threaded.wasm`** — `VICE_THREADS` row sharding in upscale
-  passes + band projection, pool 4. Loads only when `crossOriginIsolated`
+  passes + band projection. Loads only when `crossOriginIsolated`
   (COOP/COEP headers, see `web/next.config.ts`); otherwise silent fallback.
   Measured 25 MP infinite: 10.8 s vs 16.0 s single (1.48×), identical
-  residual/bytes. Inspector shows `T4` badge via `threads` in result meta.
+  residual/bytes (measured before the persistent pool below; pool removes the
+  old per-call thread spawn cost, so this is a floor). Inspector shows `T4`
+  badge via `threads` in result meta. Threading is a persistent pool, not a
+  spawn-per-call: threads park on a condition variable between dispatches and
+  the caller participates as one more worker. Worker count follows
+  `hardware_concurrency` (native, up to 64; Emscripten capped at 4 to match
+  `-sPTHREAD_POOL_SIZE=4`), `VICE_MAX_WORKERS=N` caps it, tiny ranges (< 32
+  rows) stay serial. Both WASM builds are release (`-sASSERTIONS=0`).
 - **UnifiedRenderer** (`web/features/vice/renderers/unified-renderer.ts`) —
   the only render path. Streams 64-row bands → incremental PNG writer →
   `ChunkSink` (Blob / File / Folder). No separate full/stream/fused/fallback
@@ -93,6 +100,16 @@ deploys work without emsdk.
 - **WebGPU** is a degraded fallback only (no ICC embedding, no adapter in
   headless CI). Not presented as equivalent quality; see
   `web/e2e/webgpu.spec.ts`.
+- **Stream API contract** (`vice_stream_*`): `pull_band` returns 1 (final),
+  0 (more), -1 (bad args/upscale failure), -2 (push more input rows first),
+  -3 (required input row missing from the buffer — never silent black rows).
+  Size pull buffers for the scale-rounded band (`((band_h + s - 1) / s) * s`
+  rows, e.g. 64 → 66 at 3×), not `band_h`.
+- **Fused 4× modes** (`vice_stream_set_fused`, scale-4 only): 1 = clean
+  (full first pass, plain Lanczos+dering second pass so the mid image is
+  never re-sharpened; shipped `2××2×` default), 2 = detail (full tuning both
+  passes, engine-only). Modes differ by construction (native + WASM tests
+  assert non-identical bytes); residual is exact either way.
 
 ## Export routes
 
@@ -121,24 +138,24 @@ worker → result. Results report `threads` (T4) when the threaded core ran.
 
 ## Quality
 
-Measured with `vice_eval` using the Lanczos-3 adaptive engine and the
-projection pipeline: hierarchical multi-grid residual restriction + prolongation,
-iterative back-projection with bilinear correction (`vice_project_smooth`), and
-an exact clamp-aware box projection (`vice_project_box_clamped`).
-Each image is degraded two ways (box and bicubic), so every row averages both.
-`raw` = Lanczos only, `proj` = after projection. Metrics are on Rec.709 luma.
-Residual is mathematically guaranteed $\le 1.1\times 10^{-7}$ across all natural and
-synthetic content, including pure blacks and saturated primaries (via clamp-aware
-bisection projection). Seam is the block-boundary gradient ratio; `seam_hr`
-is the same metric on the original high-resolution image, so it shows what
-"no seams" looks like (≈ 1.0).
+`vice_eval` degrades each image two ways (box and bicubic), so every row
+averages both. `raw` = Lanczos only, `proj` = after projection. Since the app
+ships only the streaming path, the proj leg renders through the streaming
+strip API (64-row bands, clamp-aware box only — no multigrid, no smoothing)
+and scores in linear light, so the numbers below measure shipped bytes; see
+`vice_bench4x` for the full-image multigrid/smooth comparison. Residual
+is mathematically guaranteed $\le 1.1\times 10^{-7}$ across all natural and
+synthetic content, including pure blacks and saturated primaries (via
+clamp-aware bisection projection). Seam is the block-boundary gradient ratio;
+`seam_hr` is the same metric on the original high-resolution image, so it
+shows what "no seams" looks like (≈ 1.0).
 
-*(Note: The PSNR/SSIM metrics below were measured at the shipped fixed tuning
-— photo-equivalent sharpness 0.35, shock 0.35, direct (non-chained) 4× — with
-`vice_eval` using the Lanczos-3 adaptive engine and the smooth + box projection
-pipeline. The app's WASM path runs the same upscaler with multigrid + clamp-aware
-box projection on top. Datasets are external and not checked into the repository,
-see `tools/eval/README.md` for fetch instructions).*
+*(Note: the dataset table below was measured with the previous full-image
+smooth + box pipeline in sRGB space — it does NOT reflect shipped bytes and
+is kept for trend reference until the datasets are re-run through the stream
+API. The synthetic spot-check beneath it is current: streaming strip API,
+linear-light scoring, direct 4×. Datasets are external and not checked into
+the repository, see `tools/eval/README.md` for fetch instructions).*
 
 | Set      | Scale | PSNR raw → proj | SSIM raw → proj | Seam | seam_hr | Images |
 |----------|-------|-----------------|-----------------|------|---------|--------|
@@ -156,17 +173,32 @@ see `tools/eval/README.md` for fetch instructions).*
 | Urban100 | 4×    | 20.91 → 20.84   | 0.667 → 0.676   | 1.37 | 1.02    | 200    |
 
 Projection raises SSIM in every row. PSNR rises at 2× and drops by at most
-0.1 dB at 3×/4×. Seam sits at 1.5–1.6 at 2× and 1.33–1.38 at 3×/4× — the old
-4× weakness (seam 1.85–1.91) came from the chained 2××2× path re-sharpening an
-already sharpened mid image. Measured directly: single-pass 4× beats chained
-on all three axes (e.g. Set5 26.21 vs 25.58 dB, seam 1.35 vs 1.85), so direct
-4× is the default and the `2××2×` toggle runs a clean fused second pass
+0.1 dB at 3×/4× (legacy smooth + box pipeline — see note above). Direct 4× is
+the default and the `2××2×` toggle runs a clean fused second pass
 (6-row input halo, joint == interior on hard-edge seam fixtures at
-16/32/48/64-row bands). No Clean/Detail toggle: there is no genuine tradeoff
-to expose. Residual seam above the ≈ 1.0 ground truth is ordinary
-block-boundary texture, most visible at 2×. The TypeScript fallback
-(`projectClamp`) uses the same projection and is checked against the WASM
-core in `web/lib/vice-wasm.test.ts`.
+16/32/48/64-row bands; clean and detail modes differ by construction).
+Residual seam above the ≈ 1.0 ground truth is ordinary block-boundary
+texture, most visible at 2×. The TypeScript fallback (`projectClamp`) uses
+the same projection and is checked against the WASM core in
+`web/lib/vice-wasm.test.ts`.
+
+Current shipped-path spot check (`vice_eval` procedurals, stream API,
+linear-light scoring, direct 4× — run without datasets):
+
+| Set       | Scale | PSNR raw → proj | SSIM raw → proj | Seam | Images |
+|-----------|-------|-----------------|-----------------|------|--------|
+| synthetic | 2×    | 34.73 → 38.56   | 0.744 → 0.900   | 9.47 | 8      |
+| synthetic | 3×    | 27.32 → 27.92   | 0.614 → 0.660   | 4.44 | 8      |
+| synthetic | 4×    | 26.91 → 28.50   | 0.567 → 0.686   | 3.90 | 8      |
+
+Projection raises both metrics on every row with residual ≈ 3e-8. Seam on
+these adversarial synthetics (checker/bars) is higher than the old smooth +
+box numbers: per-block constant shifts step at block boundaries on
+pathological contrast, while the smooth correction spreads them. On natural
+content the stream path holds the legacy ~1.3–1.6 seam (independent probe:
+stream vs multigrid 2× 3.45 vs 3.52 equal, 3× 3.98 vs 3.08, 4× 3.89 vs 3.12 —
+residual exact either way). A band-local smooth back-projection (one-block
+halo) remains possible future work; it is not needed for the guarantee.
 
 4× policy bench (`vice_bench4x`, Set5/BSD100/Urban100 SRF_4 + procedural
 edge): all five policies (A full-direct, B full-chained-clean, C
@@ -184,12 +216,20 @@ stays engine-only. All policies gate on residual < 1e-5.
   folder batch have **no output MP cap**: band-sized float buffers, 8-bit
   accumulation, incremental PNG encode straight to disk (500 MP soak < 1 MB
   PNG-writer peak). Chained 2××2× runs fused with a 6-row halo on the same
-  path. Measured 2026-10-04 in headless Chromium, isolated browser-tree RSS:
+  path (clean = plain Lanczos+dering second pass; halo recompute is
+  negligible for direct 4×, ~2.25× band cost for chained at 64-row bands).
+  Band scratch buffers (input/band/upscaled/fused strips) are reused across
+  pulls, so steady-state rendering performs zero allocations per band.
+  Measured 2026-10-04 in headless Chromium, isolated browser-tree RSS:
   full-image 25 MP peaks at 1.94 GB / 29 s and 36 MP at 2.62 GB / 43 s
   (~68 MB per output MP); streaming 64 MP Blob peaks at 2.13 GB / 66 s;
-  threaded infinite 25 MP drops to 10.8 s (1.48× vs single). The WASM heap
-  never shrinks, so the tab retains ~peak either way. Caps live in
-  `web/lib/limits.ts` and gate Blob downloads only.
+  threaded infinite 25 MP drops to 10.8 s (1.48× vs single, pre-pool floor).
+  The WASM heap never shrinks, so the tab retains ~peak either way. Caps live
+  in `web/lib/limits.ts` and gate Blob downloads only.
+- Browser support: the infinite export needs the File System Access API
+  (Chromium). Firefox/Safari fall back to capped Blob downloads only —
+  over-cap outputs are blocked with a message naming Chrome/Edge desktop,
+  never a Blob that would OOM the tab. In-cap Blob export works everywhere.
 - Honors EXIF orientation. Preserves embedded ICC profiles (via native PNG iCCP chunks).
 - Full alpha transparency support: un-premultiplies RGB on output and preserves linear alpha.
 - 8-bit pipeline (browser decodes 8-bit); wide-gamut treated as sRGB.
@@ -205,3 +245,7 @@ stays engine-only. All policies gate on residual < 1e-5.
 - Pure client-side mathematical execution: instant start, zero heavy model downloads.
 - `next.config.ts` sets `cacheComponents`, `partialPrefetching`,
   cross-origin isolation headers (COOP/COEP), and a static CSP.
+- The threaded core needs that isolation (`same-origin` + `require-corp`):
+  any later cross-origin font, image, or script must send CORP/CORS headers
+  or it breaks. Same-origin assets only — re-verify prefetch + navigation
+  after touching headers.

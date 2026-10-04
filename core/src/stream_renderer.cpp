@@ -22,6 +22,13 @@ struct vice_stream_ctx {
   double worst = 0.0;
   int fused = 0;
   int halo_extra = 0;
+  // Reused across pull_band calls: sized to the largest band seen so far,
+  // so steady-state rendering performs zero allocations per band.
+  std::vector<float> scratch_in;
+  std::vector<float> scratch_band;
+  std::vector<float> scratch_up;
+  std::vector<float> scratch_tmp;
+  std::vector<float> scratch_big;
 };
 
 static constexpr int kFusedHalo = 6;
@@ -118,43 +125,49 @@ int vice_stream_pull_band(vice_stream_ctx* sctx, unsigned char* out_bytes, int* 
   }
 
   size_t in_row_stride = (size_t)sctx->in_w * sctx->channels;
-  std::vector<float> in_strip((size_t)req_in_rows * in_row_stride);
+  sctx->scratch_in.resize((size_t)req_in_rows * in_row_stride);
+  float* in_strip = sctx->scratch_in.data();
   for (int iy = 0; iy < req_in_rows; ++iy) {
     int src_global_y = req_in_y0 + iy;
     int local_buf_y = src_global_y - sctx->in_buf_start_y;
-    if (local_buf_y >= 0 && local_buf_y < sctx->in_buf_row_count) {
-      std::memcpy(in_strip.data() + (size_t)iy * in_row_stride,
-                  sctx->in_buf.data() + (size_t)local_buf_y * in_row_stride,
-                  in_row_stride * sizeof(float));
-    }
+    if (local_buf_y < 0 || local_buf_y >= sctx->in_buf_row_count)
+      return -3; // required input row evicted or never pushed: never emit zeros
+    std::memcpy(in_strip + (size_t)iy * in_row_stride,
+                sctx->in_buf.data() + (size_t)local_buf_y * in_row_stride,
+                in_row_stride * sizeof(float));
   }
 
   size_t out_row_stride = (size_t)sctx->out_w * sctx->channels;
-  std::vector<float> band_raw((size_t)cur_band_h * out_row_stride);
+  sctx->scratch_band.resize((size_t)cur_band_h * out_row_stride);
+  float* band_raw = sctx->scratch_band.data();
 
   if (sctx->fused && sctx->scale == 4) {
-    vice_render_fused_4x_strip(in_strip.data(), sctx->in_w, req_in_rows,
-                               sctx->channels, sctx->fused,
-                               out_y0, cur_band_h, req_in_y0,
-                               band_raw.data());
+    if (vice_render_fused_4x_strip(in_strip, sctx->in_w, req_in_rows,
+                                   sctx->channels, sctx->fused,
+                                   out_y0, cur_band_h, req_in_y0,
+                                   band_raw,
+                                   sctx->scratch_tmp, sctx->scratch_big) != 0)
+      return -3;
   } else {
     int strip_out_h = req_in_rows * sctx->scale;
-    std::vector<float> strip_upscaled((size_t)strip_out_h * out_row_stride);
+    sctx->scratch_up.resize((size_t)strip_out_h * out_row_stride);
+    float* strip_upscaled = sctx->scratch_up.data();
 
-    vice_upscale_lanczos_adaptive(in_strip.data(), sctx->in_w, req_in_rows,
-                                  sctx->channels, sctx->scale,
-                                  strip_upscaled.data());
+    if (vice_upscale_lanczos_adaptive(in_strip, sctx->in_w, req_in_rows,
+                                      sctx->channels, sctx->scale,
+                                      strip_upscaled) != 0)
+      return -1;
 
     int strip_global_out_y0 = req_in_y0 * sctx->scale;
     int local_band_offset = out_y0 - strip_global_out_y0;
 
     for (int by = 0; by < cur_band_h; ++by) {
       int src_row = local_band_offset + by;
-      if (src_row >= 0 && src_row < strip_out_h) {
-        std::memcpy(band_raw.data() + (size_t)by * out_row_stride,
-                    strip_upscaled.data() + (size_t)src_row * out_row_stride,
-                    out_row_stride * sizeof(float));
-      }
+      if (src_row < 0 || src_row >= strip_out_h)
+        return -3; // missing strip row: never emit zeros
+      std::memcpy(band_raw + (size_t)by * out_row_stride,
+                  strip_upscaled + (size_t)src_row * out_row_stride,
+                  out_row_stride * sizeof(float));
     }
   }
 

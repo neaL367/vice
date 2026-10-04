@@ -37,6 +37,11 @@ endif()
 add_executable(vice_tests tests/test_all.cpp)
 target_link_libraries(vice_tests PRIVATE vice_core)
 target_include_directories(vice_tests PRIVATE src)
+if(NOT MSVC)
+  # miniz.h declares static helpers the test decoder doesn't call;
+  # -Werror would fail the build on GCC/Clang otherwise.
+  target_compile_options(vice_tests PRIVATE -Wno-unused-function)
+endif()
 
 add_executable(vice_eval ../tools/eval/eval.cpp ../tools/eval/stb_impl.cpp)
 target_link_libraries(vice_eval PRIVATE vice_core)

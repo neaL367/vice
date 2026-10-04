@@ -14,10 +14,14 @@ data/
   Urban100/Urban100_HR/*.png
 ```
 
-4× policy experiment: `vice_eval <data_dir> [max_images] <direct|chained|clean> [preset]`
+4× policy experiment: `vice_eval <data_dir> [max_images] <direct|chained|clean>`
 (`direct` is the default and matches the app; `clean` runs chained 2××2× with
-a zero-sharpness/shock second pass; preset 0 = photo, 1 = smooth).
-Measured 2026-10: direct 4× dominates chained on PSNR/SSIM/seam, so no
-Clean/Detail toggle exists — the `2××2×` UI toggle runs the clean second pass.
+a plain Lanczos+dering second pass; `chained` runs full tuning on both passes).
+The proj leg always renders through the streaming strip API (64-row bands,
+clamp-aware box only) and scores in linear light, so the table measures
+shipped bytes; see `vice_bench4x` for the full-image multigrid/smooth
+comparison. Measured 2026-10: direct 4× dominates chained on PSNR/SSIM/seam,
+so only Direct ships selected by default — the `2××2×` UI toggle runs the
+clean fused second pass.
 
 Research benchmarks; check upstream licenses before redistributing.

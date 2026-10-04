@@ -29,11 +29,21 @@ vice_stream_ctx* vice_stream_create(int in_w, int in_h, int scale, int channels,
 int vice_stream_set_icc_profile(vice_stream_ctx* sctx, const unsigned char* data, size_t size);
 int vice_stream_push_input_rows(vice_stream_ctx* sctx, const float* in_rows, int row_count);
 int vice_stream_has_next_band(const vice_stream_ctx* sctx);
+/* Pull the next output band (8-bit sRGB bytes, band_h*out_w*channels max).
+   NOTE: band_h is rounded UP to a multiple of scale internally, so size the
+   caller's buffer for ((band_h + s - 1) / s) * s rows, not band_h.
+   Returns 1 (final band), 0 (more bands), -1 (bad args / upscale failure),
+   -2 (caller must push more input rows first), -3 (required input row
+   missing from the buffer: never emits silent black rows). */
 int vice_stream_pull_band(vice_stream_ctx* sctx, unsigned char* out_bytes, int* written_rows);
 int vice_stream_finish_png(vice_stream_ctx* sctx, const unsigned char* rgba_rows, int n,
                            unsigned char* out, size_t cap, size_t* written);
 double vice_stream_last_residual(const vice_stream_ctx* sctx);
 void vice_stream_destroy(vice_stream_ctx* sctx);
+/* Fused chained 4x (scale-4 only): 1 = clean (full first pass, plain
+   Lanczos+dering second pass so the mid image is never re-sharpened;
+   shipped UI default), 2 = detail (full tuning on both passes, engine-only).
+   Modes 1 and 2 produce different bytes by construction. */
 int vice_stream_set_fused(vice_stream_ctx* sctx, int mode);
 
 /* --- 4. Incremental PNG Writer C ABI --- */

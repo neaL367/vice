@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <vector>
 // C++-linkage checksum helpers defined in core/src/png.cpp.
 uint32_t vice_crc32(const unsigned char* d, size_t n);
@@ -782,13 +783,19 @@ static void test_fused4x() {
   int in_w = 24, in_h = 24, ch = 4;
   std::vector<float> input((size_t)in_w * in_h * ch);
   for (size_t i = 0; i < input.size(); i++) input[i] = (float)(i % 251) / 251.0f;
+  std::vector<unsigned char> outs[3];
+  double res[3] = {0, 0, 0};
   for (int mode : {1, 2}) {
-    double res = 0;
-    auto out = render_stream_rows(in_w, in_h, 4, ch, 32, mode, input, &res);
-    CHECK((int)out.size() == 96 * 96 * ch);
-    printf("fused4x mode=%d residual=%g\n", mode, res);
-    CHECK(res < 1e-5);
+    outs[mode] = render_stream_rows(in_w, in_h, 4, ch, 32, mode, input, &res[mode]);
+    CHECK((int)outs[mode].size() == 96 * 96 * ch);
+    printf("fused4x mode=%d residual=%g\n", mode, res[mode]);
+    CHECK(res[mode] < 1e-5);
   }
+  // Clean (mode 1) skips sharpness/shock on the second pass, detail (mode 2)
+  // does not: the two modes must produce different bytes by construction.
+  CHECK(outs[1].size() == outs[2].size());
+  CHECK(std::memcmp(outs[1].data(), outs[2].data(), outs[1].size()) != 0);
+  printf("fused clean-vs-detail differ ok\n");
   // Fused is scale-4 only.
   vice_stream_ctx* sctx = vice_stream_create(16, 16, 2, 4, 16);
   CHECK(sctx != nullptr);
@@ -804,9 +811,9 @@ static void test_fused4x() {
         for (int c = 0; c < fch; c++)
           edge[((size_t)y * fw + x) * fch + c] =
               (x < fw / 2) ? 0.05f : 0.95f;
-    double res = 0;
-    auto out = render_stream_rows(fw, fh, 4, fch, 64, 1, edge, &res);
-    CHECK(res < 1e-5);
+    double fres = 0;
+    auto out = render_stream_rows(fw, fh, 4, fch, 64, 1, edge, &fres);
+    CHECK(fres < 1e-5);
     int oW = fw * 4, oH = fh * 4;
     double interior = 0, joint = 0;
     for (int y = 1; y < oH; y++)
@@ -824,6 +831,20 @@ static void test_fused4x() {
     CHECK(joint <= interior + 1.0);
   }
   printf("fused4x ok\n");
+}
+
+static void test_stream_no_silent_zeros() {
+  // Pulling without enough input must report backpressure (-2) and leave the
+  // caller's buffer untouched — never emit silent black rows.
+  vice_stream_ctx* sctx = vice_stream_create(16, 16, 2, 3, 16);
+  CHECK(sctx != nullptr);
+  std::vector<unsigned char> band(16 * 32 * 3, 0xAB);
+  int rows = -1;
+  CHECK(vice_stream_pull_band(sctx, band.data(), &rows) == -2);
+  CHECK(rows == 0);
+  for (unsigned char b : band) CHECK(b == 0xAB);
+  vice_stream_destroy(sctx);
+  printf("stream_no_silent_zeros ok\n");
 }
 
 int main() {
@@ -845,6 +866,7 @@ int main() {
   test_png_stream_soak();
   test_stream_seam_bands();
   test_fused4x();
+  test_stream_no_silent_zeros();
   printf("ALL PASS\n");
   return 0;
 }

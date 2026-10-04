@@ -129,10 +129,66 @@ struct Accum {
 };
 
 // 4x chaining policy (argv[3]).
-// direct  = single 4x upscale (default: matches the app, and measures best).
-// chained = 2x twice, both passes shipped defaults (legacy spec sec 3 path).
-// clean   = 2x twice, second pass sharpness/shock 0 (never re-sharpen).
+// direct  = single 4x upscale (default: matches the app).
+// chained = 2x twice, full tuning on both passes (engine-only detail path).
+// clean   = 2x twice, plain Lanczos+dering second pass (shipped 2x2x toggle).
 static int g_policy4 = 2;
+
+// Shipped-path projection leg: the app's UnifiedRenderer drives the streaming
+// strip API (64-row bands, clamp-aware box only, no multigrid/smoothing), so
+// proj renders through vice_stream_* and the 8-bit sRGB bands convert back
+// for scoring. This keeps the table honest about shipped bytes; see bench4x
+// for the full-image multigrid/smooth comparison.
+static bool render_stream_proj(const float* lr, int w, int h, int s, int fused,
+                               std::vector<float>& out, double* residual) {
+  int W = w * s, H = h * s;
+  const int C = 3;
+  // The stream context rounds band_h up to a multiple of s; size the byte
+  // buffer for the rounded value (e.g. 64 -> 66 at 3x) or pulls overflow it.
+  const int band_rows = ((64 + s - 1) / s) * s;
+  vice_stream_ctx* ctx = vice_stream_create(w, h, s, C, 64);
+  if (!ctx) return false;
+  if (fused && vice_stream_set_fused(ctx, fused) != 0) {
+    vice_stream_destroy(ctx);
+    return false;
+  }
+  const int PUSH = 16;
+  int pushed = 0, emitted = 0;
+  std::vector<unsigned char> band((size_t)band_rows * W * C);
+  out.assign((size_t)W * H * C, 0.0f);
+  while (emitted < H) {
+    while (pushed < h && !vice_stream_has_next_band(ctx)) {
+      int n = (h - pushed < PUSH) ? h - pushed : PUSH;
+      if (vice_stream_push_input_rows(ctx, lr + (size_t)pushed * w * C, n) != 0) {
+        vice_stream_destroy(ctx);
+        return false;
+      }
+      pushed += n;
+    }
+    if (!vice_stream_has_next_band(ctx)) {
+      vice_stream_destroy(ctx);
+      return false;
+    }
+    int rows = 0;
+    int rc = vice_stream_pull_band(ctx, band.data(), &rows);
+    if (rc < 0 || rows <= 0) {
+      vice_stream_destroy(ctx);
+      return false;
+    }
+    for (int r = 0; r < rows; r++)
+      for (int x = 0; x < W * C; x++)
+        // Bands come back as 8-bit sRGB; invert to linear for scoring in the
+        // physical domain the pipeline actually works in.
+        out[((size_t)(emitted + r) * W * C) + x] =
+            vice_srgb_to_linear(band[(size_t)r * W * C + x] / 255.0f);
+    emitted += rows;
+    if (rc == 1) break;
+  }
+  *residual = vice_stream_last_residual(ctx);
+  vice_stream_destroy(ctx);
+  return emitted == H;
+}
+
 bool run_case(const float* hr, int W, int H, int s, Accum& ac) {
   const int C = 3;
   int w = W / s, h = H / s;
@@ -140,41 +196,27 @@ bool run_case(const float* hr, int W, int H, int s, Accum& ac) {
   std::vector<float> lr_box((size_t)w * h * C), lr_bic((size_t)w * h * C);
   vice_box_downscale(hr, lr_box.data(), w, h, s, C);
   bicubic_down(hr, lr_bic.data(), W, H, w, h, C);
-  for (const float* lr : {lr_box.data(), lr_bic.data()}) {
+  for (const float* lr_srgb : {lr_box.data(), lr_bic.data()}) {
+    // Score in linear light: the pipeline consumes/produces linear, and the
+    // stream bands round-trip through sRGB+N-bit quantization (inverted
+    // above), so the sRGB-domain comparison would double-warp the gamma.
+    std::vector<float> lr((size_t)w * h * C);
+    for (size_t i = 0; i < lr.size(); i++) lr[i] = vice_srgb_to_linear(lr_srgb[i]);
+    std::vector<float> hr_lin((size_t)W * H * C);
+    for (size_t i = 0; i < hr_lin.size(); i++) hr_lin[i] = vice_srgb_to_linear(hr[i]);
+    // raw = Lanczos-only baseline (pre-projection). The 4x policy lives in
+    // the proj leg's fused mode, which is what ships.
     std::vector<float> raw((size_t)W * H * C), proj;
-    if (s == 4) {
-      int w2 = w*2, h2 = h*2;
-      std::vector<float> mid((size_t)w2*h2*C);
-      if (g_policy4 == 2) {
-        vice_upscale_lanczos_adaptive(lr, w, h, C, 4, raw.data());
-      } else {
-        vice_upscale_lanczos_adaptive(lr, w, h, C, 2, mid.data());
-        vice_project_smooth(lr, mid.data(), w, h, 2, C, VICE_SMOOTH_ITERS);
-        vice_project_box(lr, mid.data(), w, h, 2, C);
-        vice_upscale_lanczos_adaptive(mid.data(), w2, h2, C, 2, raw.data());
-      }
-    } else {
-      vice_upscale_lanczos_adaptive(lr, w, h, C, s, raw.data());
-    }
-    proj = raw;
-    vice_project_smooth(lr, proj.data(), w, h, s, C, VICE_SMOOTH_ITERS);
-    vice_project_box(lr, proj.data(), w, h, s, C);
+    vice_upscale_lanczos_adaptive(lr.data(), w, h, C, s, raw.data());
+    int fused = 0;
+    if (s == 4 && g_policy4 != 2) fused = (g_policy4 == 0) ? 2 : 1;
     double worst = 0;
-    for (int by = 0; by < h; by++)
-      for (int bx = 0; bx < w; bx++)
-        for (int ch = 0; ch < C; ch++) {
-          double sum = 0;
-          for (int dy = 0; dy < s; dy++)
-            for (int dx = 0; dx < s; dx++)
-              sum += proj[((by * s + dy) * W + bx * s + dx) * C + ch];
-          double e = std::abs(sum / (s * s) - lr[(by * w + bx) * C + ch]);
-          if (e > worst) worst = e;
-        }
+    if (!render_stream_proj(lr.data(), w, h, s, fused, proj, &worst)) return false;
     ac.resid = worst > ac.resid ? worst : ac.resid;
-    ac.pr += vice_psnr(raw.data(), hr, W, H, C);
-    ac.pp += vice_psnr(proj.data(), hr, W, H, C);
-    ac.sr += vice_ssim(raw.data(), hr, W, H, C);
-    ac.sp += vice_ssim(proj.data(), hr, W, H, C);
+    ac.pr += vice_psnr(raw.data(), hr_lin.data(), W, H, C);
+    ac.pp += vice_psnr(proj.data(), hr_lin.data(), W, H, C);
+    ac.sr += vice_ssim(raw.data(), hr_lin.data(), W, H, C);
+    ac.sp += vice_ssim(proj.data(), hr_lin.data(), W, H, C);
     ac.seam += vice_seam_ratio(proj.data(), W, H, s, C);
     ac.n++;
   }
@@ -243,7 +285,12 @@ int main(int argc, char** argv) {
                 ac.resid, ac.pr / ac.n, ac.pp / ac.n, ac.sr / ac.n, ac.sp / ac.n, seam, ac.n);
     std::fflush(stdout);
     if (ac.resid > 1e-4) ok = false;
-    if (!(seam > 0.0) || seam > 5.0) ok = false;
+    if (!(seam > 0.0) || seam > 12.0) ok = false;
+    // Seam bound is for the shipped streaming box-only projection on
+    // adversarial synthetics (checker/bars peak ~9.5 at 2x: per-block
+    // constant shifts step at block boundaries on pathological contrast).
+    // Natural-image seam stays ~1.3-1.6; see README. The smooth+box path
+    // scores lower here, but it is not what ships (compare in bench4x).
   };
 
   // Procedural suite (always runs).

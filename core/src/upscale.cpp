@@ -55,7 +55,8 @@ inline int clamp_idx(int idx, int max_val) {
 
 } // namespace
 
-int vice_upscale_lanczos_adaptive(const float* src, int w, int h, int c, int scale, float* dst) {
+static int upscale_lanczos_impl(const float* src, int w, int h, int c, int scale, float* dst,
+                                  bool enhance) {
   if (!src || !dst || w <= 0 || h <= 0 || (c != 3 && c != 4) ||
       (scale != 2 && scale != 3 && scale != 4))
     return -1;
@@ -70,8 +71,6 @@ int vice_upscale_lanczos_adaptive(const float* src, int w, int h, int c, int sca
   const float STEER_T = 0.15f;
   const float STEER_W = 0.2f;
   const float DERING = 1.0f;
-  const float SHARPNESS = 0.35f;
-  const float SHOCK = 0.35f;
 
   // Pass 1: Horizontal scale (w x h -> W x h)
   std::vector<float> tmp((size_t)W * h * c);
@@ -233,9 +232,11 @@ int vice_upscale_lanczos_adaptive(const float* src, int w, int h, int c, int sca
     }
   });
 
-  // Pass 3: Null-Space Micro-Texture Sharpness Enhancement
+  // Pass 3: Null-Space Micro-Texture Sharpness Enhancement.
+  // Skipped on the plain path (fused clean second pass): never re-sharpen.
   const int proc_c = (c == 4) ? 3 : c;
-  {
+  if (enhance) {
+    const float SHARPNESS = 0.35f;
     std::vector<float> sharp_tmp((size_t)W * H * c);
     std::memcpy(sharp_tmp.data(), dst, sharp_tmp.size() * sizeof(float));
     vice_parallel_for(0, H, [&](int y) {
@@ -259,8 +260,10 @@ int vice_upscale_lanczos_adaptive(const float* src, int w, int h, int c, int sca
     std::memcpy(dst, sharp_tmp.data(), sharp_tmp.size() * sizeof(float));
   }
 
-  // Pass 4: Vice 2.0 Coherence-Enhancing Shock PDE
-  {
+  // Pass 4: Vice 2.0 Coherence-Enhancing Shock PDE.
+  // Skipped on the plain path (fused clean second pass): never re-sharpen.
+  if (enhance) {
+    const float SHOCK = 0.35f;
     float dt = 0.12f * std::min(1.0f, SHOCK);
     std::vector<float> shock_tmp((size_t)W * H * c);
     std::memcpy(shock_tmp.data(), dst, shock_tmp.size() * sizeof(float));
@@ -309,4 +312,15 @@ int vice_upscale_lanczos_adaptive(const float* src, int w, int h, int c, int sca
   }
 
   return 0;
+}
+
+int vice_upscale_lanczos_adaptive(const float* src, int w, int h, int c, int scale, float* dst) {
+  return upscale_lanczos_impl(src, w, h, c, scale, dst, true);
+}
+
+// Plain Lanczos + dering only: no sharpness, no shock. Used for the fused
+// clean 4x second pass so an already-sharpened mid image is never re-sharpened.
+int vice_upscale_lanczos_adaptive_plain(const float* src, int w, int h, int c, int scale,
+                                        float* dst) {
+  return upscale_lanczos_impl(src, w, h, c, scale, dst, false);
 }

@@ -1,5 +1,6 @@
 #pragma once
 #include "parallel_runtime.h"
+#include <utility>
 
 // Backward-compatible inline wrapper
 template <typename Fn>
