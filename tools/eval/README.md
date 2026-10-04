@@ -14,4 +14,10 @@ data/
   Urban100/Urban100_HR/*.png
 ```
 
+4× policy experiment: `vice_eval <data_dir> [max_images] <direct|chained|clean> [preset]`
+(`direct` is the default and matches the app; `clean` runs chained 2××2× with
+a zero-sharpness/shock second pass; preset 0 = photo, 1 = smooth).
+Measured 2026-10: direct 4× dominates chained on PSNR/SSIM/seam, so no
+Clean/Detail toggle exists — the `2××2×` UI toggle runs the clean second pass.
+
 Research benchmarks; check upstream licenses before redistributing.

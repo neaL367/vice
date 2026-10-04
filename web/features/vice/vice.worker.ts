@@ -130,11 +130,14 @@ export async function runViceUpscale(
       const cctx2 = core.create(w * 2, h * 2, 2, 4);
       try {
         core.setInput(cctx2, mid);
+        // Clean second pass: the mid image is already sharpened; re-sharpening
+        // compounds block seams (eval: 4x seam 1.85 chained vs 1.37 direct).
+        // Preset/dering carry over, sharpness/shock do not.
         core.upscale(cctx2, {
           preset: opts.preset,
           dering: opts.dering,
-          sharpness: opts.sharpness,
-          shock: opts.shock,
+          sharpness: 0,
+          shock: 0,
         });
         onProgress({ band: 3, totalBands: 4, stage: "Projecting…", backend });
         throwIfAborted(opts.signal);
@@ -249,8 +252,8 @@ export async function runViceUpscale(
     raw = upscaleTS(mid, w * 2, h * 2, 4, 2, {
       preset: opts.preset,
       dering: opts.dering,
-      sharpness: opts.sharpness,
-      shock: opts.shock,
+      sharpness: 0,
+      shock: 0,
     });
     residual = projectClamp(mid, raw, w * 2, h * 2, 2, 4, 3);
   } else {

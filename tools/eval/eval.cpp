@@ -128,6 +128,19 @@ struct Accum {
   int n = 0;
 };
 
+// 4x chaining policy (argv[3]).
+// direct  = single 4x upscale (default: matches the app, and measures best).
+// chained = 2x twice, both passes shipped defaults (legacy spec sec 3 path).
+// clean   = 2x twice, second pass sharpness/shock 0 (never re-sharpen).
+static int g_policy4 = 2;
+// Engine preset under test (argv[4]): 0 = photo, 1 = smooth.
+static int g_preset = 0;
+
+static void default_tuning_for(ViceTuning* t) {
+  vice_tuning_defaults(t);
+  t->preset = g_preset;
+}
+
 bool run_case(const float* hr, int W, int H, int s, Accum& ac) {
   const int C = 3;
   int w = W / s, h = H / s;
@@ -137,7 +150,27 @@ bool run_case(const float* hr, int W, int H, int s, Accum& ac) {
   bicubic_down(hr, lr_bic.data(), W, H, w, h, C);
   for (const float* lr : {lr_box.data(), lr_bic.data()}) {
     std::vector<float> raw((size_t)W * H * C), proj;
-    if (s == 4) { int w2 = w*2, h2 = h*2; std::vector<float> mid((size_t)w2*h2*C); vice_upscale_lanczos_adaptive(lr, w, h, C, 2, mid.data()); vice_project_smooth(lr, mid.data(), w, h, 2, C, VICE_SMOOTH_ITERS); vice_project_box(lr, mid.data(), w, h, 2, C); vice_upscale_lanczos_adaptive(mid.data(), w2, h2, C, 2, raw.data()); } else { vice_upscale_lanczos_adaptive(lr, w, h, C, s, raw.data()); }
+    if (s == 4) {
+      int w2 = w*2, h2 = h*2;
+      std::vector<float> mid((size_t)w2*h2*C);
+      ViceTuning t1, t2;
+      default_tuning_for(&t1);
+      default_tuning_for(&t2);
+      if (g_policy4 == 2) {
+        vice_upscale_lanczos_adaptive_ex(lr, w, h, C, 4, raw.data(), &t1);
+      } else {
+        // g_policy4 0 = chained (legacy), 1 = clean second pass.
+        if (g_policy4 == 1) { t2.sharpness = 0.0f; t2.shock = 0.0f; }
+        vice_upscale_lanczos_adaptive_ex(lr, w, h, C, 2, mid.data(), &t1);
+        vice_project_smooth(lr, mid.data(), w, h, 2, C, VICE_SMOOTH_ITERS);
+        vice_project_box(lr, mid.data(), w, h, 2, C);
+        vice_upscale_lanczos_adaptive_ex(mid.data(), w2, h2, C, 2, raw.data(), &t2);
+      }
+    } else {
+      ViceTuning t;
+      default_tuning_for(&t);
+      vice_upscale_lanczos_adaptive_ex(lr, w, h, C, s, raw.data(), &t);
+    }
     proj = raw;
     vice_project_smooth(lr, proj.data(), w, h, s, C, VICE_SMOOTH_ITERS);
     vice_project_box(lr, proj.data(), w, h, s, C);
@@ -210,9 +243,14 @@ static std::vector<std::string> list_images(const std::string& dir) {
 int main(int argc, char** argv) {
   std::string data = argc > 1 ? argv[1] : "";
   int max_imgs = argc > 2 ? std::atoi(argv[2]) : 0;
+  std::string policy = argc > 3 ? argv[3] : "direct";
+  g_policy4 = (policy == "chained") ? 0 : (policy == "clean") ? 1 : 2;
+  g_preset = (argc > 4) ? std::atoi(argv[4]) : 0;
+  if (g_preset < 0 || g_preset > 1) g_preset = 0;
   bool ok = true;
   std::printf("%-10s %-5s %10s %10s %10s %10s %10s %8s %5s\n", "set", "scale", "residual",
               "psnr_raw", "psnr_proj", "ssim_raw", "ssim_proj", "seam", "n");
+  std::printf("# policy4=%s preset=%s\n", policy.c_str(), g_preset == 0 ? "photo" : "smooth");
   std::fflush(stdout);
 
   auto report = [&](const std::string& name, int scale, const Accum& ac) {

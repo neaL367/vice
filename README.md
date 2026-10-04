@@ -77,33 +77,36 @@ is the same metric on the original high-resolution image, so it shows what
 "no seams" looks like (≈ 1.0).
 
 *(Note: The PSNR/SSIM metrics below were measured at the shipped defaults —
-sharpness 0.35, shock 0.35 (photo) — with `vice_eval` using the Lanczos-3 adaptive
-engine and the multigrid + smooth + clamp-aware box projection. Datasets are
-external and not checked into the repository, see `tools/eval/README.md`
-for fetch instructions).*
+sharpness 0.35, shock 0.35 (photo), direct (non-chained) 4× — with `vice_eval`
+using the Lanczos-3 adaptive engine and the smooth + box projection pipeline.
+The app's WASM path runs the same upscaler with multigrid + clamp-aware box
+projection on top. Datasets are external and not checked into the repository,
+see `tools/eval/README.md` for fetch instructions).*
 
 | Set      | Scale | PSNR raw → proj | SSIM raw → proj | Seam | seam_hr | Images |
 |----------|-------|-----------------|-----------------|------|---------|--------|
 | Set5     | 2×    | 30.87 → 31.94   | 0.940 → 0.947   | 1.51 | 1.01    | 10     |
 | Set5     | 3×    | 27.64 → 27.87   | 0.877 → 0.878   | 1.33 | 0.99    | 10     |
-| Set5     | 4×    | 25.41 → 25.58   | 0.813 → 0.815   | 1.85 | 1.02    | 10     |
+| Set5     | 4×    | 26.11 → 26.21   | 0.819 → 0.826   | 1.35 | 1.02    | 10     |
 | Set14    | 2×    | 28.04 → 28.55   | 0.891 → 0.898   | 1.53 | 1.01    | 28     |
 | Set14    | 3×    | 24.77 → 24.76   | 0.781 → 0.782   | 1.35 | 1.00    | 28     |
-| Set14    | 4×    | 23.06 → 23.17   | 0.706 → 0.707   | 1.91 | 1.03    | 28     |
+| Set14    | 4×    | 23.55 → 23.50   | 0.708 → 0.715   | 1.37 | 1.03    | 28     |
 | BSD100   | 2×    | 27.99 → 28.35   | 0.873 → 0.880   | 1.58 | 1.01    | 200    |
 | BSD100   | 3×    | 24.73 → 24.68   | 0.747 → 0.752   | 1.34 | 1.00    | 200    |
-| BSD100   | 4×    | 23.40 → 23.49   | 0.673 → 0.674   | 1.86 | 1.01    | 200    |
+| BSD100   | 4×    | 23.81 → 23.71   | 0.672 → 0.681   | 1.38 | 1.01    | 200    |
 | Urban100 | 2×    | 25.32 → 25.77   | 0.870 → 0.878   | 1.53 | 1.01    | 200    |
 | Urban100 | 3×    | 21.93 → 21.92   | 0.746 → 0.748   | 1.33 | 1.00    | 200    |
-| Urban100 | 4×    | 20.49 → 20.59   | 0.669 → 0.669   | 1.90 | 1.02    | 200    |
+| Urban100 | 4×    | 20.91 → 20.84   | 0.667 → 0.676   | 1.37 | 1.02    | 200    |
 
-Projection raises SSIM in every row. PSNR rises at 2× and 4× and drops by at most
-0.05 dB at 3×. Seam sits at 1.5–1.6 at 2× and 1.33–1.35 at 3×, but climbs to
-1.85–1.91 at 4×: the chained 2××2× passes compound the null-space sharpness, and
-the second 2× upscale re-sharpens an already sharpened mid image. It is still
-above the ground truth of ≈ 1.0, so some block-boundary structure remains, most
-visibly at 4×. Compared with the earlier box-only projection, the seam ratio fell
-from 1.6–1.8 to 1.5–1.6 at 2× and from 1.9–2.1 to 1.3–1.4 at 3×. The TypeScript
+Projection raises SSIM in every row. PSNR rises at 2× and drops by at most
+0.1 dB at 3×/4×. Seam sits at 1.5–1.6 at 2× and 1.33–1.38 at 3×/4× — the old
+4× weakness (seam 1.85–1.91) came from the chained 2××2× path re-sharpening an
+already sharpened mid image. Measured directly: single-pass 4× beats chained
+on all three axes (e.g. Set5 26.21 vs 25.58 dB, seam 1.35 vs 1.85), so direct
+4× is the default and the `2××2×` toggle now runs a clean second pass
+(sharpness/shock 0, preset/dering kept). No Clean/Detail toggle: there is no
+genuine tradeoff to expose. Residual seam above the ≈ 1.0 ground truth is
+ordinary block-boundary texture, most visible at 2×. The TypeScript
 fallback (`projectClamp`) uses the same projection and is checked against the
 WASM core in `web/lib/vice-wasm.test.ts`.
 
