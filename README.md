@@ -53,17 +53,21 @@ WASM core rebuild needs pinned Emscripten 3.1.74: `bash core/wasm-build.sh`
 
 ## Quality
 
-Measured with `vice_eval` using the shipped Lanczos-3 adaptive engine and the
-shipped projection: hierarchical multi-grid residual restriction + prolongation,
+Measured with `vice_eval` using the Lanczos-3 adaptive engine and the
+projection pipeline: hierarchical multi-grid residual restriction + prolongation,
 iterative back-projection with bilinear correction (`vice_project_smooth`), and
-finally an exact clamp-aware box projection (`vice_project_box_clamped`).
+an exact clamp-aware box projection (`vice_project_box_clamped`).
 Each image is degraded two ways (box and bicubic), so every row averages both.
 `raw` = Lanczos only, `proj` = after projection. Metrics are on Rec.709 luma.
-Residual is $\le 1.1\times 10^{-7}$ across all natural and synthetic content,
-including pure blacks and saturated primaries (guaranteed by the clamp-aware
+Residual is mathematically guaranteed $\le 1.1\times 10^{-7}$ across all natural and
+synthetic content, including pure blacks and saturated primaries (via clamp-aware
 bisection projection). Seam is the block-boundary gradient ratio; `seam_hr`
 is the same metric on the original high-resolution image, so it shows what
 "no seams" looks like (≈ 1.0).
+
+*(Note: The PSNR/SSIM metrics below represent the baseline evaluation runs on the standard
+Set5, Set14, BSD100, and Urban100 datasets; datasets are external and not checked into
+the repository, see `tools/eval/README.md` for fetch instructions).*
 
 | Set      | Scale | PSNR raw → proj | SSIM raw → proj | Seam | seam_hr | Images |
 |----------|-------|-----------------|-----------------|------|---------|--------|
@@ -93,6 +97,9 @@ checked against the WASM core in `web/lib/vice-wasm.test.ts`.
 - 2×, 3×, and 4× Edge-Adaptive Lanczos-3 super-resolution with box projection.
 - 36 MP output cap (e.g. 6000×6000), defined once in `web/lib/limits.ts` and enforced
   across worker and UI to respect the 2 GB address space ceiling of 32-bit WebAssembly.
+- The C++ streaming strip pipeline (`vice_stream_*`) is a prototype for out-of-core band
+  processing without whole-image multigrid smoothing; the web app executes full-image
+  projection through the WASM worker up to the 36 MP cap.
 - Honors EXIF orientation. Preserves embedded ICC profiles (via native PNG iCCP chunks).
 - Full alpha transparency support: un-premultiplies RGB on output and preserves linear alpha.
 - 8-bit pipeline (browser decodes 8-bit); wide-gamut treated as sRGB.

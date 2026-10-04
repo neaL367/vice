@@ -226,4 +226,36 @@ describe("wasm parity", () => {
 
     core.destroy(ctx);
   });
+
+  test("ViceCore processBand un-premultiplies RGB and preserves linear alpha", async () => {
+    const { ViceCore } = await import("./vice-wasm");
+    const core = await ViceCore.load("../public/");
+    if (!core) return;
+    const w = 4;
+    const h = 4;
+    const c = 4;
+    const y = new Float32Array(w * h * c);
+    // White at 50% alpha: in linear premultiplied float: RGB = 0.5, A = 0.5
+    for (let i = 0; i < w * h; i++) {
+      y[i * c + 0] = 0.5;
+      y[i * c + 1] = 0.5;
+      y[i * c + 2] = 0.5;
+      y[i * c + 3] = 0.5;
+    }
+    const ctx = core.create(w, h, 2, c);
+    core.setInput(ctx, y);
+    core.upscale(ctx);
+    core.project(ctx);
+
+    const rows = core.processBand(ctx, 0, w * 2, h * 2, c);
+    // White un-premultiplies back to ~255, and linear alpha is ~128
+    // NOT the buggy 187 188 188 188
+    expect(rows[0]).toBeGreaterThanOrEqual(254);
+    expect(rows[1]).toBeGreaterThanOrEqual(254);
+    expect(rows[2]).toBeGreaterThanOrEqual(254);
+    expect(rows[3]).toBeGreaterThanOrEqual(127);
+    expect(rows[3]).toBeLessThanOrEqual(128);
+
+    core.destroy(ctx);
+  });
 });

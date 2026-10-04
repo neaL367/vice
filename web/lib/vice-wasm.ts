@@ -166,6 +166,25 @@ export class ViceCore {
     }
   }
 
+  processBand(ctx: number, band: number, outW: number, _maxRows: number, channels: number): Uint8Array {
+    const bytes = 64 * outW * channels;
+    const outPtr = this.core._malloc(bytes);
+    const countPtr = this.core._malloc(4);
+    if (!outPtr || !countPtr) throw new Error("wasm malloc failed");
+    try {
+      if (this.core._vice_process_band(ctx, band, outPtr, countPtr) !== 0)
+        throw new Error("vice_process_band failed");
+      const actualRows = new DataView(this.core.HEAPU8.buffer, countPtr, 4).getInt32(0, true);
+      const writtenBytes = actualRows * outW * channels;
+      const res = new Uint8Array(writtenBytes);
+      res.set(this.core.HEAPU8.subarray(outPtr, outPtr + writtenBytes));
+      return res;
+    } finally {
+      this.core._free(outPtr);
+      this.core._free(countPtr);
+    }
+  }
+
   finishPng(ctx: number, outW: number, outH: number, channels: number): Uint8Array {
     const cap = outW * outH * channels + 1024 * 1024;
     const outPtr = this.core._malloc(cap);

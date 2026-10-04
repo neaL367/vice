@@ -151,8 +151,9 @@ export function runOnWorkerThread(
 
 /**
  * Universal job runner:
- * 1. Checks if WebGPU is supported -> executes real-time compute pass (~8ms).
- * 2. Falls back automatically to SIMD WASM Worker (~200ms).
+ * 1. Primary: Verified SIMD WASM Worker thread (owns full ICC preservation,
+ *    exact multigrid/smooth/clamp-aware projection, and linear alpha un-premultiplication).
+ * 2. Fallback: WebGPU compute pipeline when Worker thread is unavailable.
  */
 export async function runViceJob(
   worker: Worker | null,
@@ -163,7 +164,12 @@ export async function runViceJob(
   onProgress: (p: ViceProgress) => void,
   options?: ViceJobOptions,
 ): Promise<{ blob: Blob; meta: ViceResultMeta }> {
-  // 1. Try ultra-fast WebGPU compute path if hardware is available
+  // 1. Primary verified engine: WebAssembly Worker thread
+  if (worker) {
+    return runOnWorkerThread(worker, jobId, file, scale, base, onProgress, options);
+  }
+
+  // 2. Fallback: WebGPU compute shader when Worker cannot be spawned
   try {
     const gpuOk = await isWebGPUSupported();
     if (gpuOk && !options?.chained4x && typeof createImageBitmap !== "undefined") {
@@ -191,12 +197,7 @@ export async function runViceJob(
       }
     }
   } catch (gpuErr) {
-    console.warn("[Vice] WebGPU compute failed, falling back to WASM worker:", gpuErr);
-  }
-
-  // 2. Fall back to multi-threaded WASM Worker
-  if (worker) {
-    return runOnWorkerThread(worker, jobId, file, scale, base, onProgress, options);
+    console.warn("[Vice] WebGPU compute fallback failed:", gpuErr);
   }
 
   throw new Error("No compute backend available");

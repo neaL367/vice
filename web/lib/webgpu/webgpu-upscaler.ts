@@ -1,7 +1,7 @@
 /**
  * WebGPU High-Performance Upscaler Pipeline.
  * Executes Lanczos-3 + Anti-Ringing + Null-Space Sharpness + Consistency Projection
- * entirely on GPU in ~4ms to 12ms.
+ * entirely on GPU compute shaders.
  */
 
 import { WGSL_PASS1_H, WGSL_PASS2_V, WGSL_PASS3_PROJECT } from "./shaders";

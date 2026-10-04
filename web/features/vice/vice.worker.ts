@@ -1,6 +1,6 @@
 // vice.worker.ts — owns decode, upscale, projection, PNG encode.
 // Pure Mathematical Super-Resolution: Edge-Adaptive Lanczos-3 with exact box-projection.
-// Instantaneous execution (~15ms), zero network downloads, zero model overhead.
+// Fully private client-side execution, zero network downloads, zero model overhead.
 
 import {
   BYTE_TO_LINEAR_LUT,
