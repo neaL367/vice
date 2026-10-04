@@ -58,8 +58,8 @@ export function reflectIndex(x: number, n: number): number {
   return x >= n ? m - x : x;
 }
 
-// Prototype for future large-image path: not wired to the worker (full-image
-// WASM up to the 36 MP cap). Kept for tests + future streaming work.
+// Prototype overlap-add tiling, wired into the worker TS fallback for large
+// outputs (>4 MP). WASM path stays full-image up to the 36 MP cap.
 export function planOverlap(inW: number, inH: number, t: number, o: number): OverlapTile[] {
   const step = Math.max(1, t - o);
   const xs: number[] = [];

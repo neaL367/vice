@@ -31,6 +31,65 @@ test("shell renders tool, upscales 8x8 to 16x16", async ({ page }) => {
   await expect(page.getByText(/Lanczos-3/)).toBeVisible({ timeout: 20_000 });
 });
 
+test("alpha transparency path completes with download", async ({ page }) => {
+  test.setTimeout(60_000);
+  await page.goto("/");
+  // Left half opaque red, right half fully transparent: exercises the
+  // premultiplied-alpha branch (un-premultiply + linear alpha preserve).
+  const buf = await page.evaluate(async () => {
+    const c = document.createElement("canvas");
+    c.width = 8;
+    c.height = 8;
+    const x = c.getContext("2d")!;
+    x.clearRect(0, 0, 8, 8);
+    x.fillStyle = "#c02020";
+    x.fillRect(0, 0, 4, 8);
+    const b: Blob = await new Promise((r) => c.toBlob((v) => r(v!), "image/png"));
+    return [...new Uint8Array(await b.arrayBuffer())];
+  });
+  await page.getByLabel(/Choose image/).setInputFiles({
+    name: "alpha.png",
+    mimeType: "image/png",
+    buffer: Buffer.from(buf),
+  });
+  await page.getByRole("button", { name: "Upscale", exact: true }).click();
+  await expect(page.getByText("done")).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText(/Lanczos-3/).first()).toBeVisible();
+  await expect(page.getByRole("link", { name: /Download PNG/ })).toHaveAttribute(
+    "download",
+    "alpha-vice2x.png",
+  );
+});
+
+test("chained 4x (2x twice) completes with download", async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.goto("/");
+  const buf = await page.evaluate(async () => {
+    const c = document.createElement("canvas");
+    c.width = 8;
+    c.height = 8;
+    const x = c.getContext("2d")!;
+    x.fillStyle = "#20a060";
+    x.fillRect(0, 0, 8, 8);
+    const b: Blob = await new Promise((r) => c.toBlob((v) => r(v!), "image/png"));
+    return [...new Uint8Array(await b.arrayBuffer())];
+  });
+  await page.getByLabel(/Choose image/).setInputFiles({
+    name: "green.png",
+    mimeType: "image/png",
+    buffer: Buffer.from(buf),
+  });
+  await page.getByRole("button", { name: "4×", exact: true }).click();
+  await page.getByRole("button", { name: "2××2×", exact: true }).click();
+  await page.getByRole("button", { name: "Upscale", exact: true }).click();
+  await expect(page.getByText("done")).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText(/Lanczos-3/).first()).toBeVisible();
+  await expect(page.getByRole("link", { name: /Download PNG/ })).toHaveAttribute(
+    "download",
+    "green-vice4x.png",
+  );
+});
+
 test("3x Lanczos-3 path works without model", async ({ page }) => {
   test.setTimeout(120_000);
   await page.goto("/");

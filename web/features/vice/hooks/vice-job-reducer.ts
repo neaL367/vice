@@ -15,6 +15,7 @@ export interface ViceJobState {
   preset: VicePreset;
   dering: number;
   sharpness: number;
+  shock: number;
   progress: string;
   running: boolean;
   error: string;
@@ -30,6 +31,7 @@ export const initialState: ViceJobState = {
   preset: "photo",
   dering: 1.0,
   sharpness: 0.35,
+  shock: 0.35,
   progress: "",
   running: false,
   error: "",
@@ -43,6 +45,7 @@ export type ViceJobAction =
   | { type: "SET_PRESET"; preset: VicePreset }
   | { type: "SET_DERING"; dering: number }
   | { type: "SET_SHARPNESS"; sharpness: number }
+  | { type: "SET_SHOCK"; shock: number }
   | { type: "SET_SELECTED_ID"; id: number | null }
   | { type: "START_RUN" }
   | { type: "SET_PROGRESS"; progress: string }
@@ -97,6 +100,9 @@ export function viceJobReducer(
 
     case "SET_SHARPNESS":
       return { ...state, sharpness: action.sharpness };
+
+    case "SET_SHOCK":
+      return { ...state, shock: action.shock };
 
     case "SET_SELECTED_ID":
       return { ...state, selectedId: action.id };

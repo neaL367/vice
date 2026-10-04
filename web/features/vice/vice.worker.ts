@@ -7,7 +7,8 @@ import {
   fastLinearToSrgb,
   spatialTriangularDither,
 } from "../../lib/pipeline/color";
-import { lanczosAdaptiveScale } from "../../lib/pipeline/kernels";
+import { lanczosAdaptiveScale, type LanczosAdaptiveOptions } from "../../lib/pipeline/kernels";
+import { tiledUpscaleLanczos } from "../../lib/pipeline/tiler";
 import { projectClamp } from "../../lib/pipeline/projection";
 import { MAX_OUTPUT_PIXELS } from "../../lib/limits";
 import { ViceCore } from "../../lib/vice-wasm";
@@ -216,18 +217,32 @@ export async function runViceUpscale(
   }
 
   // 2. Pure Mathematical Super-Resolution TypeScript fallback:
-  // Separable Edge-Adaptive Lanczos-3 with Diagonal Steering and Noise-Gated Acutance
+  // Separable Edge-Adaptive Lanczos-3 with Diagonal Steering and Noise-Gated Acutance.
+  // Large outputs go through the tiled overlap-add path to bound peak memory.
+  const upscaleTS = (
+    src: Float32Array,
+    w: number,
+    h: number,
+    c: number,
+    s: number,
+    options: LanczosAdaptiveOptions,
+  ): Float32Array => {
+    if (w * s * h * s > 4_000_000) {
+      return tiledUpscaleLanczos(src, w, h, c, s, 256, 32, options);
+    }
+    return lanczosAdaptiveScale(src, w, h, c, s, options);
+  };
   let raw: Float32Array;
   let residual: number;
   if (scale === 4 && opts.chained4x) {
-    const mid = lanczosAdaptiveScale(lin, w, h, 4, 2, {
+    const mid = upscaleTS(lin, w, h, 4, 2, {
       preset: opts.preset,
       dering: opts.dering,
       sharpness: opts.sharpness,
       shock: opts.shock,
     });
     projectClamp(lin, mid, w, h, 2, 4, 3);
-    raw = lanczosAdaptiveScale(mid, w * 2, h * 2, 4, 2, {
+    raw = upscaleTS(mid, w * 2, h * 2, 4, 2, {
       preset: opts.preset,
       dering: opts.dering,
       sharpness: opts.sharpness,
@@ -235,7 +250,7 @@ export async function runViceUpscale(
     });
     residual = projectClamp(mid, raw, w * 2, h * 2, 2, 4, 3);
   } else {
-    raw = lanczosAdaptiveScale(lin, w, h, 4, scale, {
+    raw = upscaleTS(lin, w, h, 4, scale, {
       preset: opts.preset,
       dering: opts.dering,
       sharpness: opts.sharpness,

@@ -226,7 +226,7 @@ export const UpscalerTuning = memo(function UpscalerTuning() {
         type="button"
         onClick={() => setIsQualityOpen((curr) => !curr)}
         className="flex items-center gap-1.5 rounded-full border border-hairline/80 bg-foreground/[0.03] px-3 py-1 text-xs font-medium text-foreground transition-all hover:bg-foreground/[0.06] active:scale-95"
-        title="Tune upscale preset, anti-ringing, and null-space sharpness"
+        title="Tune upscale preset, anti-ringing, null-space sharpness, and shock"
       >
         <span className="capitalize">{job.preset}</span>
         <span className="text-[10px] text-muted">
@@ -290,6 +290,25 @@ export const UpscalerTuning = memo(function UpscalerTuning() {
                 step="0.05"
                 value={job.sharpness}
                 onChange={(e) => job.setSharpness(parseFloat(e.target.value))}
+                className="h-1.5 w-full cursor-pointer appearance-none rounded-lg bg-foreground/15 accent-foreground"
+              />
+            </div>
+
+            {/* Shock Slider */}
+            <div className="mb-3">
+              <div className="flex items-center justify-between text-[11px] font-medium text-muted mb-1">
+                <span>Shock Edge Steepness</span>
+                <span className="font-mono text-foreground">
+                  {Math.round(job.shock * 100)}%
+                </span>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.05"
+                value={job.shock}
+                onChange={(e) => job.setShock(parseFloat(e.target.value))}
                 className="h-1.5 w-full cursor-pointer appearance-none rounded-lg bg-foreground/15 accent-foreground"
               />
             </div>

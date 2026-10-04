@@ -185,6 +185,7 @@ export function useViceJob() {
         preset: state.preset,
         dering: state.dering,
         sharpness: state.sharpness,
+        shock: state.shock,
       };
       try {
         return await runViceJob(w, jobId, file, state.scale, baseRef.current, onProg, opts);
@@ -208,6 +209,7 @@ export function useViceJob() {
         preset: state.preset,
         dering: state.dering,
         sharpness: state.sharpness,
+        shock: state.shock,
       });
     };
 
@@ -263,7 +265,7 @@ export function useViceJob() {
       batchAbortRef.current = null;
       runningRef.current = false;
     }
-  }, [state.files, state.scale, state.chained4x, state.preset, state.dering, state.sharpness]);
+  }, [state.files, state.scale, state.chained4x, state.preset, state.dering, state.sharpness, state.shock]);
 
   const cancel = useCallback(() => {
     const w = workerRef.current;
@@ -320,6 +322,12 @@ export function useViceJob() {
     });
   }, []);
 
+  const setShock = useCallback((shock: number) => {
+    startTransition(() => {
+      dispatch({ type: "SET_SHOCK", shock });
+    });
+  }, []);
+
   return {
     files: state.files,
     results: state.results,
@@ -336,6 +344,8 @@ export function useViceJob() {
     setDering,
     sharpness: state.sharpness,
     setSharpness,
+    shock: state.shock,
+    setShock,
     progress: state.progress,
     running: state.running,
     error: state.error,
