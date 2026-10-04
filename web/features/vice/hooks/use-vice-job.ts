@@ -85,15 +85,34 @@ export function useViceJob() {
     };
   }, []);
 
-  const ensureWorker = () => {
+  const killWorker = useCallback(() => {
+    // The thread itself died (ErrorEvent), not just a job: terminate, drop
+    // handles, and stop spawning it again so later jobs go straight to the
+    // inline fallback instead of posting into a corpse and hanging.
+    try {
+      workerRef.current?.terminate();
+    } catch {
+      // Already dead.
+    }
+    workerRef.current = null;
+    readyRef.current = null;
+    workerBrokenRef.current = true;
+  }, []);
+
+  const ensureWorker = useCallback(() => {
     if (!baseRef.current) baseRef.current = new URL(".", document.baseURI).href;
     let w = workerRef.current;
     if (!w && !workerBrokenRef.current) {
       w = spawnViceWorker();
-      workerRef.current = w;
+      if (w) {
+        // Persistent death watch: the boot-time listener inside
+        // spawnViceWorker is removed after ready; this one stays.
+        w.addEventListener("error", killWorker);
+        workerRef.current = w;
+      }
     }
     return w;
-  };
+  }, [killWorker]);
 
   const pick = useCallback((incoming: File[] | FileList | undefined | null) => {
     if (!incoming) return;
@@ -121,6 +140,10 @@ export function useViceJob() {
       return;
     }
 
+    // New file set: give the worker one more chance (its asset may have
+    // appeared since, e.g. dev ran worker:build after a 404 boot).
+    workerBrokenRef.current = false;
+
     // Replace-all: revoke previous URLs first outside the render cycle
     revokeAll();
     zipUrlRef.current = null;
@@ -134,6 +157,8 @@ export function useViceJob() {
     });
 
     // Warm the model while the user reads the UI; run() reuses the session.
+    // Boot failure here is advisory only: run() performs its own waited
+    // boot and marks the worker broken before falling back inline.
     const w = ensureWorker();
     if (w) {
       void (async () => {
@@ -148,7 +173,7 @@ export function useViceJob() {
         }
       })();
     }
-  }, []);
+  }, [ensureWorker]);
 
   const removeFile = useCallback((previewUrl: string) => {
     if (runningRef.current) return;
@@ -214,9 +239,23 @@ export function useViceJob() {
     };
 
     try {
-      const w = ensureWorker();
+      // Waited boot: a worker that never signals ready is broken, not slow.
+      // Mark it before the batch so no job posts into a dead thread.
+      let w = ensureWorker();
+      if (w && w !== readyRef.current) {
+        try {
+          await waitForWorkerReady(w);
+          if (workerRef.current === w) readyRef.current = w;
+        } catch {
+          killWorker();
+          w = null;
+        }
+      }
       for (let i = 0; i < state.files.length; i++) {
         if (batchCtrl.signal.aborted) throw new DOMException("cancelled", "AbortError");
+        // Re-resolve per file: the thread may have died mid-batch (the
+        // death watch marks it broken), in which case go inline directly.
+        w = ensureWorker();
         const vf = state.files[i];
         const tag = state.files.length > 1 ? `file ${i + 1}/${state.files.length} ` : "";
         report(`${tag}starting…`);
@@ -265,7 +304,7 @@ export function useViceJob() {
       batchAbortRef.current = null;
       runningRef.current = false;
     }
-  }, [state.files, state.scale, state.chained4x, state.preset, state.dering, state.sharpness, state.shock]);
+  }, [state.files, state.scale, state.chained4x, state.preset, state.dering, state.sharpness, state.shock, killWorker, ensureWorker]);
 
   const cancel = useCallback(() => {
     const w = workerRef.current;

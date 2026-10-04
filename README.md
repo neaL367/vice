@@ -1,9 +1,20 @@
 # Vice — Consistent Super-Resolution Upscaler
 
 Free, private, in-browser mathematical image upscaler. A 6-tap Edge-Adaptive
-Lanczos-3 engine reconstructs sharp edges without ringing, while the C++ core
-(compiled to WASM) guarantees that original pixels survive in physical linear light:
-downscale the result with linear-light box averaging and you recover the input.
+Lanczos-3 engine reconstructs edges without ringing, a coherence-shock PDE
+steepens blurry transitions into crisp sub-pixel steps, and the C++ core
+(compiled to WASM) guarantees that original pixels survive in physical linear
+light: downscale the result with linear-light box averaging and you recover
+the input.
+
+Two ideas, kept separate. The **exact reconstruction constraint**
+($A(\text{output}) \equiv \text{input}$ in linear light) is a mathematical
+guarantee enforced by projection: no hallucinated content can leak into the
+input's range space. The **perceived detail enhancement** (acutance boost,
+null-space sharpness, shock steepening) is heuristic taste: it decides what the
+new pixels look like, and its sliders change PSNR/SSIM without touching the
+guarantee. Turning sharpness and shock to zero still yields a consistent image —
+just a softer one.
 
 **Consistency guarantee:** $A(\text{output}) \equiv \text{input}$ (in linear light).
 The mathematical projection ensures the range space of the original image is
@@ -98,14 +109,22 @@ WASM core in `web/lib/vice-wasm.test.ts`.
 
 ## Limits
 
-- 2×, 3×, and 4× Edge-Adaptive Lanczos-3 super-resolution with box projection.
-- 36 MP output cap (e.g. 6000×6000), defined once in `web/lib/limits.ts` and enforced
-  across worker and UI to respect the 2 GB address space ceiling of 32-bit WebAssembly.
+- 2×, 3×, and 4× super-resolution (Edge-Adaptive Lanczos-3 + coherence-shock
+  PDE) with exact box projection.
+- Device-dependent output cap (24 MP ceiling, e.g. 4900×4900; 12 MP on 4 GB
+  devices or unknown device class, 6 MP at ≤ 2 GB), defined in
+  `web/lib/limits.ts` and enforced in the worker. Measured 2026-10-04 in
+  headless Chromium: 25 MP peaks at 1.94 GB / 29 s, 36 MP at 2.62 GB / 43 s
+  (~68 MB per output MP; the WASM heap never shrinks, so the tab retains
+  ~peak). The old 36 MP cap sat too close to the 2 GB WASM ceiling and is gone.
 - The C++ streaming strip pipeline (`vice_stream_*`) is a prototype for out-of-core band
   processing without whole-image multigrid smoothing; the web app executes full-image
-  projection through the WASM worker up to the 36 MP cap.
+  projection through the WASM worker up to the device cap.
 - Honors EXIF orientation. Preserves embedded ICC profiles (via native PNG iCCP chunks).
 - Full alpha transparency support: un-premultiplies RGB on output and preserves linear alpha.
 - 8-bit pipeline (browser decodes 8-bit); wide-gamut treated as sRGB.
 - Zero network requests after page load — everything runs purely local on-device.
+- The WebGPU compute path is a degraded fallback (no ICC embedding, no test
+  coverage on this machine — no adapter in headless CI). It is not presented
+  as equivalent quality to the WASM engine; see `web/e2e/webgpu.spec.ts`.
 

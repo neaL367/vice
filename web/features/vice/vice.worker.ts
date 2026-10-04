@@ -10,7 +10,7 @@ import {
 import { lanczosAdaptiveScale, type LanczosAdaptiveOptions } from "../../lib/pipeline/kernels";
 import { tiledUpscaleLanczos } from "../../lib/pipeline/tiler";
 import { projectClamp } from "../../lib/pipeline/projection";
-import { MAX_OUTPUT_PIXELS } from "../../lib/limits";
+import { maxOutputPixels } from "../../lib/limits";
 import { ViceCore } from "../../lib/vice-wasm";
 import { extractIccProfile } from "../../lib/icc";
 import type {
@@ -72,10 +72,14 @@ export async function runViceUpscale(
   const icc = fileBuf ? await extractIccProfile(fileBuf).catch(() => null) : null;
 
   const outPx = bmp.width * bmp.height * scale * scale;
-  if (outPx > MAX_OUTPUT_PIXELS) {
+  const capPx = maxOutputPixels();
+  if (outPx > capPx) {
     const mp = (outPx / 1_000_000).toFixed(1);
+    const capMp = (capPx / 1_000_000).toFixed(0);
     bmp.close();
-    throw new Error(`Output ${mp} MP exceeds limit. Use a smaller image.`);
+    throw new Error(
+      `Output ${mp} MP exceeds this device's ${capMp} MP limit. Use a smaller image or scale.`,
+    );
   }
 
   const backend = "Lanczos-3";
