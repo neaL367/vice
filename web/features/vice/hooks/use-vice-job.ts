@@ -278,6 +278,7 @@ export function useViceJob() {
           scale: state.scale,
           hasIcc: meta.hasIcc,
           chained4x: meta.chained4x,
+          durationMs: meta.durationMs,
         };
         startTransition(() => {
           dispatch({ type: "ADD_RESULT", result: r });

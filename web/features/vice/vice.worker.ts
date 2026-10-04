@@ -106,6 +106,8 @@ export async function runViceUpscale(
 
   const W = w * scale;
   const H = h * scale;
+  const engineStart = performance.now();
+  const engineMs = () => Math.round(performance.now() - engineStart);
 
   // 1. Native C++ WebAssembly engine: ultra-fast in-memory Lanczos-3 with diagonal steering
   const core = opts.base ? await ensureCore(opts.base) : null;
@@ -188,6 +190,7 @@ export async function runViceUpscale(
             dering: opts.dering,
             sharpness: opts.sharpness,
             shock: opts.shock,
+            durationMs: engineMs(),
           },
         };
       } finally {
@@ -261,6 +264,7 @@ export async function runViceUpscale(
             dering: opts.dering,
             sharpness: opts.sharpness,
             shock: opts.shock,
+            durationMs: engineMs(),
           },
         };
       } finally {
@@ -305,11 +309,12 @@ export async function runViceUpscale(
           outH: H,
           hasIcc: !!icc,
           chained4x: false,
-          preset: opts.preset,
-          dering: opts.dering,
-          sharpness: opts.sharpness,
-          shock: opts.shock,
-        },
+            preset: opts.preset,
+            dering: opts.dering,
+            sharpness: opts.sharpness,
+            shock: opts.shock,
+            durationMs: engineMs(),
+          },
       };
     } finally {
       core.destroy(cctx);
@@ -379,6 +384,7 @@ export async function runViceUpscale(
       dering: opts.dering,
       sharpness: opts.sharpness,
       shock: opts.shock,
+      durationMs: engineMs(),
     },
   };
 }

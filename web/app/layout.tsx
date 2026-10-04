@@ -1,12 +1,5 @@
 import type { Metadata } from "next";
-import { Faculty_Glyphic } from "next/font/google";
 import "./globals.css";
-
-const faculty = Faculty_Glyphic({
-  variable: "--font-faculty",
-  subsets: ["latin"],
-  weight: "400",
-});
 
 export const metadata: Metadata = {
   title: "Vice — Consistent Super-Resolution Upscaler",
@@ -16,7 +9,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html lang="en" className={`${faculty.variable} h-full antialiased`}>
+    <html lang="en" className="h-full antialiased">
       <body className="min-h-full flex flex-col">{children}</body>
     </html>
   );

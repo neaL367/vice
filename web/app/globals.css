@@ -1,11 +1,19 @@
 @import "tailwindcss";
 
 :root {
-  --background: #fafaf9;
-  --foreground: #1c1917;
-  --muted: #78716c;
-  --hairline: #e7e5e4;
-  --accent: #4f46e5;
+  --background: #f6f7f5;
+  --foreground: #171a19;
+  --muted: #69716d;
+  --hairline: #e4e8e5;
+  --accent: #3159c8;
+  --error: #b94a36;
+
+  /* Calibration workspace layout */
+  --header-h: 52px;
+  --rail-l: 260px;
+  --rail-r: 300px;
+  --evidence-h: 36px;
+  --control-h: 32px;
 }
 
 @theme inline {
@@ -14,16 +22,19 @@
   --color-muted: var(--muted);
   --color-hairline: var(--hairline);
   --color-accent: var(--accent);
-  --font-sans: var(--font-faculty), Georgia, serif;
+  --color-error: var(--error);
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0c0a09;
-    --foreground: #e7e5e4;
-    --muted: #a8a29e;
-    --hairline: #292524;
-    --accent: #a5b4fc;
+    --background: #101312;
+    --foreground: #e8ebe8;
+    --muted: #8b948f;
+    --hairline: #232825;
+    --accent: #7d9bf0;
+    --error: #d97a63;
   }
 }
 
@@ -32,6 +43,20 @@ body {
   color: var(--foreground);
   font-family: var(--font-sans);
   letter-spacing: 0.01em;
+}
+
+/* Visible keyboard focus everywhere */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Native range + disclosure controls follow the calibration palette */
+input[type="range"] {
+  accent-color: var(--accent);
+}
+summary::-webkit-details-marker {
+  display: none;
 }
 
 /* Minimalist Studio Scrollbars */
@@ -129,5 +154,11 @@ body {
   ::view-transition-group(*) {
     animation-duration: 0s !important;
     animation-delay: 0s !important;
+  }
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
   }
 }

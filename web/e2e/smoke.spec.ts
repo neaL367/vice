@@ -34,7 +34,7 @@ test("shell renders tool, upscales 8x8 to 16x16", async ({ page }) => {
   const dl = page.getByRole("link", { name: /Download PNG/ });
   await expect(dl).toBeVisible();
   // meta line shown => projection ran with Lanczos-3
-  await expect(page.getByText(/Lanczos-3/)).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText(/Lanczos-3/).first()).toBeVisible({ timeout: 20_000 });
 });
 
 test("alpha transparency path completes with download", async ({ page }) => {

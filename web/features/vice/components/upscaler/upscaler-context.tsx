@@ -26,8 +26,10 @@ export interface UpscalerContextValue {
   exportFormat: "png" | "webp" | "jpeg";
   setExportFormat: (fmt: "png" | "webp" | "jpeg") => void;
   customFormatUrl: { format: string; url: string; id: number } | null;
-  isQualityOpen: boolean;
-  setIsQualityOpen: React.Dispatch<React.SetStateAction<boolean>>;
+  isQueueOpen: boolean;
+  setIsQueueOpen: React.Dispatch<React.SetStateAction<boolean>>;
+  isInspectorOpen: boolean;
+  setIsInspectorOpen: React.Dispatch<React.SetStateAction<boolean>>;
   selectedResult: ViceResult | undefined;
   hasResults: boolean;
   hasFiles: boolean;
@@ -62,7 +64,8 @@ export function UpscalerProvider({ children }: { children: ReactNode }) {
     url: string;
     id: number;
   } | null>(null);
-  const [isQualityOpen, setIsQualityOpen] = useState(false);
+  const [isQueueOpen, setIsQueueOpen] = useState(false);
+  const [isInspectorOpen, setIsInspectorOpen] = useState(false);
 
   const selectedResult: ViceResult | undefined =
     job.results.find((r) => r.id === job.selectedId) ?? job.results[0];
@@ -142,8 +145,10 @@ export function UpscalerProvider({ children }: { children: ReactNode }) {
       exportFormat,
       setExportFormat,
       customFormatUrl,
-      isQualityOpen,
-      setIsQualityOpen,
+      isQueueOpen,
+      setIsQueueOpen,
+      isInspectorOpen,
+      setIsInspectorOpen,
       selectedResult,
       hasResults,
       hasFiles,
@@ -158,7 +163,8 @@ export function UpscalerProvider({ children }: { children: ReactNode }) {
       onImageLoad,
       exportFormat,
       customFormatUrl,
-      isQualityOpen,
+      isQueueOpen,
+      isInspectorOpen,
       selectedResult,
       hasResults,
       hasFiles,

@@ -7,16 +7,23 @@ export function UpscalerTool() {
     <Upscaler.Root>
       <Upscaler.Header>
         <Upscaler.Brand />
-        <div className="flex items-center gap-2">
-          <Upscaler.ScaleSelector />
-          <Upscaler.Tuning />
+        <div className="flex min-w-0 flex-1 items-center justify-end gap-2">
+          <Upscaler.SheetButtons />
+          <Upscaler.HeaderActions />
         </div>
-        <Upscaler.Actions />
       </Upscaler.Header>
 
-      <Upscaler.StagedBar />
-      <Upscaler.StatusBar />
-      <Upscaler.Stage />
+      <div className="flex min-h-0 w-full flex-1 flex-row">
+        <Upscaler.QueueRail />
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <Upscaler.Stage />
+          <Upscaler.EvidenceRail />
+        </div>
+        <Upscaler.InspectorRail />
+      </div>
+
+      <Upscaler.MobileBar />
+      <Upscaler.Sheets />
     </Upscaler.Root>
   );
 }

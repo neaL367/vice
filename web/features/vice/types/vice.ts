@@ -26,6 +26,8 @@ export interface ViceResult {
   preset?: VicePreset;
   dering?: number;
   sharpness?: number;
+  shock?: number;
+  durationMs: number;
 }
 
 export interface ViceProgress {
@@ -46,6 +48,7 @@ export interface ViceResultMeta {
   dering?: number;
   sharpness?: number;
   shock?: number;
+  durationMs: number;
 }
 
 export interface ViceRunOptions {

@@ -200,6 +200,7 @@ export async function runViceJob(
               dering: options?.dering,
               sharpness: options?.sharpness,
               shock: options?.shock,
+              durationMs: Math.round(gpuRes.durationMs),
             },
           };
         }
