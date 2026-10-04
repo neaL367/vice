@@ -1,5 +1,6 @@
 #include "vice.h"
 #include "png.h"
+#include "parallel.h"
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -426,14 +427,14 @@ int vice_stream_pull_band(vice_stream_ctx* sctx, unsigned char* out_bytes, int* 
     }
   }
 
-  // Exact clamp-aware box consistency on band blocks
+  // Exact clamp-aware box consistency on band blocks (blocks independent).
   int s = sctx->scale;
   int N = s * s;
   double inv_s2 = 1.0 / (double)N;
-  for (int by = 0; by < cur_band_h / s; ++by) {
+  vice_parallel_for(0, cur_band_h / s, [&](int by) {
     int global_in_y = (out_y0 / s) + by;
     int local_in_y = global_in_y - req_in_y0;
-    if (local_in_y < 0 || local_in_y >= req_in_rows) continue;
+    if (local_in_y < 0 || local_in_y >= req_in_rows) return;
 
     for (int bx = 0; bx < sctx->in_w; ++bx) {
       for (int c = 0; c < sctx->channels; ++c) {
@@ -498,7 +499,7 @@ int vice_stream_pull_band(vice_stream_ctx* sctx, unsigned char* out_bytes, int* 
         }
       }
     }
-  }
+  });
 
   // Track worst block error for vice_stream_last_residual (band rows are
   // whole blocks: band_h and out_h are multiples of scale).

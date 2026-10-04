@@ -287,6 +287,7 @@ export async function runViceUpscale(
             durationMs: engineMs(),
             savedToDisk: true,
             fileBytes,
+            threads: core.threadWorkers(),
           },
         };
       } finally {

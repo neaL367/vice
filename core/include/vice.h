@@ -145,6 +145,8 @@ size_t vice_png_peak_pending(const vice_png_stream* st);
 
 float vice_srgb_to_linear(float v);
 float vice_linear_to_srgb(float v);
+/* Row-worker count the engine would use (1 = serial single-threaded core). */
+int vice_thread_workers(void);
 float vice_fast_linear_to_srgb(float v);
 float vice_fast_srgb_to_linear(float v);
 float vice_spatial_triangular_dither(int x, int y, int ch);

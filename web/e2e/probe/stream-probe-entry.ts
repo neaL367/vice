@@ -89,6 +89,7 @@ export interface InfiniteProbeResult extends StreamProbeResult {
   fileBytes: number;
   previewW: number;
   previewH: number;
+  threads: number;
 }
 
 export async function runInfinite(
@@ -161,7 +162,129 @@ export async function runInfinite(
     fileBytes: meta.fileBytes ?? total,
     previewW,
     previewH,
+    threads: meta.threads ?? 1,
   };
 }
 
-(window as unknown as { __streamProbe: object }).__streamProbe = { runStream, runInfinite };
+export interface InfiniteFileResult {
+  outW: number;
+  outH: number;
+  backend: string;
+  residual: number;
+  savedToDisk: boolean;
+  chunks: number;
+  fileBytes: number;
+  pngOk: boolean;
+  idatChunks: number;
+  idatBytes: number;
+  wallMs: number;
+  heapDelta: number;
+  previewW: number;
+  previewH: number;
+  threads: number;
+}
+
+// Large-file proof entry: caller supplies the File; chunks are validated
+// structurally (never decoded: a 100MP bitmap would defeat the point).
+export async function runInfiniteFile(
+  file: File,
+  scale: 2 | 4,
+  chained4x: boolean,
+): Promise<InfiniteFileResult> {
+  const chunks: Uint8Array[] = [];
+  const perf = performance as Performance & { memory?: { usedJSHeapSize: number } };
+  const heap0 = perf.memory?.usedJSHeapSize ?? 0;
+  const t0 = performance.now();
+  const { blob, meta } = await runViceUpscale(file, scale, () => {}, {
+    base: "/",
+    preset: "photo",
+    dering: 1.0,
+    sharpness: 0.35,
+    shock: 0.35,
+    chained4x,
+    sink: {
+      write: async (chunk: Uint8Array) => {
+        chunks.push(chunk.slice());
+      },
+    },
+  });
+  const wallMs = Math.round(performance.now() - t0);
+  const heapDelta = (perf.memory?.usedJSHeapSize ?? 0) - heap0;
+  const total = chunks.reduce((s, c) => s + c.length, 0);
+  const png = new Uint8Array(total);
+  let off = 0;
+  for (const c of chunks) {
+    png.set(c, off);
+    off += c.length;
+  }
+  // Structural walk: sig, IHDR dims, every CRC, IEND last.
+  const rd32 = (o: number) =>
+    (png[o] * 2 ** 24 + png[o + 1] * 2 ** 16 + png[o + 2] * 2 ** 8 + png[o + 3]) >>> 0;
+  const table = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let v = n;
+    for (let k = 0; k < 8; k++) v = v & 1 ? 0xedb88320 ^ (v >>> 1) : v >>> 1;
+    table[n] = v >>> 0;
+  }
+  const crc = (o: number, n: number): number => {
+    let v = 0xffffffff;
+    for (let i = 0; i < n; i++) v = table[(v ^ png[o + i]) & 255] ^ (v >>> 8);
+    return (v ^ 0xffffffff) >>> 0;
+  };
+  let pngOk = png.length > 8 && png[0] === 137 && png[1] === 0x50;
+  let pos = 8;
+  let idatChunks = 0;
+  let idatBytes = 0;
+  let lastType = "";
+  while (pngOk && pos + 8 <= png.length) {
+    const n = rd32(pos);
+    if (n > 16 * 1024 * 1024 || pos + 12 + n > png.length) {
+      pngOk = false;
+      break;
+    }
+    const type = String.fromCharCode(png[pos + 4], png[pos + 5], png[pos + 6], png[pos + 7]);
+    if (crc(pos + 4, 4 + n) !== rd32(pos + 8 + n)) {
+      pngOk = false;
+      break;
+    }
+    if (pos === 8) {
+      pngOk =
+        type === "IHDR" && n === 13 && rd32(16) === meta.outW && rd32(20) === meta.outH;
+    }
+    if (type === "IDAT") {
+      idatChunks++;
+      idatBytes += n;
+    }
+    lastType = type;
+    pos += 12 + n;
+    if (type === "IEND") break;
+  }
+  pngOk = pngOk && lastType === "IEND" && pos === png.length;
+  const pv = await createImageBitmap(blob);
+  const previewW = pv.width;
+  const previewH = pv.height;
+  pv.close();
+  return {
+    outW: meta.outW,
+    outH: meta.outH,
+    backend: meta.backend,
+    residual: meta.residual,
+    savedToDisk: !!meta.savedToDisk,
+    chunks: chunks.length,
+    fileBytes: total,
+    pngOk,
+    idatChunks,
+    idatBytes,
+    wallMs,
+    heapDelta,
+    previewW,
+    previewH,
+    threads: meta.threads ?? 1,
+  };
+}
+
+(window as unknown as { __streamProbe: object }).__streamProbe = {
+  runStream,
+  runInfinite,
+  runInfiniteFile,
+};

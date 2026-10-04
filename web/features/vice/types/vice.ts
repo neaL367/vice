@@ -31,6 +31,7 @@ export interface ViceResult {
   savedToDisk?: boolean; // blob is a small preview; full PNG already on disk
   fileName?: string;
   fileBytes?: number;
+  threads?: number;
 }
 
 export interface ViceProgress {
@@ -54,6 +55,7 @@ export interface ViceResultMeta {
   durationMs: number;
   savedToDisk?: boolean; // infinite path: blob is a small preview, file is on disk
   fileBytes?: number; // infinite path: encoded bytes written
+  threads?: number; // engine row workers (1 = single-threaded core)
 }
 
 // Chunk sink for the infinite (save-to-disk) path. Implemented inline by the

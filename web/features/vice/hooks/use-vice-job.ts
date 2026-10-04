@@ -43,6 +43,35 @@ function canSaveToDisk(): boolean {
   );
 }
 
+function canPickDirectory(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    typeof (window as unknown as { showDirectoryPicker?: unknown }).showDirectoryPicker ===
+      "function"
+  );
+}
+
+interface DirHandle {
+  getFileHandle(
+    name: string,
+    opts: { create: boolean },
+  ): Promise<{
+    createWritable(): Promise<{
+      write(chunk: Uint8Array): Promise<void>;
+      close(): Promise<void>;
+      abort(): Promise<void>;
+    }>;
+  }>;
+}
+
+async function pickDirectory(): Promise<DirHandle> {
+  const w = window as unknown as {
+    showDirectoryPicker?: (opts: unknown) => Promise<DirHandle>;
+  };
+  if (!w.showDirectoryPicker) throw new Error("Folder save is not supported by this browser.");
+  return w.showDirectoryPicker({ mode: "readwrite" });
+}
+
 async function pickSaveFile(suggestedName: string): Promise<SaveFileHandle> {
   const w = window as unknown as {
     showSaveFilePicker?: (opts: unknown) => Promise<SaveFileHandle>;
@@ -334,6 +363,134 @@ export function useViceJob() {
     }
   }, [state.files, state.scale, state.chained4x, state.preset, state.dering, state.sharpness, state.shock, killWorker, ensureWorker]);
 
+  // Batch folder save: one directory picker (single gesture), then every
+  // file streams to its own PNG in that folder via the infinite path.
+  // Whole batch goes to folder regardless of per-file size.
+  const runBatchToFolder = useCallback(async () => {
+    if (runningRef.current || state.files.length < 2) return;
+    if (!canPickDirectory()) {
+      dispatch({
+        type: "SET_ERROR",
+        error: "Folder export requires Chrome/Edge desktop or Vice Desktop.",
+      });
+      return;
+    }
+    runningRef.current = true;
+    dispatch({ type: "START_RUN" });
+    const report = (s: string) =>
+      startTransition(() => dispatch({ type: "SET_PROGRESS", progress: s }));
+    const batchCtrl = new AbortController();
+    batchAbortRef.current = batchCtrl;
+    try {
+      const dir = await pickDirectory();
+      let w = ensureWorker();
+      if (w && w !== readyRef.current) {
+        try {
+          await waitForWorkerReady(w);
+          if (workerRef.current === w) readyRef.current = w;
+        } catch {
+          killWorker();
+          w = null;
+        }
+      }
+      const inlineMod = w ? null : await import("../vice.worker");
+      for (let i = 0; i < state.files.length; i++) {
+        if (batchCtrl.signal.aborted) throw new DOMException("cancelled", "AbortError");
+        const vf = state.files[i];
+        const stem = vf.file.name.replace(/\.[^.]*$/, "") || "image";
+        const fileName = `${stem}-vice${state.scale}x.png`;
+        const tag = `file ${i + 1}/${state.files.length} `;
+        report(`${tag}starting…`);
+        const onProg = (p: ViceProgress) => {
+          const label = stageLabel(p.stage) ?? `${p.stage}: ${p.band}/${p.totalBands}`;
+          report(`${tag}${label}`);
+        };
+        const opts = {
+          chained4x: state.chained4x,
+          preset: state.preset,
+          dering: state.dering,
+          sharpness: state.sharpness,
+          shock: state.shock,
+        };
+        const jobId = ++jobIdRef.current;
+        const fh = await dir.getFileHandle(fileName, { create: true });
+        const writable = await fh.createWritable();
+        let blob: Blob;
+        let meta: ViceResultMeta;
+        const sinkWrite = async (chunk: Uint8Array) => {
+          await writable.write(chunk);
+        };
+        try {
+          if (w) {
+            ({ blob, meta } = await runViceJob(w, jobId, vf.file, state.scale, baseRef.current, onProg, {
+              ...opts,
+              sinkWrite,
+            }));
+          } else if (inlineMod) {
+            ({ blob, meta } = await inlineMod.runViceUpscale(vf.file, state.scale, onProg, {
+              ...opts,
+              signal: batchCtrl.signal,
+              base: baseRef.current,
+              sink: { write: sinkWrite },
+            }));
+          } else {
+            throw new Error("No compute backend available");
+          }
+          await writable.close();
+        } catch (e) {
+          try {
+            await writable.abort();
+          } catch {
+            // Original error matters.
+          }
+          throw e;
+        }
+        const id = ++resultIdRef.current;
+        const r: ViceResult = {
+          id,
+          name: vf.file.name,
+          previewUrl: vf.previewUrl,
+          blob,
+          blobUrl: track(URL.createObjectURL(blob)),
+          outW: meta.outW,
+          outH: meta.outH,
+          residual: meta.residual,
+          backend: meta.backend,
+          scale: state.scale,
+          hasIcc: meta.hasIcc,
+          chained4x: meta.chained4x,
+          durationMs: meta.durationMs,
+          savedToDisk: true,
+          fileName,
+          fileBytes: meta.fileBytes,
+          threads: meta.threads,
+        };
+        startTransition(() => {
+          dispatch({ type: "ADD_RESULT", result: r });
+        });
+      }
+      startTransition(() => {
+        dispatch({ type: "FINISH_RUN" });
+      });
+    } catch (e) {
+      console.error("[Vice] Folder export failed:", e);
+      if (e instanceof DOMException && e.name === "AbortError") {
+        startTransition(() => {
+          dispatch({ type: "FAIL_RUN", progress: "cancelled" });
+        });
+      } else {
+        startTransition(() => {
+          dispatch({
+            type: "FAIL_RUN",
+            error: e instanceof Error ? e.message : "Folder export failed",
+          });
+        });
+      }
+    } finally {
+      batchAbortRef.current = null;
+      runningRef.current = false;
+    }
+  }, [state.files, state.scale, state.chained4x, state.preset, state.dering, state.sharpness, state.shock, killWorker, ensureWorker]);
   // Infinite (save-to-disk) export: no output MP cap. Single file only — one
   // picker per user gesture. The full PNG streams to disk in chunks; the
   // result entry carries a small preview plus the saved file's name/size.
@@ -429,6 +586,7 @@ export function useViceJob() {
         savedToDisk: true,
         fileName,
         fileBytes: meta.fileBytes,
+        threads: meta.threads,
       };
       startTransition(() => {
         dispatch({ type: "ADD_RESULT", result: r });
@@ -542,7 +700,9 @@ export function useViceJob() {
     removeFile,
     run,
     runToFile,
+    runBatchToFolder,
     canSaveToDisk: canSaveToDisk(),
+    canPickDirectory: canPickDirectory(),
     cancel,
     downloadZip,
   };

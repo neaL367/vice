@@ -20,6 +20,7 @@ interface InfiniteProbeResult {
   fileBytes: number;
   previewW: number;
   previewH: number;
+  threads: number;
 }
 
 type Fixture = "halves-bw" | "halves-alpha" | "gray";
@@ -72,6 +73,9 @@ test("infinite halves decode to 16x16 flats with residual", async ({ page }) => 
   expect([r.outW, r.outH, r.w, r.h]).toEqual([16, 16, 16, 16]);
   expect(r.residual).toBeLessThan(1e-4);
   expect([r.previewW, r.previewH]).toEqual([16, 16]);
+  // Threaded core engagement: isolated page + multi-core runner -> T2+.
+  const cores = await page.evaluate(() => navigator.hardwareConcurrency ?? 1);
+  expect(r.threads).toBeGreaterThanOrEqual(cores > 1 ? 2 : 1);
   const colMean = (x0: number, x1: number): number => {
     let s = 0;
     let n = 0;

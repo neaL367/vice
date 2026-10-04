@@ -103,6 +103,7 @@ function InspectorStaged() {
   const overStreamCap = outMp != null && outMp > streamCapMp;
   const singleFile = job.files.length === 1;
   const canSave = overStreamCap && singleFile && job.canSaveToDisk;
+  const canSaveBatch = overStreamCap && !singleFile && job.canPickDirectory;
 
   return (
     <div className="flex flex-col gap-4">
@@ -213,11 +214,26 @@ function InspectorStaged() {
               memory cap, preview only in-app.
             </div>
           </div>
+        ) : canSaveBatch ? (
+          <div className="flex flex-col gap-2">
+            <button
+              type="button"
+              onClick={() => void job.runBatchToFolder()}
+              disabled={job.running}
+              className="inline-flex h-8 w-full items-center justify-center gap-2 rounded-md bg-foreground px-4 text-xs font-semibold text-background transition-opacity hover:opacity-90 active:scale-[0.98] disabled:opacity-40"
+            >
+              {job.running && <SpinnerIcon className="h-3 w-3 animate-spin" />}
+              <span>Choose folder &amp; upscale {job.files.length}</span>
+            </button>
+            <div className="text-[11px] text-muted">
+              Each file streams to its own PNG — no memory cap, previews only in-app.
+            </div>
+          </div>
         ) : (
           <div className="text-xs text-error">
             {singleFile
               ? "Over this device's in-browser limit. Large exports require Chrome/Edge desktop or Vice Desktop."
-              : "Over this device's in-browser limit. Reduce the input size, scale, or batch to one file for save-to-disk."}
+              : "Over this device's in-browser limit. Folder export requires Chrome/Edge desktop or Vice Desktop."}
           </div>
         )
       ) : (
@@ -233,7 +249,7 @@ function InspectorResult() {
   const r = selectedResult;
   const rows: [string, string][] = [
     ["Output", `${r.outW}×${r.outH}`],
-    ["Engine", r.backend],
+    ["Engine", r.threads != null && r.threads > 1 ? `${r.backend} · T${r.threads}` : r.backend],
     ["Residual", r.residual.toExponential(1)],
     ["Time", `${r.durationMs}ms`],
     ["ICC", r.hasIcc ? "Preserved" : "Absent"],

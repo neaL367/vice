@@ -38,6 +38,7 @@ interface ViceCoreInstance {
   _vice_png_close?(st: number): number;
   _vice_png_destroy?(st: number): void;
   _vice_png_peak_pending?(st: number): number;
+  _vice_thread_workers?(): number;
   _vice_last_residual(ctx: number): number;
   _vice_destroy(ctx: number): void;
   _malloc(size: number): number;
@@ -54,9 +55,25 @@ export class ViceCore {
     readonly outW: number,
     readonly outH: number,
     readonly channels: number,
+    readonly threaded: boolean = false,
   ) {}
 
   static async load(base: string): Promise<ViceCore | null> {
+    // Threaded core first, but only when the page is cross-origin isolated
+    // (SharedArrayBuffer gate); stale/missing asset -> single-threaded core.
+    if (typeof crossOriginIsolated !== "undefined" && crossOriginIsolated) {
+      try {
+        const mod = (await import(
+          /* turbopackIgnore: true */ `${base}wasm/core.threaded.js`
+        )) as { default: CoreFactory };
+        const core = await mod.default();
+        if (typeof core._vice_create === "function") {
+          return new ViceCore(core, 0, 0, 0, true);
+        }
+      } catch {
+        // Fall through to the single-threaded core.
+      }
+    }
     try {
       // Runtime URL: left as-is by bundlers (turbopackIgnore) and bun build.
       const mod = (await import(/* turbopackIgnore: true */ `${base}wasm/core.js`)) as {
@@ -68,6 +85,14 @@ export class ViceCore {
       return new ViceCore(core, 0, 0, 0);
     } catch {
       return null;
+    }
+  }
+
+  threadWorkers(): number {
+    try {
+      return this.core._vice_thread_workers?.() ?? 1;
+    } catch {
+      return 1;
     }
   }
 

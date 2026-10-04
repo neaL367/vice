@@ -1,4 +1,5 @@
 #include "vice.h"
+#include "parallel.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -68,6 +69,10 @@ void vice_tuning_defaults(ViceTuning* t) {
   t->shock = 0.35f;
 }
 
+int vice_thread_workers(void) {
+  return vice_worker_count(128); // representative band height for telemetry
+}
+
 int vice_upscale_lanczos_adaptive(const float* src, int w, int h, int c, int scale, float* dst) {
   ViceTuning t;
   vice_tuning_defaults(&t);
@@ -131,7 +136,7 @@ int vice_upscale_lanczos_adaptive_ex(const float* src, int w, int h, int c, int 
     x_coords[x].weights = &g_lanczos_table.table[lut_idx * 6];
   }
 
-  for (int y = 0; y < h; ++y) {
+  vice_parallel_for(0, h, [&](int y) {
     const size_t row_src = (size_t)y * w;
     const size_t row_dst = (size_t)y * W;
 
@@ -185,12 +190,12 @@ int vice_upscale_lanczos_adaptive_ex(const float* src, int w, int h, int c, int 
         tmp[(row_dst + x) * c + ch] = val;
       }
     }
-  }
+  });
 
   // Pass 2: Vertical scale with Diagonal Edge Steering (W x h -> W x H)
   const int step_x = scale;
 
-  for (int y = 0; y < H; ++y) {
+  vice_parallel_for(0, H, [&](int y) {
     double src_y = ((double)y + 0.5) / (double)scale - 0.5;
     int base_idx = (int)std::floor(src_y);
     double frac = src_y - (double)base_idx;
@@ -268,14 +273,14 @@ int vice_upscale_lanczos_adaptive_ex(const float* src, int w, int h, int c, int 
         dst[(row_dst + x) * c + ch] = val;
       }
     }
-  }
+  });
 
   // Pass 3: Null-Space Micro-Texture Sharpness Enhancement
   const int proc_c = (c == 4) ? 3 : c;
   if (SHARPNESS > 0.001f) {
     std::vector<float> sharp_tmp((size_t)W * H * c);
     std::memcpy(sharp_tmp.data(), dst, sharp_tmp.size() * sizeof(float));
-    for (int y = 0; y < H; ++y) {
+    vice_parallel_for(0, H, [&](int y) {
       int y_prev = clamp_idx(y - 1, H - 1);
       int y_next = clamp_idx(y + 1, H - 1);
       for (int x = 0; x < W; ++x) {
@@ -292,7 +297,7 @@ int vice_upscale_lanczos_adaptive_ex(const float* src, int w, int h, int c, int 
           sharp_tmp[((size_t)y * W + x) * c + ch] = center + SHARPNESS * hp;
         }
       }
-    }
+    });
     std::memcpy(dst, sharp_tmp.data(), sharp_tmp.size() * sizeof(float));
   }
 
@@ -304,7 +309,7 @@ int vice_upscale_lanczos_adaptive_ex(const float* src, int w, int h, int c, int 
     std::memcpy(shock_tmp.data(), dst, shock_tmp.size() * sizeof(float));
 
     for (int iter = 0; iter < 2; ++iter) {
-      for (int y = 0; y < H; ++y) {
+      vice_parallel_for(0, H, [&](int y) {
         int ym1 = clamp_idx(y - 1, H - 1);
         int yp1 = clamp_idx(y + 1, H - 1);
         size_t row_y = (size_t)y * W;
@@ -341,7 +346,7 @@ int vice_upscale_lanczos_adaptive_ex(const float* src, int w, int h, int c, int 
             shock_tmp[(row_y + x) * c + ch] = std::max(0.0f, std::min(1.0f, updated));
           }
         }
-      }
+      });
       std::memcpy(dst, shock_tmp.data(), shock_tmp.size() * sizeof(float));
     }
   }

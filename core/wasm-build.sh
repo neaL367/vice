@@ -27,7 +27,31 @@ emcc -O3 -msimd128 -flto -fno-exceptions -fno-rtti \
   -sMAXIMUM_MEMORY=2147483648 \
   -sASSERTIONS=1 \
   -sENVIRONMENT=web,worker,node \
-  -sEXPORTED_FUNCTIONS=_vice_create,_vice_set_input,_vice_submit_raw_tile,_vice_upscale,_vice_upscale_ex,_vice_upscale_lanczos_adaptive,_vice_upscale_lanczos_adaptive_ex,_vice_tuning_defaults,_vice_project,_vice_project_multigrid,_vice_download_raw,_vice_process_band,_vice_finish_png,_vice_set_icc_profile,_vice_last_residual,_vice_destroy,_vice_project_box,_vice_project_box_clamped,_vice_project_smooth,_vice_stream_create,_vice_stream_set_tuning,_vice_stream_set_icc_profile,_vice_stream_push_input_rows,_vice_stream_has_next_band,_vice_stream_pull_band,_vice_stream_finish_png,_vice_stream_last_residual,_vice_stream_set_fused,_vice_stream_destroy,_vice_png_open,_vice_png_write_rows,_vice_png_drain,_vice_png_close,_vice_png_destroy,_vice_png_peak_pending,_vice_srgb_to_linear,_vice_linear_to_srgb,_vice_fast_linear_to_srgb,_vice_fast_srgb_to_linear,_vice_spatial_triangular_dither,_malloc,_free \
+  -sEXPORTED_FUNCTIONS=_vice_create,_vice_set_input,_vice_submit_raw_tile,_vice_upscale,_vice_upscale_ex,_vice_upscale_lanczos_adaptive,_vice_upscale_lanczos_adaptive_ex,_vice_tuning_defaults,_vice_project,_vice_project_multigrid,_vice_download_raw,_vice_process_band,_vice_finish_png,_vice_set_icc_profile,_vice_last_residual,_vice_destroy,_vice_project_box,_vice_project_box_clamped,_vice_project_smooth,_vice_stream_create,_vice_stream_set_tuning,_vice_stream_set_icc_profile,_vice_stream_push_input_rows,_vice_stream_has_next_band,_vice_stream_pull_band,_vice_stream_finish_png,_vice_stream_last_residual,_vice_stream_set_fused,_vice_stream_destroy,_vice_png_open,_vice_png_write_rows,_vice_png_drain,_vice_png_close,_vice_png_destroy,_vice_png_peak_pending,_vice_thread_workers,_vice_srgb_to_linear,_vice_linear_to_srgb,_vice_fast_linear_to_srgb,_vice_fast_srgb_to_linear,_vice_spatial_triangular_dither,_malloc,_free \
   -sEXPORTED_RUNTIME_METHODS=HEAPF32,HEAPU8
 
 ls -la "$OUT/core.js" "$OUT/core.wasm"
+
+# Threaded variant: identical source + VICE_THREADS row sharding.
+# Loads only in cross-origin-isolated pages (COOP/COEP headers ship app-wide);
+# the loader falls back to core.js otherwise. Not used by the node/bun tests.
+emcc -O3 -msimd128 -flto -fno-exceptions -fno-rtti -pthread -DVICE_THREADS \
+  -x c++ -std=c++20 \
+  -Icore/include \
+  core/src/color.cpp core/src/project.cpp core/src/tile.cpp \
+  core/src/png.cpp core/src/api.cpp core/src/upscale.cpp core/src/miniz.c core/src/miniz_tdef.c \
+  core/src/miniz_tinfl.c tools/wasm/entry.cpp \
+  -o "$OUT/core.threaded.js" \
+  -sMODULARIZE=1 \
+  -sEXPORT_ES6=1 \
+  -sEXPORT_NAME=createViceCore \
+  -sALLOW_MEMORY_GROWTH=1 \
+  -sINITIAL_MEMORY=67108864 \
+  -sMAXIMUM_MEMORY=2147483648 \
+  -sASSERTIONS=1 \
+  -sENVIRONMENT=web,worker \
+  -sPTHREAD_POOL_SIZE=4 \
+  -sEXPORTED_FUNCTIONS=_vice_create,_vice_set_input,_vice_submit_raw_tile,_vice_upscale,_vice_upscale_ex,_vice_upscale_lanczos_adaptive,_vice_upscale_lanczos_adaptive_ex,_vice_tuning_defaults,_vice_project,_vice_project_multigrid,_vice_download_raw,_vice_process_band,_vice_finish_png,_vice_set_icc_profile,_vice_last_residual,_vice_destroy,_vice_project_box,_vice_project_box_clamped,_vice_project_smooth,_vice_stream_create,_vice_stream_set_tuning,_vice_stream_set_icc_profile,_vice_stream_push_input_rows,_vice_stream_has_next_band,_vice_stream_pull_band,_vice_stream_finish_png,_vice_stream_last_residual,_vice_stream_set_fused,_vice_stream_destroy,_vice_png_open,_vice_png_write_rows,_vice_png_drain,_vice_png_close,_vice_png_destroy,_vice_png_peak_pending,_vice_thread_workers,_vice_srgb_to_linear,_vice_linear_to_srgb,_vice_fast_linear_to_srgb,_vice_fast_srgb_to_linear,_vice_spatial_triangular_dither,_malloc,_free \
+  -sEXPORTED_RUNTIME_METHODS=HEAPF32,HEAPU8
+
+ls -la "$OUT/core.threaded.js" "$OUT/core.threaded.wasm"
