@@ -25,3 +25,9 @@ coverage/
 
 # Eval datasets (250MB+ downloads, not for repo)
 tools/eval/data/
+
+# Local guides / documentation
+Vice_ Consistent Super-Resolution Upscaler, Implementation Guide.md
+*guide*.md
+*Guide*.md
+
