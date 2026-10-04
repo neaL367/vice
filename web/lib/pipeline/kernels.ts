@@ -9,6 +9,7 @@
 export interface LanczosAdaptiveOptions {
   dering?: number;
   sharpness?: number;
+  shock?: number;
   preset?: "photo" | "smooth" | "pixel-art";
 }
 
@@ -296,5 +297,182 @@ export function lanczosAdaptiveScale(
     dst.set(sharpTmp);
   }
 
+  // Pass 4: Coherence Shock PDE Edge Steeper (Vice 2.0 Engine)
+  const shock = Math.max(0, Math.min(1, options?.shock ?? (preset === "photo" ? 0.35 : 0)));
+  if (shock > 0.001) {
+    const shocked = applyCoherenceShockFilter(dst, W, H, c, shock, 2);
+    dst.set(shocked);
+  }
+
   return dst;
+}
+
+export interface StructureTensorField {
+  coherence: Float32Array; // [w * h] in [0, 1]
+  angle: Float32Array;     // [w * h] in radians [-PI/2, PI/2]
+  energy: Float32Array;    // [w * h] gradient magnitude
+}
+
+/**
+ * Computes continuous Structure Tensor J = K_rho * (grad I (x) grad I)
+ * using 1st-order isotropic Scharr gradients and 3x3 Gaussian smoothing.
+ */
+export function computeStructureTensor(
+  src: Float32Array,
+  w: number,
+  h: number,
+  c: number,
+): StructureTensorField {
+  const size = w * h;
+  const coherence = new Float32Array(size);
+  const angle = new Float32Array(size);
+  const energy = new Float32Array(size);
+
+  const jxx = new Float32Array(size);
+  const jyy = new Float32Array(size);
+  const jxy = new Float32Array(size);
+
+  // Compute Scharr gradients (luminance)
+  for (let y = 0; y < h; y++) {
+    const y0 = Math.max(0, y - 1);
+    const y1 = Math.min(h - 1, y + 1);
+    const rowY = y * w;
+    const rowY0 = y0 * w;
+    const rowY1 = y1 * w;
+
+    for (let x = 0; x < w; x++) {
+      const x0 = Math.max(0, x - 1);
+      const x1 = Math.min(w - 1, x + 1);
+
+      const getLum = (offset: number) => {
+        const idx = offset * c;
+        return c >= 3 ? 0.2126 * src[idx] + 0.7152 * src[idx + 1] + 0.0722 * src[idx + 2] : src[idx];
+      };
+
+      const tl = getLum(rowY0 + x0);
+      const tc = getLum(rowY0 + x);
+      const tr = getLum(rowY0 + x1);
+      const ml = getLum(rowY + x0);
+      const mr = getLum(rowY + x1);
+      const bl = getLum(rowY1 + x0);
+      const bc = getLum(rowY1 + x);
+      const br = getLum(rowY1 + x1);
+
+      const gx = (3 * (tr - tl) + 10 * (mr - ml) + 3 * (br - bl)) / 32;
+      const gy = (3 * (bl - tl) + 10 * (bc - tc) + 3 * (br - tr)) / 32;
+
+      const idx = rowY + x;
+      jxx[idx] = gx * gx;
+      jyy[idx] = gy * gy;
+      jxy[idx] = gx * gy;
+      energy[idx] = Math.sqrt(gx * gx + gy * gy);
+    }
+  }
+
+  // 3x3 Gaussian smoothing for tensor integration scale
+  for (let y = 0; y < h; y++) {
+    const y0 = Math.max(0, y - 1) * w;
+    const yc = y * w;
+    const y1 = Math.min(h - 1, y + 1) * w;
+
+    for (let x = 0; x < w; x++) {
+      const x0 = Math.max(0, x - 1);
+      const x1 = Math.min(w - 1, x + 1);
+
+      const sxx = (
+        jxx[y0 + x0] + 2 * jxx[y0 + x] + jxx[y0 + x1] +
+        2 * jxx[yc + x0] + 4 * jxx[yc + x] + 2 * jxx[yc + x1] +
+        jxx[y1 + x0] + 2 * jxx[y1 + x] + jxx[y1 + x1]
+      ) / 16;
+
+      const syy = (
+        jyy[y0 + x0] + 2 * jyy[y0 + x] + jyy[y0 + x1] +
+        2 * jyy[yc + x0] + 4 * jyy[yc + x] + 2 * jyy[yc + x1] +
+        jyy[y1 + x0] + 2 * jyy[y1 + x] + jyy[y1 + x1]
+      ) / 16;
+
+      const sxy = (
+        jxy[y0 + x0] + 2 * jxy[y0 + x] + jxy[y0 + x1] +
+        2 * jxy[yc + x0] + 4 * jxy[yc + x] + 2 * jxy[yc + x1] +
+        jxy[y1 + x0] + 2 * jxy[y1 + x] + jxy[y1 + x1]
+      ) / 16;
+
+      const trace = sxx + syy;
+      const det = sxx * syy - sxy * sxy;
+      const disc = Math.max(0, trace * trace - 4 * det);
+      const sqrtDisc = Math.sqrt(disc);
+      const lambda1 = (trace + sqrtDisc) * 0.5;
+      const lambda2 = Math.max(0, (trace - sqrtDisc) * 0.5);
+
+      const denom = lambda1 + lambda2 + 1e-5;
+      const coh = Math.pow((lambda1 - lambda2) / denom, 2);
+      const theta = 0.5 * Math.atan2(2 * sxy, sxx - syy) + Math.PI / 2;
+
+      const idx = yc + x;
+      coherence[idx] = Math.max(0, Math.min(1, coh));
+      angle[idx] = theta;
+    }
+  }
+
+  return { coherence, angle, energy };
+}
+
+/**
+ * Coherence-Enhancing Nonlinear Shock PDE Filter:
+ * dI/dt = -sign(I_eta_eta) * |grad I|
+ * Steepens blurry transition zones into crisp sub-pixel steps without overshoot.
+ */
+export function applyCoherenceShockFilter(
+  img: Float32Array,
+  w: number,
+  h: number,
+  c: number,
+  strength = 0.5,
+  iterations = 2,
+): Float32Array {
+  if (strength <= 0.001) return img;
+  const current = new Float32Array(img);
+  const next = new Float32Array(img.length);
+  const dt = 0.12 * Math.min(1, strength);
+
+  for (let it = 0; it < iterations; it++) {
+    for (let y = 0; y < h; y++) {
+      const ym1 = Math.max(0, y - 1) * w;
+      const yc = y * w;
+      const yp1 = Math.min(h - 1, y + 1) * w;
+
+      for (let x = 0; x < w; x++) {
+        const xm1 = Math.max(0, x - 1);
+        const xp1 = Math.min(w - 1, x + 1);
+
+        for (let ch = 0; ch < c; ch++) {
+          const cCenter = current[(yc + x) * c + ch];
+          const cL = current[(yc + xm1) * c + ch];
+          const cR = current[(yc + xp1) * c + ch];
+          const cT = current[(ym1 + x) * c + ch];
+          const cB = current[(yp1 + x) * c + ch];
+          const cTL = current[(ym1 + xm1) * c + ch];
+          const cTR = current[(ym1 + xp1) * c + ch];
+          const cBL = current[(yp1 + xm1) * c + ch];
+          const cBR = current[(yp1 + xp1) * c + ch];
+
+          const Ix = 0.5 * (cR - cL);
+          const Iy = 0.5 * (cB - cT);
+          const gradSq = Ix * Ix + Iy * Iy;
+          const gradNorm = Math.sqrt(gradSq + 1e-6);
+
+          const Ixx = cR - 2 * cCenter + cL;
+          const Iyy = cB - 2 * cCenter + cT;
+          const Ixy = 0.25 * (cBR - cBL - cTR + cTL);
+
+          const I_eta_eta = (Ix * Ix * Ixx + 2 * Ix * Iy * Ixy + Iy * Iy * Iyy) / (gradSq + 1e-6);
+          const shock = -Math.tanh(6 * I_eta_eta) * gradNorm;
+          const update = cCenter + dt * shock;
+          next[(yc + x) * c + ch] = Math.max(0, Math.min(1, update));
+        }
+      }
+    }
+    current.set(next);
+  }
+  return current;
 }

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { linearToSrgb, srgbToLinear } from "./pipeline/color";
-import { bilinearScale, lanczosAdaptiveScale } from "./pipeline/kernels";
+import { bilinearScale, computeStructureTensor, lanczosAdaptiveScale } from "./pipeline/kernels";
 import { measureResidual, projectBox, projectClamp, projectMultiGrid } from "./pipeline/projection";
 import { planOverlap, reflectIndex, tiledUpscaleLanczos } from "./pipeline/tiler";
 
@@ -149,5 +149,48 @@ describe("vice-pipeline", () => {
 
     projectMultiGrid(y, raw, w, h, s, c, 2);
     expect(measureResidual(y, raw, w, h, s, c)).toBeLessThan(1e-5);
+  });
+
+  test("Vice 2.0 structure tensor accurately identifies directional edge coherence", () => {
+    const w = 16;
+    const h = 16;
+    const c = 3;
+    const img = new Float32Array(w * h * c);
+
+    // Create a sharp diagonal step edge from (0, 0) to (15, 15)
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const val = x > y ? 0.9 : 0.1;
+        for (let ch = 0; ch < c; ch++) {
+          img[(y * w + x) * c + ch] = val;
+        }
+      }
+    }
+
+    const tensor = computeStructureTensor(img, w, h, c);
+    expect(tensor.coherence.length).toBe(w * h);
+
+    // Flat region (0, 15) should have near zero coherence
+    const flatIdx = 15 * w + 0;
+    expect(tensor.coherence[flatIdx]).toBeLessThan(0.05);
+
+    // Diagonal edge region (8, 8) should have high coherence
+    const edgeIdx = 8 * w + 8;
+    expect(tensor.coherence[edgeIdx]).toBeGreaterThan(0.5);
+  });
+
+  test("Vice 2.0 coherence shock filter steepens edges while preserving box consistency", () => {
+    const w = 12;
+    const h = 12;
+    const s = 2;
+    const c = 3;
+    const y = new Float32Array(w * h * c);
+    for (let i = 0; i < y.length; i++) y[i] = (i % 17) / 17;
+
+    for (const shock of [0.2, 0.5, 0.8, 1.0]) {
+      const raw = lanczosAdaptiveScale(y, w, h, c, s, { preset: "photo", shock, sharpness: 0.5 });
+      projectBox(y, raw, w, h, s, c);
+      expect(measureResidual(y, raw, w, h, s, c)).toBeLessThan(1e-5);
+    }
   });
 });

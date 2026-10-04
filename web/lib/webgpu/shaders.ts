@@ -280,6 +280,23 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     accum = vec4<f32>(center + params.sharpness * hp, accum.a);
   }
 
+  // Vice 2.0 Coherence-Enhancing Shock PDE: steepens blurry edge transitions into crisp sub-pixel steps
+  if (params.preset == 0u) {
+    let grad_x = 0.5 * (tr + br - tl - bl);
+    let grad_y = p1 - p0;
+    let grad_sq = grad_x * grad_x + grad_y * grad_y;
+    let grad_norm = sqrt(grad_sq + vec3<f32>(1e-5));
+
+    let dxx = (tr + br) - 2.0 * accum.rgb + (tl + bl);
+    let dyy = p1 - 2.0 * accum.rgb + p0;
+    let dxy = 0.25 * (br - bl - tr + tl);
+
+    let i_eta_eta = (grad_x * grad_x * dxx + 2.0 * grad_x * grad_y * dxy + grad_y * grad_y * dyy) / (grad_sq + vec3<f32>(1e-5));
+    let shock_term = -tanh(5.0 * i_eta_eta) * grad_norm;
+    let shock_strength = 0.35 + 0.35 * params.sharpness;
+    accum = vec4<f32>(clamp(accum.rgb + 0.12 * shock_strength * shock_term, vec3<f32>(0.0), vec3<f32>(1.0)), accum.a);
+  }
+
   out_buf[y * params.out_w + x] = accum;
 }
 `;
