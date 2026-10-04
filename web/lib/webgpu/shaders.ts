@@ -319,10 +319,10 @@ struct Params {
 @group(0) @binding(1) var input_tex: texture_2d<f32>;
 @group(0) @binding(2) var<storage, read_write> out_buf: array<vec4<f32>>;
 @group(0) @binding(3) var output_tex: texture_storage_2d<rgba8unorm, write>;
+@group(0) @binding(4) var<storage, read_write> residual_buf: array<atomic<u32>>;
 
 // Invoked per low-res block (in_w × in_h).
-// Computes block arithmetic mean, subtracts from input_tex to find residual,
-// applies residual correction to each pixel in the block, and writes to output_tex.
+// Computes exact clamp-aware block projection and records worst measured residual.
 @compute @workgroup_size(16, 16)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let bx = id.x;
@@ -343,21 +343,55 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     srgb_to_linear(in_srgb.b)
   );
 
-  // Compute arithmetic mean of the candidate block
-  var sum_high: vec3<f32> = vec3<f32>(0.0);
-  for (var dy: u32 = 0u; dy < s; dy++) {
-    for (var dx: u32 = 0u; dx < s; dx++) {
-      let hx = bx * s + dx;
-      let hy = by * s + dy;
-      let val = out_buf[hy * params.out_w + hx];
-      sum_high += val.rgb;
+  var d_opt: vec3<f32> = vec3<f32>(0.0);
+  for (var c: u32 = 0u; c < 3u; c++) {
+    let target = in_lin[c];
+    if (target <= 0.0) {
+      d_opt[c] = -2.0;
+      continue;
+    }
+    if (target >= 1.0) {
+      d_opt[c] = 2.0;
+      continue;
+    }
+
+    var min_v: f32 = 1e10;
+    var max_v: f32 = -1e10;
+    var sum_c: f32 = 0.0;
+    for (var dy: u32 = 0u; dy < s; dy++) {
+      for (var dx: u32 = 0u; dx < s; dx++) {
+        let v = out_buf[(by * s + dy) * params.out_w + (bx * s + dx)][c];
+        min_v = min(min_v, v);
+        max_v = max(max_v, v);
+        sum_c += v;
+      }
+    }
+
+    let d_lin = target - sum_c * inv_sq;
+    if (min_v + d_lin >= 0.0 && max_v + d_lin <= 1.0) {
+      d_opt[c] = d_lin;
+    } else {
+      var lo = -max_v;
+      var hi = 1.0 - min_v;
+      for (var it = 0u; it < 24u; it++) {
+        let mid = 0.5 * (lo + hi);
+        var cur_sum: f32 = 0.0;
+        for (var dy: u32 = 0u; dy < s; dy++) {
+          for (var dx: u32 = 0u; dx < s; dx++) {
+            cur_sum += clamp(out_buf[(by * s + dy) * params.out_w + (bx * s + dx)][c] + mid, 0.0, 1.0);
+          }
+        }
+        if (cur_sum * inv_sq < target) {
+          lo = mid;
+        } else {
+          hi = mid;
+        }
+      }
+      d_opt[c] = 0.5 * (lo + hi);
     }
   }
 
-  let mean_high = sum_high * inv_sq;
-  let residual = in_lin - mean_high;
-
-  // Apply residual distribution to enforce P(I_high) = I_low and store to output texture
+  var final_sum: vec3<f32> = vec3<f32>(0.0);
   for (var dy: u32 = 0u; dy < s; dy++) {
     for (var dx: u32 = 0u; dx < s; dx++) {
       let hx = bx * s + dx;
@@ -365,8 +399,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
       let idx = hy * params.out_w + hx;
       let original = out_buf[idx];
 
-      let corrected_lin = clamp(original.rgb + residual, vec3<f32>(0.0), vec3<f32>(1.0));
+      let corrected_lin = clamp(original.rgb + d_opt, vec3<f32>(0.0), vec3<f32>(1.0));
       out_buf[idx] = vec4<f32>(corrected_lin, original.a);
+      final_sum += corrected_lin;
 
       let final_srgb = vec4<f32>(
         linear_to_srgb(corrected_lin.r),
@@ -378,5 +413,11 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
       textureStore(output_tex, vec2<i32>(i32(hx), i32(hy)), final_srgb);
     }
   }
+
+  let actual_mean = final_sum * inv_sq;
+  let err_vec = abs(actual_mean - in_lin);
+  let max_err = max(err_vec.r, max(err_vec.g, err_vec.b));
+  let fixed_err = u32(max_err * 10000000.0);
+  atomicMax(&residual_buf[0], fixed_err);
 }
 `;

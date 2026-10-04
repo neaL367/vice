@@ -2,12 +2,16 @@
 
 Free, private, in-browser mathematical image upscaler. A 6-tap Edge-Adaptive
 Lanczos-3 engine reconstructs sharp edges without ringing, while the C++ core
-(compiled to WASM) guarantees that original pixels survive exactly: downscale
-the result with box averaging and you recover the input.
+(compiled to WASM) guarantees that original pixels survive in physical linear light:
+downscale the result with linear-light box averaging and you recover the input.
 
-**Consistency guarantee:** $A(\text{output}) \equiv \text{input}$.
+**Consistency guarantee:** $A(\text{output}) \equiv \text{input}$ (in linear light).
 The mathematical projection ensures the range space of the original image is
-preserved with zero hallucinated artifacts.
+preserved with zero hallucinated artifacts. Note that consistency holds in linear light
+(the physical domain where photons combine additively); standard 8-bit image tools that
+downscale in gamma space will observe gamma-curve divergence unless linear-light box
+averaging is selected. Quantization to 8-bit applies zero-mean spatial TPDF dither to
+prevent banding in gradients, introducing $\pm 0.5$ LSB rounding variance.
 
 ## Layout
 
@@ -45,18 +49,21 @@ WASM core rebuild needs pinned Emscripten 3.1.74: `bash core/wasm-build.sh`
 - No environment variables required.
 - Pure client-side mathematical execution: instant start, zero heavy model downloads.
 - `next.config.ts` sets `cacheComponents`, `partialPrefetching`,
-  COOP/COEP isolation headers (multithreaded WASM), and a static CSP.
+  cross-origin isolation headers (COOP/COEP), and a static CSP.
 
 ## Quality
 
 Measured with `vice_eval` using the shipped Lanczos-3 adaptive engine and the
-shipped projection: 4 rounds of iterative back-projection with a bilinear
-correction (`vice_project_smooth`), then an exact box projection. Each image is
-degraded two ways (box and bicubic), so every row averages both. `raw` = Lanczos
-only, `proj` = after projection. Metrics are on Rec.709 luma. Residual is
-≤ 1.1e-7 in every run (float-exact). Seam is the block-boundary gradient ratio;
-`seam_hr` is the same metric on the original high-resolution image, so it shows
-what "no seams" looks like (≈ 1.0).
+shipped projection: hierarchical multi-grid residual restriction + prolongation,
+iterative back-projection with bilinear correction (`vice_project_smooth`), and
+finally an exact clamp-aware box projection (`vice_project_box_clamped`).
+Each image is degraded two ways (box and bicubic), so every row averages both.
+`raw` = Lanczos only, `proj` = after projection. Metrics are on Rec.709 luma.
+Residual is $\le 1.1\times 10^{-7}$ across all natural and synthetic content,
+including pure blacks and saturated primaries (guaranteed by the clamp-aware
+bisection projection). Seam is the block-boundary gradient ratio; `seam_hr`
+is the same metric on the original high-resolution image, so it shows what
+"no seams" looks like (≈ 1.0).
 
 | Set      | Scale | PSNR raw → proj | SSIM raw → proj | Seam | seam_hr | Images |
 |----------|-------|-----------------|-----------------|------|---------|--------|
@@ -78,15 +85,16 @@ drops by at most 0.13 dB at 3×/4×. Compared with the earlier box-only
 projection, the seam ratio fell from 1.6–1.8 to 1.5–1.6 at 2× and from 1.9–2.1
 to 1.3–1.4 at 3×/4×, at a cost of up to 0.07 dB PSNR. It is still above the
 ground truth of ≈ 1.0, so some block-boundary structure remains, most visibly
-at 2×. More rounds barely help (8 rounds gain ≤ 0.07 seam for 0.02 dB). The
-TypeScript fallback (`projectClamp`) uses the same projection and is checked
-against the WASM core in `web/lib/vice-wasm.test.ts`.
+at 2×. The TypeScript fallback (`projectClamp`) uses the same projection and is
+checked against the WASM core in `web/lib/vice-wasm.test.ts`.
 
 ## Limits
 
 - 2×, 3×, and 4× Edge-Adaptive Lanczos-3 super-resolution with box projection.
-- 130 MP output cap, defined once in `web/lib/limits.ts` and used by both the worker and the UI.
-- Honors EXIF orientation. `vice_process_band` only quantizes rows of an already-computed full float buffer, so it does not reduce peak memory; true band-streamed upscaling is not implemented.
+- 36 MP output cap (e.g. 6000×6000), defined once in `web/lib/limits.ts` and enforced
+  across worker and UI to respect the 2 GB address space ceiling of 32-bit WebAssembly.
+- Honors EXIF orientation. Preserves embedded ICC profiles (via native PNG iCCP chunks).
+- Full alpha transparency support: un-premultiplies RGB on output and preserves linear alpha.
 - 8-bit pipeline (browser decodes 8-bit); wide-gamut treated as sRGB.
 - Zero network requests after page load — everything runs purely local on-device.
 

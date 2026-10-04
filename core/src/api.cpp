@@ -109,23 +109,44 @@ static double measure_residual(const vice_ctx* ctx, const std::vector<float>& bu
   return worst;
 }
 
+static inline void quantize_pixel(const float* raw_pixel, unsigned char* out_pixel,
+                                  int channels, int x, int y) {
+  if (channels == 4) {
+    float a = clamp01(raw_pixel[3]);
+    float inv_a = (a > 1e-6f) ? (1.0f / a) : 0.0f;
+    for (int c = 0; c < 3; ++c) {
+      float lin = clamp01(raw_pixel[c] * inv_a);
+      float srgb = vice_fast_linear_to_srgb(lin);
+      float dither = vice_spatial_triangular_dither(x, y, c);
+      int q = (int)(srgb * 255.0f + dither + 0.5f);
+      if (q < 0) q = 0;
+      if (q > 255) q = 255;
+      out_pixel[c] = (unsigned char)q;
+    }
+    int qa = (int)(a * 255.0f + 0.5f);
+    if (qa < 0) qa = 0;
+    if (qa > 255) qa = 255;
+    out_pixel[3] = (unsigned char)qa;
+  } else {
+    for (int c = 0; c < channels; ++c) {
+      float lin = clamp01(raw_pixel[c]);
+      float srgb = vice_fast_linear_to_srgb(lin);
+      float dither = vice_spatial_triangular_dither(x, y, c);
+      int q = (int)(srgb * 255.0f + dither + 0.5f);
+      if (q < 0) q = 0;
+      if (q > 255) q = 255;
+      out_pixel[c] = (unsigned char)q;
+    }
+  }
+}
+
 int vice_project(vice_ctx* ctx) {
   if (!ctx) return -1;
   vice_project_multigrid(ctx->y.data(), ctx->raw.data(), ctx->in_w, ctx->in_h,
                          ctx->scale, ctx->channels, 2);
-  for (int iter = 0; iter < 3; ++iter) {
-    vice_project_box(ctx->y.data(), ctx->raw.data(), ctx->in_w, ctx->in_h,
-                     ctx->scale, ctx->channels);
-    bool oob = false;
-    for (float& v : ctx->raw) {
-      if (v < 0.0f || v > 1.0f) {
-        oob = true;
-        v = clamp01(v);
-      }
-    }
-    ctx->last_residual = measure_residual(ctx, ctx->raw);
-    if (!oob) break;
-  }
+  vice_project_box_clamped(ctx->y.data(), ctx->raw.data(), ctx->in_w, ctx->in_h,
+                           ctx->scale, ctx->channels);
+  ctx->last_residual = measure_residual(ctx, ctx->raw);
   return 0;
 }
 
@@ -159,17 +180,9 @@ int vice_process_band(vice_ctx* ctx, int band, unsigned char* out_rows,
   for (int y = 0; y < rows; ++y) {
     int py = y0 + y;
     for (int x = 0; x < ctx->out_w; ++x) {
-      for (int c = 0; c < ctx->channels; ++c) {
-        float lin = clamp01(
-            ctx->raw[((py) * ctx->out_w + x) * ctx->channels + c]);
-        float srgb = vice_fast_linear_to_srgb(lin);
-        float dither = vice_spatial_triangular_dither(x, py, c);
-        int q = (int)(srgb * 255.0f + dither + 0.5f);
-        if (q < 0) q = 0;
-        if (q > 255) q = 255;
-        out_rows[(y * ctx->out_w + x) * ctx->channels + c] =
-            (unsigned char)q;
-      }
+      size_t idx = ((size_t)py * ctx->out_w + x) * ctx->channels;
+      quantize_pixel(&ctx->raw[idx], &out_rows[(y * ctx->out_w + x) * ctx->channels],
+                     ctx->channels, x, py);
     }
   }
   *out_row_count = rows;
@@ -184,16 +197,8 @@ int vice_finish_png(vice_ctx* ctx, unsigned char* out, size_t cap,
   for (int y = 0; y < ctx->out_h; ++y) {
     size_t row_offset = (size_t)y * ctx->out_w;
     for (int x = 0; x < ctx->out_w; ++x) {
-      size_t idx = row_offset + x;
-      for (int c = 0; c < ctx->channels; ++c) {
-        float lin = clamp01(ctx->raw[idx * ctx->channels + c]);
-        float srgb = vice_fast_linear_to_srgb(lin);
-        float dither = vice_spatial_triangular_dither(x, y, c);
-        int q = (int)(srgb * 255.0f + dither + 0.5f);
-        if (q < 0) q = 0;
-        if (q > 255) q = 255;
-        rgba[idx * ctx->channels + c] = (unsigned char)q;
-      }
+      size_t idx = (row_offset + x) * ctx->channels;
+      quantize_pixel(&ctx->raw[idx], &rgba[idx], ctx->channels, x, y);
     }
   }
   std::vector<unsigned char> png;
@@ -344,9 +349,10 @@ int vice_stream_pull_band(vice_stream_ctx* sctx, unsigned char* out_bytes, int* 
     }
   }
 
-  // Exact box consistency on band blocks
+  // Exact clamp-aware box consistency on band blocks
   int s = sctx->scale;
-  double inv_s2 = 1.0 / (double(s) * s);
+  int N = s * s;
+  double inv_s2 = 1.0 / (double)N;
   for (int by = 0; by < cur_band_h / s; ++by) {
     int global_in_y = (out_y0 / s) + by;
     int local_in_y = global_in_y - req_in_y0;
@@ -354,36 +360,75 @@ int vice_stream_pull_band(vice_stream_ctx* sctx, unsigned char* out_bytes, int* 
 
     for (int bx = 0; bx < sctx->in_w; ++bx) {
       for (int c = 0; c < sctx->channels; ++c) {
+        float orig = in_strip[((size_t)local_in_y * sctx->in_w + bx) * sctx->channels + c];
+        if (orig <= 0.0f) {
+          for (int dy = 0; dy < s; ++dy)
+            for (int dx = 0; dx < s; ++dx)
+              band_raw[(((size_t)by * s + dy) * sctx->out_w + bx * s + dx) * sctx->channels + c] = 0.0f;
+          continue;
+        }
+        if (orig >= 1.0f) {
+          for (int dy = 0; dy < s; ++dy)
+            for (int dx = 0; dx < s; ++dx)
+              band_raw[(((size_t)by * s + dy) * sctx->out_w + bx * s + dx) * sctx->channels + c] = 1.0f;
+          continue;
+        }
+
+        float vals[16];
+        float min_v = 1e30f, max_v = -1e30f;
         double sum = 0.0;
         for (int dy = 0; dy < s; ++dy) {
           for (int dx = 0; dx < s; ++dx) {
-            sum += band_raw[(((size_t)by * s + dy) * sctx->out_w + bx * s + dx) * sctx->channels + c];
+            int idx = dy * s + dx;
+            float v = band_raw[(((size_t)by * s + dy) * sctx->out_w + bx * s + dx) * sctx->channels + c];
+            vals[idx] = v;
+            if (v < min_v) min_v = v;
+            if (v > max_v) max_v = v;
+            sum += v;
           }
         }
-        float orig = in_strip[((size_t)local_in_y * sctx->in_w + bx) * sctx->channels + c];
-        float d = (float)(orig - sum * inv_s2);
+        double d_linear = (double)orig - sum * inv_s2;
+        if ((double)min_v + d_linear >= 0.0 && (double)max_v + d_linear <= 1.0) {
+          float d = (float)d_linear;
+          for (int dy = 0; dy < s; ++dy)
+            for (int dx = 0; dx < s; ++dx)
+              band_raw[(((size_t)by * s + dy) * sctx->out_w + bx * s + dx) * sctx->channels + c] += d;
+          continue;
+        }
+
+        double lo = -(double)max_v;
+        double hi = 1.0 - (double)min_v;
+        for (int it = 0; it < 36; ++it) {
+          double mid = 0.5 * (lo + hi);
+          double cur_sum = 0.0;
+          for (int k = 0; k < N; ++k) {
+            double v = (double)vals[k] + mid;
+            if (v < 0.0) v = 0.0;
+            else if (v > 1.0) v = 1.0;
+            cur_sum += v;
+          }
+          if (cur_sum * inv_s2 < (double)orig) lo = mid;
+          else hi = mid;
+        }
+        double d_opt = 0.5 * (lo + hi);
         for (int dy = 0; dy < s; ++dy) {
           for (int dx = 0; dx < s; ++dx) {
-            band_raw[(((size_t)by * s + dy) * sctx->out_w + bx * s + dx) * sctx->channels + c] += d;
+            float v = (float)((double)vals[dy * s + dx] + d_opt);
+            if (v < 0.0f) v = 0.0f;
+            else if (v > 1.0f) v = 1.0f;
+            band_raw[(((size_t)by * s + dy) * sctx->out_w + bx * s + dx) * sctx->channels + c] = v;
           }
         }
       }
     }
   }
 
-  // Convert to 8-bit sRGB with dither directly into caller output buffer
+  // Convert to 8-bit output directly into caller output buffer
   for (int y = 0; y < cur_band_h; ++y) {
     int global_y = out_y0 + y;
     for (int x = 0; x < sctx->out_w; ++x) {
-      for (int c = 0; c < sctx->channels; ++c) {
-        float lin = clamp01(band_raw[((size_t)y * sctx->out_w + x) * sctx->channels + c]);
-        float srgb = vice_fast_linear_to_srgb(lin);
-        float dither = vice_spatial_triangular_dither(x, global_y, c);
-        int q = (int)(srgb * 255.0f + dither + 0.5f);
-        if (q < 0) q = 0;
-        if (q > 255) q = 255;
-        out_bytes[((size_t)y * sctx->out_w + x) * sctx->channels + c] = (unsigned char)q;
-      }
+      size_t idx = ((size_t)y * sctx->out_w + x) * sctx->channels;
+      quantize_pixel(&band_raw[idx], &out_bytes[idx], sctx->channels, x, global_y);
     }
   }
 

@@ -251,6 +251,76 @@ static void test_streaming_strip() {
   printf("streaming_strip ok total_emitted=%d\n", total_emitted);
 }
 
+static void test_transparency() {
+  // White at 50% alpha: in linear premultiplied float space:
+  // RGB = 1.0 * 0.5 = 0.5, A = 0.5.
+  int w = 4, h = 4, scale = 2, c = 4;
+  vice_ctx* ctx = vice_create(w, h, scale, c);
+  CHECK(ctx != nullptr);
+  std::vector<float> y((size_t)w * h * c);
+  for (size_t i = 0; i < (size_t)w * h; ++i) {
+    y[i * 4 + 0] = 0.5f;
+    y[i * 4 + 1] = 0.5f;
+    y[i * 4 + 2] = 0.5f;
+    y[i * 4 + 3] = 0.5f;
+  }
+  CHECK(vice_set_input(ctx, y.data(), (int)y.size()) == 0);
+  CHECK(vice_upscale(ctx) == 0);
+  CHECK(vice_project(ctx) == 0);
+
+  int out_w = w * scale;
+  std::vector<unsigned char> rows((size_t)64 * out_w * c);
+  int row_count = 0;
+  CHECK(vice_process_band(ctx, 0, rows.data(), &row_count) == 0);
+  CHECK(row_count == h * scale);
+
+  // Check that white un-premultiplies back to ~255 and alpha is linearly ~128
+  for (int i = 0; i < out_w * (h * scale); ++i) {
+    unsigned char r = rows[i * 4 + 0];
+    unsigned char g = rows[i * 4 + 1];
+    unsigned char b = rows[i * 4 + 2];
+    unsigned char a = rows[i * 4 + 3];
+    CHECK(r >= 254 && r <= 255);
+    CHECK(g >= 254 && g <= 255);
+    CHECK(b >= 254 && b <= 255);
+    CHECK(a >= 127 && a <= 128);
+  }
+  vice_destroy(ctx);
+  printf("transparency ok\n");
+}
+
+static void test_saturated_residual() {
+  // Test image with pure black and fully saturated colors
+  int w = 8, h = 8, scale = 2, c = 3;
+  vice_ctx* ctx = vice_create(w, h, scale, c);
+  CHECK(ctx != nullptr);
+  std::vector<float> y((size_t)w * h * c);
+  for (int py = 0; py < h; ++py) {
+    for (int px = 0; px < w; ++px) {
+      size_t idx = ((size_t)py * w + px) * c;
+      if (py < 4) {
+        // Pure black and pure saturated primaries
+        y[idx + 0] = (px % 2 == 0) ? 0.0f : 1.0f;
+        y[idx + 1] = (px % 3 == 0) ? 0.0f : 1.0f;
+        y[idx + 2] = (px % 4 == 0) ? 0.0f : 1.0f;
+      } else {
+        // High contrast saturated edges
+        y[idx + 0] = (px < 4) ? 0.0f : 1.0f;
+        y[idx + 1] = (px < 4) ? 1.0f : 0.0f;
+        y[idx + 2] = (px < 4) ? 0.0f : 1.0f;
+      }
+    }
+  }
+  CHECK(vice_set_input(ctx, y.data(), (int)y.size()) == 0);
+  CHECK(vice_upscale(ctx) == 0);
+  CHECK(vice_project(ctx) == 0);
+  double r = vice_last_residual(ctx);
+  printf("saturated content residual=%g\n", r);
+  CHECK(r <= 1.1e-7);
+  vice_destroy(ctx);
+  printf("saturated residual ok\n");
+}
+
 int main() {
   test_project_exact();
   test_scales();
@@ -262,6 +332,8 @@ int main() {
   test_project_smooth();
   test_project_multigrid();
   test_streaming_strip();
+  test_transparency();
+  test_saturated_residual();
   printf("ALL PASS\n");
   return 0;
 }

@@ -1,6 +1,7 @@
 #include "vice.h"
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <vector>
 
 #ifndef M_PI
@@ -269,15 +270,17 @@ int vice_upscale_lanczos_adaptive_ex(const float* src, int w, int h, int c, int 
   }
 
   // Pass 3: Null-Space Micro-Texture Sharpness Enhancement
+  const int proc_c = (c == 4) ? 3 : c;
   if (SHARPNESS > 0.001f) {
     std::vector<float> sharp_tmp((size_t)W * H * c);
+    std::memcpy(sharp_tmp.data(), dst, sharp_tmp.size() * sizeof(float));
     for (int y = 0; y < H; ++y) {
       int y_prev = clamp_idx(y - 1, H - 1);
       int y_next = clamp_idx(y + 1, H - 1);
       for (int x = 0; x < W; ++x) {
         int x_prev = clamp_idx(x - 1, W - 1);
         int x_next = clamp_idx(x + 1, W - 1);
-        for (int ch = 0; ch < c; ++ch) {
+        for (int ch = 0; ch < proc_c; ++ch) {
           float center = dst[((size_t)y * W + x) * c + ch];
           float n = dst[((size_t)y_prev * W + x) * c + ch];
           float s = dst[((size_t)y_next * W + x) * c + ch];
@@ -297,6 +300,7 @@ int vice_upscale_lanczos_adaptive_ex(const float* src, int w, int h, int c, int 
     float shock_strength = 0.35f + 0.35f * tuning->sharpness;
     float dt = 0.12f * std::min(1.0f, shock_strength);
     std::vector<float> shock_tmp((size_t)W * H * c);
+    std::memcpy(shock_tmp.data(), dst, shock_tmp.size() * sizeof(float));
 
     for (int iter = 0; iter < 2; ++iter) {
       for (int y = 0; y < H; ++y) {
@@ -310,7 +314,7 @@ int vice_upscale_lanczos_adaptive_ex(const float* src, int w, int h, int c, int 
           int xm1 = clamp_idx(x - 1, W - 1);
           int xp1 = clamp_idx(x + 1, W - 1);
 
-          for (int ch = 0; ch < c; ++ch) {
+          for (int ch = 0; ch < proc_c; ++ch) {
             float center = dst[(row_y + x) * c + ch];
             float l = dst[(row_y + xm1) * c + ch];
             float r = dst[(row_y + xp1) * c + ch];

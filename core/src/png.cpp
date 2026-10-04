@@ -3,6 +3,7 @@
 // explicit pixo-style tradeoff from the spec; revisit with benchmarks).
 // miniz is MIT (see miniz.c header); crc/adler kept local (few lines).
 #include "png.h"
+#define MINIZ_NO_ZLIB_COMPATIBLE_NAMES
 #include "miniz.h"
 #include <cstdlib>
 #include <cstring>
@@ -165,14 +166,12 @@ int vice_encode_png_ex(const unsigned char* rgba, int w, int h, int channels,
     }
 
     unsigned best_sad = 0;
-    int best_f = 0;
     // Test all 5 standard PNG filters: 0=None, 1=Sub, 2=Up, 3=Average, 4=Paeth
     for (int f : {0, 1, 2, 3, 4}) {
       unsigned sad = filter_row(row, have_prev ? prev.data() : nullptr, cand.data(),
                                 out_stride, out_channels, f);
       if (f == 0 || sad < best_sad) {
         best_sad = sad;
-        best_f = f;
         std::memcpy(crow.data(), cand.data(), out_stride + 1);
       }
     }

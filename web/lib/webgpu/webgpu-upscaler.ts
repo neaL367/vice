@@ -126,6 +126,8 @@ export async function runWebGPUUpscale(
   let outputTex: GPUTexture | null = null;
   let uniformBuf: GPUBuffer | null = null;
   let readbackBuf: GPUBuffer | null = null;
+  let residualBuf: GPUBuffer | null = null;
+  let residualReadbackBuf: GPUBuffer | null = null;
 
   try {
     const { pipelineH, pipelineV, pipelineProject } = await getPipelines(device);
@@ -184,13 +186,24 @@ export async function runWebGPUUpscale(
         ? 2
         : 0;
     f32View[6] = Math.max(0, Math.min(1, options?.dering ?? 1.0));
-    f32View[7] = Math.max(0, Math.min(1, options?.sharpness ?? 0.35));
+    f32View[7] = Math.max(0, Math.min(1, options?.sharpness ?? 0.2));
 
     uniformBuf = device.createBuffer({
       size: 32,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
     device.queue.writeBuffer(uniformBuf, 0, uniformData);
+
+    residualBuf = device.createBuffer({
+      size: 4,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+    });
+    device.queue.writeBuffer(residualBuf, 0, new Uint32Array([0]));
+
+    residualReadbackBuf = device.createBuffer({
+      size: 4,
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+    });
 
     // 5. Bind Groups
     const bgH = device.createBindGroup({
@@ -218,6 +231,7 @@ export async function runWebGPUUpscale(
         { binding: 1, resource: inputTex.createView() },
         { binding: 2, resource: { buffer: outBuf } },
         { binding: 3, resource: outputTex.createView() },
+        { binding: 4, resource: { buffer: residualBuf } },
       ],
     });
 
@@ -257,12 +271,28 @@ export async function runWebGPUUpscale(
       [outW, outH, 1],
     );
 
+    if (residualBuf && residualReadbackBuf) {
+      encoder.copyBufferToBuffer(residualBuf, 0, residualReadbackBuf, 0, 4);
+    }
+
     device.queue.submit([encoder.finish()]);
 
-    // 8. Map buffer and extract pixel data
-    await readbackBuf.mapAsync(GPUMapMode.READ);
+    // 8. Map buffer and extract pixel data and measured residual
+    const mapPromises: Promise<void>[] = [readbackBuf.mapAsync(GPUMapMode.READ)];
+    if (residualReadbackBuf) {
+      mapPromises.push(residualReadbackBuf.mapAsync(GPUMapMode.READ));
+    }
+    await Promise.all(mapPromises);
+
     const mapped = readbackBuf.getMappedRange();
     const rawBytes = new Uint8Array(mapped);
+
+    let measuredResidual = 0.0;
+    if (residualReadbackBuf) {
+      const resMapped = residualReadbackBuf.getMappedRange();
+      measuredResidual = new Uint32Array(resMapped)[0] / 10000000.0;
+      residualReadbackBuf.unmap();
+    }
 
     // Strip row padding to tightly packed RGBA
     const tightlyPacked = new Uint8ClampedArray(outW * outH * 4);
@@ -288,7 +318,7 @@ export async function runWebGPUUpscale(
       blob,
       outW,
       outH,
-      residual: 0.00001,
+      residual: measuredResidual,
       durationMs,
     };
   } catch (err) {
@@ -302,5 +332,7 @@ export async function runWebGPUUpscale(
     try { outputTex?.destroy(); } catch {}
     try { uniformBuf?.destroy(); } catch {}
     try { readbackBuf?.destroy(); } catch {}
+    try { residualBuf?.destroy(); } catch {}
+    try { residualReadbackBuf?.destroy(); } catch {}
   }
 }

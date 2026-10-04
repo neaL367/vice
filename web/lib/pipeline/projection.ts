@@ -33,6 +33,98 @@ export function projectBox(
   }
 }
 
+/**
+ * Exact clamp-aware box projection:
+ * Shifting each s*s block by a per-block scalar d such that
+ * mean(clamp(v + d, 0, 1)) = y, guaranteeing both [0, 1] range and
+ * residual <= 3e-8 even on saturated content.
+ */
+export function projectBoxClamped(
+  y: Float32Array,
+  raw: Float32Array,
+  w: number,
+  h: number,
+  s: number,
+  c: number,
+): void {
+  const W = w * s;
+  const N = s * s;
+  const inv = 1 / N;
+  const vals = new Float32Array(16);
+
+  for (let by = 0; by < h; by++) {
+    for (let bx = 0; bx < w; bx++) {
+      for (let ch = 0; ch < c; ch++) {
+        const yTarget = y[(by * w + bx) * c + ch];
+        if (yTarget <= 0) {
+          for (let dy = 0; dy < s; dy++) {
+            for (let dx = 0; dx < s; dx++) {
+              raw[((by * s + dy) * W + bx * s + dx) * c + ch] = 0;
+            }
+          }
+          continue;
+        }
+        if (yTarget >= 1) {
+          for (let dy = 0; dy < s; dy++) {
+            for (let dx = 0; dx < s; dx++) {
+              raw[((by * s + dy) * W + bx * s + dx) * c + ch] = 1;
+            }
+          }
+          continue;
+        }
+
+        let minV = Infinity;
+        let maxV = -Infinity;
+        let sum = 0;
+        for (let dy = 0; dy < s; dy++) {
+          for (let dx = 0; dx < s; dx++) {
+            const idx = dy * s + dx;
+            const v = raw[((by * s + dy) * W + bx * s + dx) * c + ch];
+            vals[idx] = v;
+            if (v < minV) minV = v;
+            if (v > maxV) maxV = v;
+            sum += v;
+          }
+        }
+
+        const dLinear = yTarget - sum * inv;
+        if (minV + dLinear >= 0 && maxV + dLinear <= 1) {
+          for (let dy = 0; dy < s; dy++) {
+            for (let dx = 0; dx < s; dx++) {
+              raw[((by * s + dy) * W + bx * s + dx) * c + ch] += dLinear;
+            }
+          }
+          continue;
+        }
+
+        let lo = -maxV;
+        let hi = 1 - minV;
+        for (let it = 0; it < 36; it++) {
+          const mid = 0.5 * (lo + hi);
+          let curSum = 0;
+          for (let k = 0; k < N; k++) {
+            const v = vals[k] + mid;
+            curSum += v < 0 ? 0 : v > 1 ? 1 : v;
+          }
+          if (curSum * inv < yTarget) {
+            lo = mid;
+          } else {
+            hi = mid;
+          }
+        }
+
+        const dOpt = 0.5 * (lo + hi);
+        for (let dy = 0; dy < s; dy++) {
+          for (let dx = 0; dx < s; dx++) {
+            const v = vals[dy * s + dx] + dOpt;
+            raw[((by * s + dy) * W + bx * s + dx) * c + ch] = v < 0 ? 0 : v > 1 ? 1 : v;
+          }
+        }
+      }
+    }
+  }
+}
+
 // Mirror of core vice_project_smooth: raw += bilinear(y - A(raw)), repeated.
 export function projectSmooth(
   y: Float32Array,
@@ -203,27 +295,15 @@ export function projectClamp(
   h: number,
   s: number,
   c: number,
-  rounds = 3,
+  _rounds = 1,
   smoothIterations = SMOOTH_ITERS,
   useMultiGrid = true,
 ): number {
-  let residual = Infinity;
   if (useMultiGrid) {
     projectMultiGrid(y, raw, w, h, s, c, 1);
   } else if (smoothIterations > 0) {
     projectSmooth(y, raw, w, h, s, c, smoothIterations);
   }
-  for (let i = 0; i < rounds; i++) {
-    projectBox(y, raw, w, h, s, c);
-    let oob = false;
-    for (let k = 0; k < raw.length; k++) {
-      if (raw[k] < 0 || raw[k] > 1) {
-        oob = true;
-        raw[k] = raw[k] < 0 ? 0 : 1;
-      }
-    }
-    residual = measureResidual(y, raw, w, h, s, c);
-    if (!oob) break;
-  }
-  return residual;
+  projectBoxClamped(y, raw, w, h, s, c);
+  return measureResidual(y, raw, w, h, s, c);
 }

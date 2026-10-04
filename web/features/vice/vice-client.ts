@@ -152,7 +152,7 @@ export function runOnWorkerThread(
 /**
  * Universal job runner:
  * 1. Checks if WebGPU is supported -> executes real-time compute pass (~8ms).
- * 2. Falls back automatically to multi-threaded WASM Worker (~200ms).
+ * 2. Falls back automatically to SIMD WASM Worker (~200ms).
  */
 export async function runViceJob(
   worker: Worker | null,
@@ -166,7 +166,7 @@ export async function runViceJob(
   // 1. Try ultra-fast WebGPU compute path if hardware is available
   try {
     const gpuOk = await isWebGPUSupported();
-    if (gpuOk && typeof createImageBitmap !== "undefined") {
+    if (gpuOk && !options?.chained4x && typeof createImageBitmap !== "undefined") {
       onProgress({ band: 1, totalBands: 3, stage: "WebGPU Compute…", backend: "WebGPU" });
       const bmp = await createImageBitmap(file);
       try {

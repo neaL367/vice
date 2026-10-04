@@ -193,4 +193,30 @@ describe("vice-pipeline", () => {
       expect(measureResidual(y, raw, w, h, s, c)).toBeLessThan(1e-5);
     }
   });
+
+  test("exact clamp-aware projection satisfies residual < 1.1e-7 on saturated content", () => {
+    const w = 8;
+    const h = 8;
+    const s = 2;
+    const c = 3;
+    const y = new Float32Array(w * h * c);
+    for (let py = 0; py < h; py++) {
+      for (let px = 0; px < w; px++) {
+        const idx = (py * w + px) * c;
+        if (py < 4) {
+          y[idx + 0] = px % 2 === 0 ? 0 : 1;
+          y[idx + 1] = px % 3 === 0 ? 0 : 1;
+          y[idx + 2] = px % 4 === 0 ? 0 : 1;
+        } else {
+          y[idx + 0] = px < 4 ? 0 : 1;
+          y[idx + 1] = px < 4 ? 1 : 0;
+          y[idx + 2] = px < 4 ? 0 : 1;
+        }
+      }
+    }
+    const raw = lanczosAdaptiveScale(y, w, h, c, s, { sharpness: 0.5 });
+    const residual = projectClamp(y, raw, w, h, s, c);
+    expect(residual).toBeLessThan(1.1e-7);
+  });
 });
+

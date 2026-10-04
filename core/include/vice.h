@@ -77,6 +77,10 @@ void vice_tuning_defaults(ViceTuning* t);
 int vice_upscale_lanczos_adaptive_ex(const float* src, int w, int h, int c, int scale, float* dst,
                                      const ViceTuning* tuning);
 void vice_project_box(const float* y, float* raw, int w, int h, int s, int c);
+/* Clamp-aware exact box projection: shifts each s*s block by a per-block scalar d
+   such that mean(clamp(v + d, 0, 1)) = y, guaranteeing both [0, 1] range and
+   residual <= 3e-8 even on saturated content. */
+void vice_project_box_clamped(const float* y, float* raw, int w, int h, int s, int c);
 /* Iterative back-projection with a bilinear correction (no block seams). Approximate;
    follow with vice_project_box for exact block means. */
 void vice_project_smooth(const float* y, float* raw, int w, int h, int s, int c, int iterations);

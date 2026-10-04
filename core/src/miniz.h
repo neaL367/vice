@@ -588,7 +588,11 @@ extern "C"
 #define MAX_WBITS 15
 #define MAX_MEM_LEVEL 9
 
+#if defined(__GNUC__) || defined(__clang__)
+    static MZ_FORCEINLINE __attribute__((unused)) const char* zError(int err)
+#else
     static MZ_FORCEINLINE const char* zError(int err)
+#endif
     {
         return mz_error(err);
     }
