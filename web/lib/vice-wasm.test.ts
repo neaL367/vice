@@ -355,11 +355,13 @@ describe("wasm parity", () => {
         core.streamPushRows(sctx, y.subarray(yy * inRow, (yy + n) * inRow), n);
       }
       const got = new Uint8Array(W * H * c);
-      const bandPtr = core.mallocBytes(64 * W * c);
+      // pull_band rounds band_h up to a multiple of scale (see vice.h).
+      const bandAlloc = Math.ceil(64 / scale) * scale;
+      const bandPtr = core.mallocBytes(bandAlloc * W * c);
       let emitted = 0;
       while (emitted < H) {
         if (!core.streamHasNext(sctx)) throw new Error("stream stalled");
-        const { rows } = core.streamPullBand(sctx, bandPtr, 64);
+        const { rows } = core.streamPullBand(sctx, bandPtr, bandAlloc);
         got.set(core.readBytes(bandPtr, rows * W * c), emitted * W * c);
         emitted += rows;
       }

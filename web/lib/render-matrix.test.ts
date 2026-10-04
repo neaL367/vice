@@ -59,14 +59,17 @@ describe("render-plan matrix characterization", () => {
     const outH = h * scale;
 
     const sctx = core.createStream(w, h, scale, c, bandH);
-    const bandPtr = core.mallocBytes(bandH * outW * c);
+    // pull_band rounds band_h up to a multiple of scale: size for 24 -> 26
+    // at 3x (see vice.h), never bandH.
+    const bandAlloc = Math.ceil(bandH / scale) * scale;
+    const bandPtr = core.mallocBytes(bandAlloc * outW * c);
     try {
       const y = new Float32Array(w * h * c).fill(0.35);
       core.streamPushRows(sctx, y, h);
 
       let emitted = 0;
       while (core.streamHasNext(sctx)) {
-        const { rows } = core.streamPullBand(sctx, bandPtr, bandH);
+        const { rows } = core.streamPullBand(sctx, bandPtr, bandAlloc);
         emitted += rows;
       }
       expect(emitted).toBe(outH);
@@ -93,14 +96,15 @@ describe("render-plan matrix characterization", () => {
 
     const sctx = core.createStream(w, h, scale, c, bandH);
     core.streamSetFused(sctx, mode);
-    const bandPtr = core.mallocBytes(bandH * w * scale * c);
+    const bandAlloc = Math.ceil(bandH / scale) * scale;
+    const bandPtr = core.mallocBytes(bandAlloc * w * scale * c);
     try {
       const y = new Float32Array(w * h * c).fill(0.42);
       core.streamPushRows(sctx, y, h);
 
       let emitted = 0;
       while (core.streamHasNext(sctx)) {
-        const { rows } = core.streamPullBand(sctx, bandPtr, bandH);
+        const { rows } = core.streamPullBand(sctx, bandPtr, bandAlloc);
         emitted += rows;
       }
       expect(emitted).toBe(outH);

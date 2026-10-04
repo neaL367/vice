@@ -29,9 +29,15 @@ struct vice_stream_ctx {
   std::vector<float> scratch_up;
   std::vector<float> scratch_tmp;
   std::vector<float> scratch_big;
+  std::vector<float> scratch_d;
 };
 
 static constexpr int kFusedHalo = 6;
+// Extra input rows each side feeding the band-local smooth back-projection:
+// the bilinear correction of an owned output row taps residual blocks at
+// most one block away, so one halo block makes band joints match the
+// full-image smooth path up to the missing global low frequencies.
+static constexpr int kSmoothHalo = 1;
 
 vice_stream_ctx* vice_stream_create(int in_w, int in_h, int scale, int channels, int band_h) {
   if (in_w <= 0 || in_h <= 0 || (scale != 2 && scale != 3 && scale != 4) ||
@@ -97,8 +103,70 @@ int vice_stream_has_next_band(const vice_stream_ctx* sctx) {
   int next_out_y1 = std::min(sctx->out_h, sctx->out_rows_emitted + sctx->band_h);
   double max_src_y = ((double)(next_out_y1 - 1) + 0.5) / (double)sctx->scale - 0.5;
   int needed_in_y_max =
-      std::min(sctx->in_h - 1, (int)std::floor(max_src_y) + 4 + sctx->halo_extra);
+      std::min(sctx->in_h - 1, (int)std::floor(max_src_y) + 4 + sctx->halo_extra + kSmoothHalo);
   return (sctx->in_rows_pushed > needed_in_y_max || sctx->in_rows_pushed >= sctx->in_h) ? 1 : 0;
+}
+
+// Band-local smooth back-projection: raw += Ubilinear(y - A(raw)), iterated.
+// Same operator as vice_project_smooth, restricted to the extended strip
+// (owned rows plus the one-block halo), so band joints match the full-image
+// smooth path up to the missing global low frequencies. Runs in place over
+// the whole strip; the caller extracts the owned band afterwards and finishes
+// with the exact clamp-aware box projection, which keeps the residual exact.
+// Global output coordinates drive the bilinear map, so strip position never
+// affects the math; taps clamp to the strip, which equals image-edge clamping
+// wherever the strip touches the image border.
+static void vice_stream_smooth_strip(
+    const float* y_ext, float* raw_ext,
+    int in_w, int in_h, int ext_rows, int ext_y0,
+    int s, int c, std::vector<float>& scratch_d) {
+  const int W = in_w * s;
+  const int ext_out_rows = ext_rows * s;
+  const double inv = 1.0 / (double(s) * s);
+  const float alpha = (s == 2) ? 1.35f : 1.15f;
+  scratch_d.assign((size_t)ext_rows * in_w * c, 0.0f);
+  float* d = scratch_d.data();
+  for (int it = 0; it < VICE_SMOOTH_ITERS; ++it) {
+    for (int by = 0; by < ext_rows; ++by)
+      for (int bx = 0; bx < in_w; ++bx)
+        for (int ch = 0; ch < c; ++ch) {
+          double sum = 0.0;
+          for (int dy = 0; dy < s; ++dy)
+            for (int dx = 0; dx < s; ++dx)
+              sum += raw_ext[((size_t)(by * s + dy) * W + bx * s + dx) * c + ch];
+          d[((size_t)by * in_w + bx) * c + ch] =
+              y_ext[((size_t)by * in_w + bx) * c + ch] - (float)(sum * inv);
+        }
+    vice_parallel_for_rows(0, ext_out_rows, [&](int ey) {
+      int py = ext_y0 * s + ey; // global output row
+      float fy = ((float)py + 0.5f) / (float)s - 0.5f;
+      int y0 = fy < 0 ? -1 : (int)fy;
+      float ty = fy - (float)y0;
+      int ya = y0 < 0 ? 0 : (y0 > in_h - 1 ? in_h - 1 : y0);
+      int yb = y0 + 1 > in_h - 1 ? in_h - 1 : (y0 + 1 < 0 ? 0 : y0 + 1);
+      int lya = ya - ext_y0, lyb = yb - ext_y0;
+      if (lya < 0) lya = 0;
+      if (lya > ext_rows - 1) lya = ext_rows - 1;
+      if (lyb < 0) lyb = 0;
+      if (lyb > ext_rows - 1) lyb = ext_rows - 1;
+      for (int px = 0; px < W; ++px) {
+        float fx = ((float)px + 0.5f) / (float)s - 0.5f;
+        int x0 = fx < 0 ? -1 : (int)fx;
+        float tx = fx - (float)x0;
+        int xa = x0 < 0 ? 0 : (x0 > in_w - 1 ? in_w - 1 : x0);
+        int xb = x0 + 1 > in_w - 1 ? in_w - 1 : (x0 + 1 < 0 ? 0 : x0 + 1);
+        for (int ch = 0; ch < c; ++ch) {
+          float a = d[((size_t)lya * in_w + xa) * c + ch];
+          float b = d[((size_t)lya * in_w + xb) * c + ch];
+          float cc = d[((size_t)lyb * in_w + xa) * c + ch];
+          float e = d[((size_t)lyb * in_w + xb) * c + ch];
+          float top = a + (b - a) * tx;
+          float bot = cc + (e - cc) * tx;
+          raw_ext[((size_t)ey * W + px) * c + ch] += alpha * (top + (bot - top) * ty);
+        }
+      }
+    });
+  }
 }
 
 int vice_stream_pull_band(vice_stream_ctx* sctx, unsigned char* out_bytes, int* written_rows) {
@@ -115,8 +183,8 @@ int vice_stream_pull_band(vice_stream_ctx* sctx, unsigned char* out_bytes, int* 
   double min_src_y = ((double)out_y0 + 0.5) / (double)sctx->scale - 0.5;
   double max_src_y = ((double)(out_y1 - 1) + 0.5) / (double)sctx->scale - 0.5;
   int HE = sctx->halo_extra;
-  int req_in_y0 = std::max(0, (int)std::floor(min_src_y) - 3 - HE);
-  int req_in_y1 = std::min(sctx->in_h, (int)std::floor(max_src_y) + 5 + HE);
+  int req_in_y0 = std::max(0, (int)std::floor(min_src_y) - 3 - HE - kSmoothHalo);
+  int req_in_y1 = std::min(sctx->in_h, (int)std::floor(max_src_y) + 5 + HE + kSmoothHalo);
   int req_in_rows = req_in_y1 - req_in_y0;
 
   if (sctx->in_rows_pushed < req_in_y1 && sctx->in_rows_pushed < sctx->in_h) {
@@ -141,23 +209,34 @@ int vice_stream_pull_band(vice_stream_ctx* sctx, unsigned char* out_bytes, int* 
   sctx->scratch_band.resize((size_t)cur_band_h * out_row_stride);
   float* band_raw = sctx->scratch_band.data();
 
+  // Render the extended strip, smooth it in place, then extract the owned
+  // band: the halo rows make the smooth correction match across joints.
+  float* strip_raw = nullptr;
+  int strip_out_h = 0;
   if (sctx->fused && sctx->scale == 4) {
     if (vice_render_fused_4x_strip(in_strip, sctx->in_w, req_in_rows,
                                    sctx->channels, sctx->fused,
-                                   out_y0, cur_band_h, req_in_y0,
-                                   band_raw,
                                    sctx->scratch_tmp, sctx->scratch_big) != 0)
-      return -3;
+      return -1;
+    strip_out_h = req_in_rows * 4;
+    sctx->scratch_big.resize((size_t)strip_out_h * out_row_stride);
+    strip_raw = sctx->scratch_big.data();
   } else {
-    int strip_out_h = req_in_rows * sctx->scale;
+    strip_out_h = req_in_rows * sctx->scale;
     sctx->scratch_up.resize((size_t)strip_out_h * out_row_stride);
-    float* strip_upscaled = sctx->scratch_up.data();
+    strip_raw = sctx->scratch_up.data();
 
     if (vice_upscale_lanczos_adaptive(in_strip, sctx->in_w, req_in_rows,
                                       sctx->channels, sctx->scale,
-                                      strip_upscaled) != 0)
+                                      strip_raw) != 0)
       return -1;
+  }
 
+  vice_stream_smooth_strip(in_strip, strip_raw, sctx->in_w, sctx->in_h,
+                           req_in_rows, req_in_y0, sctx->scale, sctx->channels,
+                           sctx->scratch_d);
+
+  {
     int strip_global_out_y0 = req_in_y0 * sctx->scale;
     int local_band_offset = out_y0 - strip_global_out_y0;
 
@@ -166,7 +245,7 @@ int vice_stream_pull_band(vice_stream_ctx* sctx, unsigned char* out_bytes, int* 
       if (src_row < 0 || src_row >= strip_out_h)
         return -3; // missing strip row: never emit zeros
       std::memcpy(band_raw + (size_t)by * out_row_stride,
-                  strip_upscaled + (size_t)src_row * out_row_stride,
+                  strip_raw + (size_t)src_row * out_row_stride,
                   out_row_stride * sizeof(float));
     }
   }
@@ -275,7 +354,7 @@ int vice_stream_pull_band(vice_stream_ctx* sctx, unsigned char* out_bytes, int* 
   sctx->out_rows_emitted += cur_band_h;
   *written_rows = cur_band_h;
 
-  int lookback = 3 + sctx->halo_extra;
+  int lookback = 3 + sctx->halo_extra + kSmoothHalo;
   int min_in_y_needed_next = std::max(0, (int)std::floor(((double)sctx->out_rows_emitted + 0.5) / (double)sctx->scale - 0.5) - lookback);
   int rows_to_drop = min_in_y_needed_next - sctx->in_buf_start_y;
   if (rows_to_drop > 0 && rows_to_drop <= sctx->in_buf_row_count) {

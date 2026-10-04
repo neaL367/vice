@@ -715,7 +715,10 @@ static std::vector<unsigned char> render_stream_rows(int in_w, int in_h, int sca
   int out_w = in_w * scale, out_h = in_h * scale;
   const int PUSH = 16;
   int pushed = 0, emitted = 0;
-  std::vector<unsigned char> band((size_t)band_h * out_w * ch);
+  // The stream context rounds band_h up to a multiple of scale (e.g. 64 ->
+  // 66 at 3x): size the byte buffer for the rounded value, not band_h.
+  int band_alloc = ((band_h + scale - 1) / scale) * scale;
+  std::vector<unsigned char> band((size_t)band_alloc * out_w * ch);
   std::vector<unsigned char> out((size_t)out_w * out_h * ch);
   while (emitted < out_h) {
     while (pushed < in_h && !vice_stream_has_next_band(sctx)) {
@@ -833,8 +836,30 @@ static void test_fused4x() {
   printf("fused4x ok\n");
 }
 
-static void test_stream_no_silent_zeros() {
-  // Pulling without enough input must report backpressure (-2) and leave the
+static void test_stream_band_smooth() {
+  // Band-local smooth back-projection must actually run: on a hard vertical
+  // edge the stream seam at 3x/4x must beat the old box-only path (~3.9-4.4
+  // on this content) while the residual stays exact.
+  for (int scale : {3, 4}) {
+    int in_w = 32, in_h = 32, ch = 3;
+    std::vector<float> input((size_t)in_w * in_h * ch);
+    for (int y = 0; y < in_h; y++)
+      for (int x = 0; x < in_w; x++)
+        for (int c = 0; c < ch; c++)
+          input[((size_t)y * in_w + x) * ch + c] = (x < in_w / 2) ? 0.05f : 0.95f;
+    double res = 0;
+    auto bytes = render_stream_rows(in_w, in_h, scale, ch, 64, 0, input, &res);
+    CHECK(res < 1e-5);
+    int W = in_w * scale, H = in_h * scale;
+    std::vector<float> out((size_t)W * H * ch);
+    for (size_t i = 0; i < out.size(); i++) out[i] = bytes[i] / 255.0f;
+    double seam = vice_seam_ratio(out.data(), W, H, scale, ch);
+    printf("stream_band_smooth scale=%d seam=%.3f\n", scale, seam);
+    CHECK(seam < 3.5);
+  }
+}
+
+static void test_stream_no_silent_zeros() {  // Pulling without enough input must report backpressure (-2) and leave the
   // caller's buffer untouched — never emit silent black rows.
   vice_stream_ctx* sctx = vice_stream_create(16, 16, 2, 3, 16);
   CHECK(sctx != nullptr);
@@ -865,6 +890,7 @@ int main() {
   test_png_stream_misuse();
   test_png_stream_soak();
   test_stream_seam_bands();
+  test_stream_band_smooth();
   test_fused4x();
   test_stream_no_silent_zeros();
   printf("ALL PASS\n");

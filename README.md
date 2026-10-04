@@ -139,73 +139,61 @@ worker → result. Results report `threads` (T4) when the threaded core ran.
 ## Quality
 
 `vice_eval` degrades each image two ways (box and bicubic), so every row
-averages both. `raw` = Lanczos only, `proj` = after projection. Since the app
-ships only the streaming path, the proj leg renders through the streaming
-strip API (64-row bands, clamp-aware box only — no multigrid, no smoothing)
-and scores in linear light, so the numbers below measure shipped bytes; see
-`vice_bench4x` for the full-image multigrid/smooth comparison. Residual
-is mathematically guaranteed $\le 1.1\times 10^{-7}$ across all natural and
-synthetic content, including pure blacks and saturated primaries (via
-clamp-aware bisection projection). Seam is the block-boundary gradient ratio;
-`seam_hr` is the same metric on the original high-resolution image, so it
-shows what "no seams" looks like (≈ 1.0).
+averages both. `raw` = Lanczos only, `proj` = after projection. The app ships
+only the streaming path, so the proj leg renders through the streaming strip
+API (64-row bands) and scores in linear light: the table below measures
+shipped bytes. The strip runs band-local smooth back-projection (one-block
+halo, `VICE_SMOOTH_ITERS` iterations) followed by the exact clamp-aware box
+projection; see `vice_bench4x` for the full-image multigrid comparison.
+Residual is mathematically guaranteed $\le 1.1\times 10^{-7}$ across all
+natural and synthetic content, including pure blacks and saturated primaries
+(via clamp-aware bisection projection). Seam is the block-boundary gradient
+ratio. Datasets are external and not checked into the repository, see
+`tools/eval/README.md` for fetch instructions.
 
-*(Note: the dataset table below was measured with the previous full-image
-smooth + box pipeline in sRGB space — it does NOT reflect shipped bytes and
-is kept for trend reference until the datasets are re-run through the stream
-API. The synthetic spot-check beneath it is current: streaming strip API,
-linear-light scoring, direct 4×. Datasets are external and not checked into
-the repository, see `tools/eval/README.md` for fetch instructions).*
+*(Linear-light scoring, direct 4×. Not comparable to the older sRGB-space
+numbers from the smooth + box era — same images, different ruler.)*
 
-| Set      | Scale | PSNR raw → proj | SSIM raw → proj | Seam | seam_hr | Images |
-|----------|-------|-----------------|-----------------|------|---------|--------|
-| Set5     | 2×    | 30.87 → 31.94   | 0.940 → 0.947   | 1.51 | 1.01    | 10     |
-| Set5     | 3×    | 27.64 → 27.87   | 0.877 → 0.878   | 1.33 | 0.99    | 10     |
-| Set5     | 4×    | 26.11 → 26.21   | 0.819 → 0.826   | 1.35 | 1.02    | 10     |
-| Set14    | 2×    | 28.04 → 28.55   | 0.891 → 0.898   | 1.53 | 1.01    | 28     |
-| Set14    | 3×    | 24.77 → 24.76   | 0.781 → 0.782   | 1.35 | 1.00    | 28     |
-| Set14    | 4×    | 23.55 → 23.50   | 0.708 → 0.715   | 1.37 | 1.03    | 28     |
-| BSD100   | 2×    | 27.99 → 28.35   | 0.873 → 0.880   | 1.58 | 1.01    | 200    |
-| BSD100   | 3×    | 24.73 → 24.68   | 0.747 → 0.752   | 1.34 | 1.00    | 200    |
-| BSD100   | 4×    | 23.81 → 23.71   | 0.672 → 0.681   | 1.38 | 1.01    | 200    |
-| Urban100 | 2×    | 25.32 → 25.77   | 0.870 → 0.878   | 1.53 | 1.01    | 200    |
-| Urban100 | 3×    | 21.93 → 21.92   | 0.746 → 0.748   | 1.33 | 1.00    | 200    |
-| Urban100 | 4×    | 20.91 → 20.84   | 0.667 → 0.676   | 1.37 | 1.02    | 200    |
+| Set      | Scale | PSNR raw → proj | SSIM raw → proj | Seam | Images |
+|----------|-------|-----------------|-----------------|------|--------|
+| Set5     | 2×    | 31.23 → 32.33   | 0.947 → 0.954   | 1.55 | 10     |
+| Set5     | 3×    | 28.18 → 28.47   | 0.891 → 0.893   | 1.42 | 10     |
+| Set5     | 4×    | 26.82 → 26.98   | 0.841 → 0.846   | 1.47 | 10     |
+| Set14    | 2×    | 28.12 → 28.60   | 0.900 → 0.907   | 1.61 | 28     |
+| Set14    | 3×    | 24.94 → 24.95   | 0.800 → 0.803   | 1.50 | 28     |
+| Set14    | 4×    | 23.83 → 23.79   | 0.733 → 0.742   | 1.58 | 28     |
+| BSD100   | 2×    | 28.33 → 28.72   | 0.884 → 0.891   | 1.61 | 200    |
+| BSD100   | 3×    | 25.14 → 25.13   | 0.774 → 0.778   | 1.44 | 200    |
+| BSD100   | 4×    | 24.24 → 24.16   | 0.710 → 0.718   | 1.50 | 200    |
+| Urban100 | 2×    | 25.28 → 25.72   | 0.876 → 0.884   | 1.64 | 200    |
+| Urban100 | 3×    | 22.04 → 22.05   | 0.762 → 0.766   | 1.55 | 200    |
+| Urban100 | 4×    | 21.06 → 20.99   | 0.692 → 0.700   | 1.63 | 200    |
 
-Projection raises SSIM in every row. PSNR rises at 2× and drops by at most
-0.1 dB at 3×/4× (legacy smooth + box pipeline — see note above). Direct 4× is
-the default and the `2××2×` toggle runs a clean fused second pass
-(6-row input halo, joint == interior on hard-edge seam fixtures at
+Projection raises SSIM in every row; PSNR rises at 2× and holds within
+0.1 dB at 3×/4×. Seam sits at 1.4–1.7 with residual ≈ 3e-8 everywhere.
+Direct 4× is the default and the `2××2×` toggle runs a clean fused second
+pass (6-row input halo, joint == interior on hard-edge seam fixtures at
 16/32/48/64-row bands; clean and detail modes differ by construction).
-Residual seam above the ≈ 1.0 ground truth is ordinary block-boundary
-texture, most visible at 2×. The TypeScript fallback (`projectClamp`) uses
-the same projection and is checked against the WASM core in
-`web/lib/vice-wasm.test.ts`.
+The TypeScript fallback (`projectClamp`) uses the same projection and is
+checked against the WASM core in `web/lib/vice-wasm.test.ts`.
 
-Current shipped-path spot check (`vice_eval` procedurals, stream API,
-linear-light scoring, direct 4× — run without datasets):
-
-| Set       | Scale | PSNR raw → proj | SSIM raw → proj | Seam | Images |
-|-----------|-------|-----------------|-----------------|------|--------|
-| synthetic | 2×    | 34.73 → 38.56   | 0.744 → 0.900   | 9.47 | 8      |
-| synthetic | 3×    | 27.32 → 27.92   | 0.614 → 0.660   | 4.44 | 8      |
-| synthetic | 4×    | 26.91 → 28.50   | 0.567 → 0.686   | 3.90 | 8      |
-
-Projection raises both metrics on every row with residual ≈ 3e-8. Seam on
-these adversarial synthetics (checker/bars) is higher than the old smooth +
-box numbers: per-block constant shifts step at block boundaries on
-pathological contrast, while the smooth correction spreads them. On natural
-content the stream path holds the legacy ~1.3–1.6 seam (independent probe:
-stream vs multigrid 2× 3.45 vs 3.52 equal, 3× 3.98 vs 3.08, 4× 3.89 vs 3.12 —
-residual exact either way). A band-local smooth back-projection (one-block
-halo) remains possible future work; it is not needed for the guarantee.
+Why band-local smooth exists: an independent synthetic hard-edge probe
+showed the old box-only stream path trailing the multigrid path (3× seam
+3.98 vs 3.08, 4× 3.89 vs 3.12, residual exact either way — that probe image
+was synthetic, so it says nothing about natural content). The one-block-halo
+smooth closes it: on our hard-edge fixture the stream seam now measures 2.37
+at 3× and 2.50 at 4× (native test `test_stream_band_smooth`, bound 3.5),
+and the adversarial synthetic suite drops 4.44 → 3.07 (3×) and 3.90 → 2.83
+(4×). It costs about 2× stream render time versus box-only for the
+`VICE_SMOOTH_ITERS` passes — the threaded pool absorbs it in-app.
 
 4× policy bench (`vice_bench4x`, Set5/BSD100/Urban100 SRF_4 + procedural
 edge): all five policies (A full-direct, B full-chained-clean, C
 stream-direct, D stream fused-clean, E stream fused-detail) land within ~1 dB
-of HR ground truth; D tracks B at 39–53 dB. E (detail) never beats D and costs
-~1.7× time, so only Clean (fused mode 1) and Direct ship in the UI; mode 2
-stays engine-only. All policies gate on residual < 1e-5.
+of HR ground truth; D tracks B at 41–44 dB (C tracks A at 36–57 dB).
+E (detail) never beats D and costs ~1.5–1.7× time, so only Clean (fused
+mode 1) and Direct ship in the UI; mode 2 stays engine-only. All policies
+gate on residual < 1e-5.
 
 ## Limits
 
@@ -222,7 +210,9 @@ stays engine-only. All policies gate on residual < 1e-5.
   pulls, so steady-state rendering performs zero allocations per band.
   Measured 2026-10-04 in headless Chromium, isolated browser-tree RSS:
   full-image 25 MP peaks at 1.94 GB / 29 s and 36 MP at 2.62 GB / 43 s
-  (~68 MB per output MP); streaming 64 MP Blob peaks at 2.13 GB / 66 s;
+  (~68 MB per output MP); streaming 64 MP Blob peaks at 2.13 GB / 66 s
+  (pre-smooth timings — the band-local smooth passes roughly double strip
+  compute; the threaded pool absorbs it in-app);
   threaded infinite 25 MP drops to 10.8 s (1.48× vs single, pre-pool floor).
   The WASM heap never shrinks, so the tab retains ~peak either way. Caps live
   in `web/lib/limits.ts` and gate Blob downloads only.

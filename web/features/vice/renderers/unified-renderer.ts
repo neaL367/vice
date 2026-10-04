@@ -45,6 +45,9 @@ export class UnifiedRenderer {
     const W = w * scale;
     const H = h * scale;
     const BAND = 64;
+    // pull_band rounds band_h up to a multiple of scale (see vice.h): size
+    // the WASM buffer for the rounded value (64 -> 66 at 3x), never BAND.
+    const bandAlloc = Math.ceil(BAND / scale) * scale;
     const CHUNK = 256;
     const isSaveToDisk = target.kind === "file" || target.kind === "folder";
 
@@ -73,7 +76,7 @@ export class UnifiedRenderer {
       sctx.setFusedMode("clean");
     }
 
-    const bandPtr = mem.malloc(BAND * W * 4);
+    const bandPtr = mem.malloc(bandAlloc * W * 4);
     const pst = NativePngWriter.open(mem, W, H, 4, outCh, input.icc ?? undefined);
 
     let sink: ChunkSink;
@@ -117,7 +120,7 @@ export class UnifiedRenderer {
         throwIfAborted(signal);
 
         while (sctx.hasNextBand()) {
-          const { rc, rows: bandRows } = sctx.pullBand(bandPtr, BAND);
+          const { rc, rows: bandRows } = sctx.pullBand(bandPtr, bandAlloc);
           if (previewAcc) {
             const bytes = mem.readBytes(bandPtr, bandRows * W * 4);
             previewAcc.feedBand(bytes, emitted, bandRows);
@@ -143,7 +146,7 @@ export class UnifiedRenderer {
         if (!sctx.hasNextBand()) {
           throw new Error("stream stalled: input exhausted with rows unemitted");
         }
-        const { rc, rows: bandRows } = sctx.pullBand(bandPtr, BAND);
+        const { rc, rows: bandRows } = sctx.pullBand(bandPtr, bandAlloc);
         if (previewAcc) {
           const bytes = mem.readBytes(bandPtr, bandRows * W * 4);
           previewAcc.feedBand(bytes, emitted, bandRows);
