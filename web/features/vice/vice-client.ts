@@ -24,6 +24,7 @@ export interface ViceJobOptions {
   preset?: VicePreset;
   dering?: number;
   sharpness?: number;
+  shock?: number;
 }
 
 const workerReadyMap = new WeakMap<Worker, Promise<void>>();
@@ -144,6 +145,7 @@ export function runOnWorkerThread(
       preset: options?.preset,
       dering: options?.dering,
       sharpness: options?.sharpness,
+      shock: options?.shock,
     };
     worker.postMessage(req);
   });
@@ -189,6 +191,7 @@ export async function runViceJob(
               preset: options?.preset,
               dering: options?.dering,
               sharpness: options?.sharpness,
+              shock: options?.shock,
             },
           };
         }

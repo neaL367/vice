@@ -48,6 +48,10 @@ struct Params {
   preset: u32,       // 0 = photo, 1 = smooth, 2 = pixel-art
   dering: f32,       // 0.0 to 1.0
   sharpness: f32,    // 0.0 to 1.0
+  shock: f32,        // 0.0 to 1.0
+  _pad0: u32,
+  _pad1: u32,
+  _pad2: u32,
 };
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -167,6 +171,10 @@ struct Params {
   preset: u32,
   dering: f32,
   sharpness: f32,
+  shock: f32,
+  _pad0: u32,
+  _pad1: u32,
+  _pad2: u32,
 };
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -281,7 +289,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   }
 
   // Vice 2.0 Coherence-Enhancing Shock PDE: steepens blurry edge transitions into crisp sub-pixel steps
-  if (params.preset == 0u) {
+  if (params.preset == 0u && params.shock > 0.001) {
     let grad_x = 0.5 * (tr + br - tl - bl);
     let grad_y = p1 - p0;
     let grad_sq = grad_x * grad_x + grad_y * grad_y;
@@ -293,8 +301,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
     let i_eta_eta = (grad_x * grad_x * dxx + 2.0 * grad_x * grad_y * dxy + grad_y * grad_y * dyy) / (grad_sq + vec3<f32>(1e-5));
     let shock_term = -tanh(5.0 * i_eta_eta) * grad_norm;
-    let shock_strength = 0.35 + 0.35 * params.sharpness;
-    accum = vec4<f32>(clamp(accum.rgb + 0.12 * shock_strength * shock_term, vec3<f32>(0.0), vec3<f32>(1.0)), accum.a);
+    accum = vec4<f32>(clamp(accum.rgb + 0.12 * params.shock * shock_term, vec3<f32>(0.0), vec3<f32>(1.0)), accum.a);
   }
 
   out_buf[y * params.out_w + x] = accum;
@@ -313,6 +320,10 @@ struct Params {
   preset: u32,
   dering: f32,
   sharpness: f32,
+  shock: f32,
+  _pad0: u32,
+  _pad1: u32,
+  _pad2: u32,
 };
 
 @group(0) @binding(0) var<uniform> params: Params;

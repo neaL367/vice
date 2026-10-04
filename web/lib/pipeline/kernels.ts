@@ -274,15 +274,17 @@ export function lanczosAdaptiveScale(
   }
 
   // Pass 3: Null-Space Micro-Texture Sharpness Enhancement
+  // RGB only: alpha preserved (matches C++ proc_c).
+  const procC = c === 4 ? 3 : c;
   if (sharpness > 0.001) {
-    const sharpTmp = new Float32Array(W * H * c);
+    const sharpTmp = new Float32Array(dst);
     for (let y = 0; y < H; y++) {
       const yPrev = Math.max(0, y - 1);
       const yNext = Math.min(H - 1, y + 1);
       for (let x = 0; x < W; x++) {
         const xPrev = Math.max(0, x - 1);
         const xNext = Math.min(W - 1, x + 1);
-        for (let ch = 0; ch < c; ch++) {
+        for (let ch = 0; ch < procC; ch++) {
           const center = dst[(y * W + x) * c + ch];
           const n = dst[(yPrev * W + x) * c + ch];
           const s = dst[(yNext * W + x) * c + ch];
@@ -298,8 +300,14 @@ export function lanczosAdaptiveScale(
   }
 
   // Pass 4: Coherence Shock PDE Edge Steeper (Vice 2.0 Engine)
-  const shock = Math.max(0, Math.min(1, options?.shock ?? (preset === "photo" ? 0.35 : 0)));
-  if (shock > 0.001) {
+  // Preset-gated like C++: photo only. Explicit shock overrides default.
+  const shock =
+    options?.shock !== undefined
+      ? Math.max(0, Math.min(1, options.shock))
+      : preset === "photo"
+        ? 0.35
+        : 0;
+  if (preset === "photo" && shock > 0.001) {
     const shocked = applyCoherenceShockFilter(dst, W, H, c, shock, 2);
     dst.set(shocked);
   }
@@ -431,11 +439,13 @@ export function applyCoherenceShockFilter(
   iterations = 2,
 ): Float32Array {
   if (strength <= 0.001) return img;
+  const procC = c === 4 ? 3 : c;
   const current = new Float32Array(img);
   const next = new Float32Array(img.length);
   const dt = 0.12 * Math.min(1, strength);
 
   for (let it = 0; it < iterations; it++) {
+    next.set(current);
     for (let y = 0; y < h; y++) {
       const ym1 = Math.max(0, y - 1) * w;
       const yc = y * w;
@@ -445,7 +455,7 @@ export function applyCoherenceShockFilter(
         const xm1 = Math.max(0, x - 1);
         const xp1 = Math.min(w - 1, x + 1);
 
-        for (let ch = 0; ch < c; ch++) {
+        for (let ch = 0; ch < procC; ch++) {
           const cCenter = current[(yc + x) * c + ch];
           const cL = current[(yc + xm1) * c + ch];
           const cR = current[(yc + xp1) * c + ch];
@@ -459,14 +469,14 @@ export function applyCoherenceShockFilter(
           const Ix = 0.5 * (cR - cL);
           const Iy = 0.5 * (cB - cT);
           const gradSq = Ix * Ix + Iy * Iy;
-          const gradNorm = Math.sqrt(gradSq + 1e-6);
+          const gradNorm = Math.sqrt(gradSq + 1e-5);
 
           const Ixx = cR - 2 * cCenter + cL;
           const Iyy = cB - 2 * cCenter + cT;
           const Ixy = 0.25 * (cBR - cBL - cTR + cTL);
 
-          const I_eta_eta = (Ix * Ix * Ixx + 2 * Ix * Iy * Ixy + Iy * Iy * Iyy) / (gradSq + 1e-6);
-          const shock = -Math.tanh(6 * I_eta_eta) * gradNorm;
+          const I_eta_eta = (Ix * Ix * Ixx + 2 * Ix * Iy * Ixy + Iy * Iy * Iyy) / (gradSq + 1e-5);
+          const shock = -Math.tanh(5 * I_eta_eta) * gradNorm;
           const update = cCenter + dt * shock;
           next[(yc + x) * c + ch] = Math.max(0, Math.min(1, update));
         }

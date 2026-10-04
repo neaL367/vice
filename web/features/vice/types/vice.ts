@@ -45,6 +45,7 @@ export interface ViceResultMeta {
   preset?: VicePreset;
   dering?: number;
   sharpness?: number;
+  shock?: number;
 }
 
 export interface ViceRunOptions {
@@ -54,6 +55,7 @@ export interface ViceRunOptions {
   preset?: VicePreset;
   dering?: number;
   sharpness?: number;
+  shock?: number;
 }
 
 // --- Worker-thread RPC ----------------------------------------------------
@@ -69,6 +71,7 @@ export interface ViceRunMsg {
   preset?: VicePreset;
   dering?: number;
   sharpness?: number;
+  shock?: number;
 }
 export interface ViceCancelMsg {
   type: "cancel";

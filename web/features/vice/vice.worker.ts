@@ -112,6 +112,7 @@ export async function runViceUpscale(
           preset: opts.preset,
           dering: opts.dering,
           sharpness: opts.sharpness,
+          shock: opts.shock,
         });
         core.project(cctx1);
         mid = core.downloadRaw(cctx1, w * 2 * h * 2 * 4);
@@ -128,6 +129,7 @@ export async function runViceUpscale(
           preset: opts.preset,
           dering: opts.dering,
           sharpness: opts.sharpness,
+          shock: opts.shock,
         });
         onProgress({ band: 3, totalBands: 4, stage: "Projecting…", backend });
         throwIfAborted(opts.signal);
@@ -157,6 +159,7 @@ export async function runViceUpscale(
             preset: opts.preset,
             dering: opts.dering,
             sharpness: opts.sharpness,
+            shock: opts.shock,
           },
         };
       } finally {
@@ -173,6 +176,7 @@ export async function runViceUpscale(
         preset: opts.preset,
         dering: opts.dering,
         sharpness: opts.sharpness,
+        shock: opts.shock,
       });
       onProgress({ band: 2, totalBands: 3, stage: "Projecting…", backend });
       throwIfAborted(opts.signal);
@@ -203,6 +207,7 @@ export async function runViceUpscale(
           preset: opts.preset,
           dering: opts.dering,
           sharpness: opts.sharpness,
+          shock: opts.shock,
         },
       };
     } finally {
@@ -219,12 +224,14 @@ export async function runViceUpscale(
       preset: opts.preset,
       dering: opts.dering,
       sharpness: opts.sharpness,
+      shock: opts.shock,
     });
     projectClamp(lin, mid, w, h, 2, 4, 3);
     raw = lanczosAdaptiveScale(mid, w * 2, h * 2, 4, 2, {
       preset: opts.preset,
       dering: opts.dering,
       sharpness: opts.sharpness,
+      shock: opts.shock,
     });
     residual = projectClamp(mid, raw, w * 2, h * 2, 2, 4, 3);
   } else {
@@ -232,6 +239,7 @@ export async function runViceUpscale(
       preset: opts.preset,
       dering: opts.dering,
       sharpness: opts.sharpness,
+      shock: opts.shock,
     });
     residual = projectClamp(lin, raw, w, h, scale, 4, 3);
   }
@@ -253,6 +261,7 @@ export async function runViceUpscale(
       preset: opts.preset,
       dering: opts.dering,
       sharpness: opts.sharpness,
+      shock: opts.shock,
     },
   };
 }
@@ -268,10 +277,11 @@ async function encodeCanvasPng(raw: Float32Array, W: number, H: number): Promise
     for (let x = 0; x < W; x++) {
       const i = rowOffset + x;
       const a = Math.max(0, Math.min(1, raw[i * c + 3]));
-      const invA = a > 0 ? 1 / a : 0;
+      const invA = a > 1e-6 ? 1 / a : 0;
       for (let ch = 0; ch < 3; ch++) {
         const dither = spatialTriangularDither(x, y, ch);
-        const srgbVal = fastLinearToSrgb(raw[i * c + ch] * invA) * 255;
+        const lin = Math.max(0, Math.min(1, raw[i * c + ch] * invA));
+        const srgbVal = fastLinearToSrgb(lin) * 255;
         outImg.data[i * 4 + ch] = Math.max(0, Math.min(255, Math.round(srgbVal + dither)));
       }
       outImg.data[i * 4 + 3] = Math.round(a * 255);
@@ -325,6 +335,7 @@ if (isWorkerScope()) {
         preset: msg.preset,
         dering: msg.dering,
         sharpness: msg.sharpness,
+        shock: msg.shock,
       },
     ).then(
       ({ blob, meta }) => {

@@ -97,16 +97,17 @@ export class ViceCore {
       preset?: "photo" | "smooth" | "pixel-art";
       dering?: number;
       sharpness?: number;
+      shock?: number;
     },
   ): void {
     if (this.core._vice_upscale_ex && options) {
-      const ptr = this.core._malloc(36);
+      const ptr = this.core._malloc(40);
       if (!ptr) throw new Error("wasm malloc failed");
       try {
         if (this.core._vice_tuning_defaults) {
           this.core._vice_tuning_defaults(ptr);
         }
-        const view = new DataView(this.core.HEAPU8.buffer, ptr, 36);
+        const view = new DataView(this.core.HEAPU8.buffer, ptr, 40);
         if (options.dering !== undefined) {
           view.setFloat32(24, Math.max(0, Math.min(1, options.dering)), true);
         }
@@ -121,6 +122,9 @@ export class ViceCore {
               ? 2
               : 0;
           view.setInt32(32, p, true);
+        }
+        if (options.shock !== undefined) {
+          view.setFloat32(36, Math.max(0, Math.min(1, options.shock)), true);
         }
         if (this.core._vice_upscale_ex(ctx, ptr) !== 0) {
           throw new Error("vice_upscale_ex failed");

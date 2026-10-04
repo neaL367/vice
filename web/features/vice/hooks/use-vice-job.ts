@@ -263,7 +263,7 @@ export function useViceJob() {
       batchAbortRef.current = null;
       runningRef.current = false;
     }
-  }, [state.files, state.scale, state.chained4x]);
+  }, [state.files, state.scale, state.chained4x, state.preset, state.dering, state.sharpness]);
 
   const cancel = useCallback(() => {
     const w = workerRef.current;

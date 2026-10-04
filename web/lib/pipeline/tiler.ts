@@ -58,27 +58,8 @@ export function reflectIndex(x: number, n: number): number {
   return x >= n ? m - x : x;
 }
 
-export function planTiles(
-  inW: number,
-  inH: number,
-  tile = 128,
-  overlap = 16,
-): Tile[] {
-  void overlap;
-  const out: Tile[] = [];
-  for (let y = 0; y < inH; y += tile)
-    for (let x = 0; x < inW; x += tile)
-      out.push({
-        ix: x,
-        iy: y,
-        iw: Math.min(tile, inW - x),
-        ih: Math.min(tile, inH - y),
-      });
-  return out;
-}
-
-// Overlapping fixed-size tiles covering every pixel >= once. Edge tiles
-// clamp to bounds; caller reflect-pads the overhang. Step T-O.
+// Prototype for future large-image path: not wired to the worker (full-image
+// WASM up to the 36 MP cap). Kept for tests + future streaming work.
 export function planOverlap(inW: number, inH: number, t: number, o: number): OverlapTile[] {
   const step = Math.max(1, t - o);
   const xs: number[] = [];

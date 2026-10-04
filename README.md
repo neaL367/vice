@@ -69,6 +69,11 @@ is the same metric on the original high-resolution image, so it shows what
 Set5, Set14, BSD100, and Urban100 datasets; datasets are external and not checked into
 the repository, see `tools/eval/README.md` for fetch instructions).*
 
+*(Staleness note: the table below was measured with sharpness 0.2 and the prior
+projection. Shipped defaults are now sharpness 0.35, shock 0.35 (photo), with the
+multigrid + smooth + clamp-aware box projection. Re-measure with `vice_eval`
+pending; expect small PSNR shifts, residual still ≤ 1.1×10⁻⁷.)*
+
 | Set      | Scale | PSNR raw → proj | SSIM raw → proj | Seam | seam_hr | Images |
 |----------|-------|-----------------|-----------------|------|---------|--------|
 | Set5     | 2×    | 31.68 → 32.53   | 0.944 → 0.950   | 1.51 | 1.01    | 10     |

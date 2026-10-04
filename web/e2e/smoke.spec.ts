@@ -31,7 +31,7 @@ test("shell renders tool, upscales 8x8 to 16x16", async ({ page }) => {
   await expect(page.getByText(/Lanczos-3/)).toBeVisible({ timeout: 20_000 });
 });
 
-test("3x bilinear path works without model", async ({ page }) => {
+test("3x Lanczos-3 path works without model", async ({ page }) => {
   test.setTimeout(120_000);
   await page.goto("/");
   const buf = await page.evaluate(async () => {

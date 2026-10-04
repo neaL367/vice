@@ -101,7 +101,7 @@ describe("wasm parity", () => {
     core.upscale(ctx);
     core.project(ctx);
     const residual = core.lastResidual(ctx);
-    expect(residual).toBeLessThan(0.05);
+    expect(residual).toBeLessThan(1e-4);
 
     const png = core.finishPng(ctx, w * scale, h * scale, c);
     expect(png.length).toBeGreaterThan(8);
@@ -166,7 +166,7 @@ describe("wasm parity", () => {
     core.upscale(ctx2);
     core.project(ctx2);
     const residual = core.lastResidual(ctx2);
-    expect(residual).toBeLessThan(0.05);
+    expect(residual).toBeLessThan(1e-4);
 
     const png = core.finishPng(ctx2, w * 4, h * 4, c);
     expect(png[0]).toBe(137);
@@ -189,7 +189,7 @@ describe("wasm parity", () => {
       core.upscale(ctx, { preset, dering: 0.8, sharpness: 0.4 });
       core.project(ctx);
       const residual = core.lastResidual(ctx);
-      expect(residual).toBeLessThan(0.05);
+      expect(residual).toBeLessThan(1e-4);
       core.destroy(ctx);
     }
   });
@@ -257,5 +257,34 @@ describe("wasm parity", () => {
     expect(rows[3]).toBeLessThanOrEqual(128);
 
     core.destroy(ctx);
+  });
+
+  test("TS lanczosAdaptiveScale matches WASM upscale with identical tuning", async () => {
+    const { ViceCore } = await import("./vice-wasm");
+    const { lanczosAdaptiveScale } = await import("./pipeline/kernels");
+    const core = await ViceCore.load("../public/");
+    if (!core) return;
+    const w = 8;
+    const h = 6;
+    const scale = 2;
+    const c = 4;
+    const y = new Float32Array(w * h * c);
+    for (let i = 0; i < y.length; i++) y[i] = (i % 19) / 19;
+
+    for (const opts of [
+      { preset: "photo" as const, dering: 1.0, sharpness: 0.35, shock: 0.35 },
+      { preset: "smooth" as const, dering: 1.0, sharpness: 0.35, shock: 0 },
+    ]) {
+      const expected = lanczosAdaptiveScale(y, w, h, c, scale, opts);
+      const ctx = core.create(w, h, scale, c);
+      core.setInput(ctx, y);
+      core.upscale(ctx, opts);
+      const got = core.downloadRaw(ctx, w * scale * h * scale * c);
+      core.destroy(ctx);
+      let worst = 0;
+      for (let i = 0; i < expected.length; i++)
+        worst = Math.max(worst, Math.abs(expected[i] - got[i]));
+      expect(worst).toBeLessThan(2e-3);
+    }
   });
 });

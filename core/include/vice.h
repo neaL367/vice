@@ -70,8 +70,9 @@ typedef struct ViceTuning {
   float steer_thresh; /* diagonal asymmetry needed to steer */
   float steer_weight; /* max blend toward the diagonal average */
   float dering;       /* anti-ringing clamp strength [0.0, 1.0] (default 1.0) */
-  float sharpness;    /* null-space high-pass sharpness boost [0.0, 1.0] (default 0.2) */
+  float sharpness;    /* null-space high-pass sharpness boost [0.0, 1.0] (default 0.35) */
   int   preset;       /* 0 = adaptive lanczos (photo), 1 = smooth (CGI), 2 = pixel art */
+  float shock;        /* coherence shock PDE strength [0.0, 1.0] (default 0.35 photo, 0 else) */
 } ViceTuning;
 void vice_tuning_defaults(ViceTuning* t);
 int vice_upscale_lanczos_adaptive_ex(const float* src, int w, int h, int c, int scale, float* dst,

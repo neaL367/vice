@@ -63,8 +63,9 @@ void vice_tuning_defaults(ViceTuning* t) {
   t->steer_thresh = 0.15f;
   t->steer_weight = 0.2f;
   t->dering = 1.0f;
-  t->sharpness = 0.2f;
+  t->sharpness = 0.35f;
   t->preset = 0;
+  t->shock = 0.35f;
 }
 
 int vice_upscale_lanczos_adaptive(const float* src, int w, int h, int c, int scale, float* dst) {
@@ -296,9 +297,9 @@ int vice_upscale_lanczos_adaptive_ex(const float* src, int w, int h, int c, int 
   }
 
   // Pass 4: Vice 2.0 Coherence-Enhancing Shock PDE
-  if (tuning->preset == 0 && (tuning->sharpness > 0.0f || tuning->boost > 0.0f)) {
-    float shock_strength = 0.35f + 0.35f * tuning->sharpness;
-    float dt = 0.12f * std::min(1.0f, shock_strength);
+  const float SHOCK = std::max(0.0f, std::min(1.0f, tuning->shock));
+  if (tuning->preset == 0 && SHOCK > 0.001f) {
+    float dt = 0.12f * std::min(1.0f, SHOCK);
     std::vector<float> shock_tmp((size_t)W * H * c);
     std::memcpy(shock_tmp.data(), dst, shock_tmp.size() * sizeof(float));
 

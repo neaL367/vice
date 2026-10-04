@@ -337,19 +337,36 @@ struct Paths {
 };
 
 bool load_tuning(const std::string& path, ViceTuning& t) {
+  vice_tuning_defaults(&t);
   std::ifstream in(path);
   if (!in) return false;
-  float v[6];
-  for (float& x : v)
-    if (!(in >> x)) return false;
-  t = {v[0], v[1], v[2], v[3], v[4], v[5]};
+  // Legacy tuning.txt holds the 6 heuristic constants; newer files append
+  // dering sharpness preset shock. Missing tail keeps shipped defaults.
+  float v[10];
+  int n = 0;
+  for (float& x : v) {
+    if (!(in >> x)) break;
+    ++n;
+  }
+  if (n < 6) return false;
+  t.noise_floor = v[0];
+  t.boost = v[1];
+  t.boost_slope = v[2];
+  t.wide_weight = v[3];
+  t.steer_thresh = v[4];
+  t.steer_weight = v[5];
+  if (n > 6) t.dering = v[6];
+  if (n > 7) t.sharpness = v[7];
+  if (n > 8) t.preset = (int)v[8];
+  if (n > 9) t.shock = v[9];
   return true;
 }
 
 void save_tuning(const std::string& path, const ViceTuning& t) {
   std::ofstream o(path);
   o << t.noise_floor << " " << t.boost << " " << t.boost_slope << " " << t.wide_weight << " "
-    << t.steer_thresh << " " << t.steer_weight << "\n";
+    << t.steer_thresh << " " << t.steer_weight << " " << t.dering << " " << t.sharpness << " "
+    << t.preset << " " << t.shock << "\n";
 }
 
 enum Method { kShipped, kTuned, kTunedSmooth, kLearned, kLearnedSmooth, kNumMethods };
