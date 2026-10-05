@@ -57,7 +57,9 @@ export async function decodeInputImage(
   const h = bmp.height;
 
   const cv = new OffscreenCanvas(w, h);
-  const ctx = cv.getContext("2d", { colorSpace: "srgb" });
+  // Multiple getImageData readbacks per decode: hint the canvas to keep a
+  // CPU-side buffer instead of round-tripping the GPU.
+  const ctx = cv.getContext("2d", { colorSpace: "srgb", willReadFrequently: true });
   if (!ctx) {
     bmp.close();
     throw new Error("2d context unavailable");

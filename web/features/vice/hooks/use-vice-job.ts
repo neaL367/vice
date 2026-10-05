@@ -12,19 +12,38 @@ export function useViceJob() {
 
   const createJobCallbacks = useCallback(
     (onResultExtra?: (result: ViceResult) => void) => ({
+      // Transitions abort with "invalid state" while the document is hidden
+      // (worker progress keeps firing with the tab in background), which
+      // Next logs as an uncaught recoverable error. Updates are invisible
+      // while hidden anyway: progress is dropped, the rest dispatch
+      // directly instead of in a transition.
       onProgress: (progress: string) => {
+        if (typeof document !== "undefined" && document.hidden) return;
         startTransition(() => dispatch({ type: "SET_PROGRESS", progress }));
       },
       onResult: (result: ViceResult) => {
+        if (typeof document !== "undefined" && document.hidden) {
+          dispatch({ type: "ADD_RESULT", result });
+          onResultExtra?.(result);
+          return;
+        }
         startTransition(() => {
           dispatch({ type: "ADD_RESULT", result });
           onResultExtra?.(result);
         });
       },
       onFinish: () => {
+        if (typeof document !== "undefined" && document.hidden) {
+          dispatch({ type: "FINISH_RUN" });
+          return;
+        }
         startTransition(() => dispatch({ type: "FINISH_RUN" }));
       },
       onError: (error: string, cancelled?: boolean) => {
+        if (typeof document !== "undefined" && document.hidden) {
+          dispatch({ type: "FAIL_RUN", progress: cancelled ? "cancelled" : undefined, error: cancelled ? undefined : error });
+          return;
+        }
         startTransition(() => {
           if (cancelled) {
             dispatch({ type: "FAIL_RUN", progress: "cancelled" });
