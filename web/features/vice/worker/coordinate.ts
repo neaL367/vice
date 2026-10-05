@@ -15,9 +15,12 @@ import {
   idatChunk,
   adlerTrailer,
   iendChunk,
+  receiptChunk,
   ZLIB_HEADER,
+  type Receipt,
 } from "../slabs/assemble";
 import { adlerCombine } from "../slabs/crc";
+import { EXPECTED_ABI_VERSION } from "../engine/wasm-module";
 import { BlobSink } from "../export/blob-sink";
 import { OpfsSink } from "../export/opfs-sink";
 import { PreviewAccumulator } from "./emit-preview";
@@ -172,12 +175,26 @@ export async function runCoordinatedJob(
         const body = idatChunk(
           new Uint8Array([...ZLIB_HEADER, ...seg.segment, ...adlerTrailer(seg.adler)]),
         );
-        const tail = iendChunk();
+        const index = geometry.slabs.findIndex((s) => s.outY0 === seg.outY0);
+        const receipt: Receipt = {
+          v: 1,
+          algo: 2,
+          abi: EXPECTED_ABI_VERSION,
+          scale,
+          policy: plan.policy,
+          operator: "box-encoded-exact",
+          bandRows: 64,
+          slabBands: 8,
+          in: { w: probe.w, h: probe.h },
+          out: { w: outW, h: outH },
+          slab: index,
+          slabs: geometry.slabs.length,
+        };
+        const tail = new Uint8Array([...receiptChunk(receipt), ...iendChunk()]);
         const png = new Uint8Array(head.length + body.bytes.length + tail.length);
         png.set(head, 0);
         png.set(body.bytes, head.length);
         png.set(tail, head.length + body.bytes.length);
-        const index = geometry.slabs.findIndex((s) => s.outY0 === seg.outY0);
         await opts.onStripPng(png, index, geometry.slabs.length);
         fileBytes += png.length;
         return;
@@ -219,24 +236,37 @@ export async function runCoordinatedJob(
     if (nextY !== outH) throw new Error(`short render ${nextY}/${outH}`);
     throwIfAborted(signal);
 
-    const previewBlob = wantStrips || opfsSink || (chunkSink && !blobSink) ? await preview.toBlob() : null;
+    const wantPreview = wantStrips || opfsSink || (chunkSink && !blobSink);
     let blob: Blob;
     const durationMs = Math.round(performance.now() - t0);
-    if (previewBlob) {
-      // File/opfs/strips targets: small preview blob (was: empty dummy blob).
-      blob = previewBlob;
-    } else if (blobSink) {
-      blob = blobSink.getBlob();
-    } else {
-      throw new Error("no result blob");
-    }
-
     if (chunkSink && !wantStrips) {
+      const receipt: Receipt = {
+        v: 1,
+        algo: 2,
+        abi: EXPECTED_ABI_VERSION,
+        scale,
+        policy: plan.policy,
+        operator: "box-encoded-exact",
+        bandRows: 64,
+        slabBands: 8,
+        in: { w: probe.w, h: probe.h },
+        out: { w: outW, h: outH },
+      };
       const tr = idatChunk(adlerTrailer(adler));
       await chunkSink.write(tr.bytes);
       fileBytes += tr.bytes.length;
+      await chunkSink.write(receiptChunk(receipt));
       await chunkSink.write(iendChunk());
       await chunkSink.close();
+    }
+    if (wantPreview) {
+      // File/opfs/strips targets: small preview blob (was: empty dummy blob).
+      blob = await preview.toBlob();
+    } else if (blobSink) {
+      // Snapshot AFTER the trailer: getBlob freezes accumulated chunks.
+      blob = blobSink.getBlob();
+    } else {
+      throw new Error("no result blob");
     }
     if (opfsSink) {
       // Kept on disk; main shows the saved row from meta below (P7: export).

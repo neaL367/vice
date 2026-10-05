@@ -108,6 +108,33 @@ describe("coordinator", () => {
     expect(c).toEqual(a);
   });
 
+  test("output carries a parseable Vice-Receipt tEXt chunk", async () => {
+    const a = await runJob(1, false);
+    const text = new TextDecoder("latin1");
+    let pos = 8;
+    let receipt: Record<string, unknown> | null = null;
+    const rd32 = (o: number) =>
+      (a[o] * 2 ** 24 + a[o + 1] * 2 ** 16 + a[o + 2] * 2 ** 8 + a[o + 3]) >>> 0;
+    while (pos + 8 <= a.length) {
+      const n = rd32(pos);
+      const type = String.fromCharCode(a[pos + 4], a[pos + 5], a[pos + 6], a[pos + 7]);
+      if (type === "tEXt") {
+        const payload = a.slice(pos + 8, pos + 8 + n);
+        const nul = payload.indexOf(0);
+        expect(text.decode(payload.slice(0, nul))).toBe("Vice-Receipt");
+        receipt = JSON.parse(text.decode(payload.slice(nul + 1))) as Record<string, unknown>;
+        break;
+      }
+      pos += 12 + n;
+    }
+    expect(receipt).toBeTruthy();
+    expect(receipt?.v).toBe(1);
+    expect(receipt?.algo).toBe(2);
+    expect(receipt?.operator).toBe("box-encoded-exact");
+    expect(receipt?.scale).toBe(2);
+    expect((receipt?.out as { w: number; h: number }).w).toBe(48);
+  });
+
   test("over-budget estimate fails with numbers", async () => {
     const file = new File([pngBytes(24, 24) as unknown as BlobPart], "t.png", { type: "image/png" });
     await expect(

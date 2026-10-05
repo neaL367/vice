@@ -87,6 +87,34 @@ export function iendChunk(): Uint8Array {
   return Uint8Array.from(out);
 }
 
+export interface Receipt {
+  v: 1;
+  algo: 2;
+  abi: number;
+  scale: 2 | 3 | 4;
+  policy: "direct" | "clean";
+  operator: "box-encoded-exact";
+  bandRows: number;
+  slabBands: number;
+  in: { w: number; h: number };
+  out: { w: number; h: number };
+  slab?: number;
+  slabs?: number;
+}
+
+/** tEXt receipt chunk (keyword Vice-Receipt). Verifiable without Vice. */
+export function receiptChunk(receipt: Receipt): Uint8Array {
+  const keyword = new TextEncoder().encode("Vice-Receipt");
+  const body = new TextEncoder().encode(JSON.stringify(receipt));
+  const payload = new Uint8Array(keyword.length + 1 + body.length);
+  payload.set(keyword, 0);
+  payload[payload.length - body.length - 1] = 0;
+  payload.set(body, payload.length - body.length);
+  const out: number[] = [];
+  chunk(out, "tEXt", payload);
+  return Uint8Array.from(out);
+}
+
 export const ZLIB_HEADER = new Uint8Array([0x78, 0x9c]);
 
 export async function assemblePng(
