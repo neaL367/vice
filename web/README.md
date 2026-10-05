@@ -4,9 +4,9 @@ Client-side super-resolution UI. See root `../README.md` for truth.
 
 ```bash
 bun install
-bun run dev        # predev builds public/vice-worker.js
+bun run dev        # predev builds public/vice-worker.js + public/slab-worker.js
 bun test lib       # unit tests
-bun run build      # worker bundle + Next.js build
+bun run build      # worker bundles + Next.js build
 bun run test:e2e   # Playwright + prod server
 ```
 

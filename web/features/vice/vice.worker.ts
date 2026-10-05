@@ -9,7 +9,8 @@ import type {
   ViceRunOptions,
   ViceScale,
 } from "./types/vice";
-import { runViceJobInternal } from "./worker/run-job";
+import { runCoordinatedJob } from "./worker/coordinate";
+import type { DeviceFacts } from "./planner/plan";
 
 export async function runViceUpscale(
   file: File,
@@ -28,5 +29,28 @@ export async function runViceUpscale(
       },
     };
   }
-  return runViceJobInternal(file, scale, target, onProgress, opts);
+  const device: DeviceFacts = {
+    logicalCores:
+      typeof navigator !== "undefined" && typeof navigator.hardwareConcurrency === "number"
+        ? navigator.hardwareConcurrency
+        : 4,
+    deviceMemoryGB: null,
+    opfs: false,
+    fileSystemAccess: false,
+    storageFreeBytes: null,
+  };
+  return runCoordinatedJob({
+    file,
+    scale,
+    chained4x: opts.chained4x,
+    preferSave: opts.sink ? "file" : "blob",
+    fileCount: 1,
+    device,
+    base: opts.base ?? "",
+    target,
+    streamThresholdPx: opts.streamThresholdPx,
+    onProgress,
+    onStripPng: opts.onStripPng,
+    signal: opts.signal,
+  });
 }

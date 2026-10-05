@@ -1,5 +1,6 @@
 "use client";
 
+import { uniqueName } from "../planner/names";
 import {
   startTransition,
   useCallback,
@@ -104,9 +105,12 @@ export function useUpscaleWorkspace() {
     const writer = new ZipWriter(new BlobWriter("application/zip"), {
       useWebWorkers: false,
     });
+    const used = new Set<string>();
     for (const r of zippable) {
       const stem = r.name.replace(/\.[^.]*$/, "") || "image";
-      await writer.add(`${stem}-vice${r.scale}x.png`, new BlobReader(r.blob));
+      const entry = uniqueName(`${stem}-vice${r.scale}x`, "png", (n) => used.has(n));
+      used.add(entry);
+      await writer.add(entry, new BlobReader(r.blob));
     }
     const blob = await writer.close();
     if (zipUrlRef.current) URL.revokeObjectURL(zipUrlRef.current);

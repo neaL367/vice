@@ -26,18 +26,14 @@ const csp = [
 const nextConfig: NextConfig = {
   cacheComponents: true,
   partialPrefetching: true,
-  // Cross-origin isolation: enables SharedArrayBuffer for multi-threaded
-  // WASM core inside the worker. Same-origin assets only, so
-  // require-corp is safe here. Re-verify prefetch + navigation after change.
+  // No cross-origin isolation: slab workers are plain Workers with
+  // per-worker WASM instances (no SharedArrayBuffer, no COOP/COEP). Same-
+  // origin assets only; third-party embeds no longer need CORP headers.
   async headers() {
     return [
       {
         source: "/:path*",
-        headers: [
-          { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
-          { key: "Cross-Origin-Embedder-Policy", value: "require-corp" },
-          { key: "Content-Security-Policy", value: csp },
-        ],
+        headers: [{ key: "Content-Security-Policy", value: csp }],
       },
     ];
   },

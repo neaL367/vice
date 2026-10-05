@@ -28,12 +28,3 @@ export function hasInfiniteSupport(core: ViceCoreInstance | null): boolean {
     typeof core._vice_png_destroy === "function"
   );
 }
-
-export function getThreadWorkers(core: ViceCoreInstance | null): number {
-  if (!core) return 1;
-  try {
-    return core._vice_thread_workers?.() ?? 1;
-  } catch {
-    return 1;
-  }
-}

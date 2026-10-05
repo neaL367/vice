@@ -46,7 +46,7 @@ export interface ViceResultMeta {
   durationMs: number;
   savedToDisk?: boolean; // infinite path: blob is a small preview, file is on disk
   fileBytes?: number; // infinite path: encoded bytes written
-  threads?: number; // engine row workers (1 = single-threaded core)
+  threads?: number; // slab workers that rendered the job (1 = inline/sequential)
 }
 
 // Chunk sink for the infinite (save-to-disk) path. Implemented inline by the
@@ -62,7 +62,9 @@ export interface ViceRunOptions {
   chained4x?: boolean; // if scale is 4, run as 2x twice
   streamThresholdPx?: number; // test hook: force streaming above this output px
   sink?: VicePngSink; // present -> infinite path: stream PNG chunks, no Blob
-  fourXDetail?: boolean; // infinite chained 4x: full tuning on both passes
+  preferSave?: "blob" | "file" | "folder";
+  fileCount?: number;
+  onStripPng?: (png: Uint8Array, index: number, total: number) => Promise<void>;
 }
 
 // --- Worker-thread RPC ----------------------------------------------------
@@ -77,7 +79,15 @@ export interface ViceRunMsg {
   chained4x?: boolean;
   streamThresholdPx?: number;
   saveToDisk?: boolean; // infinite path: worker emits pngchunk, awaits pngack
-  fourXDetail?: boolean;
+  preferSave?: "blob" | "file" | "folder";
+  fileCount?: number;
+  device?: {
+    logicalCores: number;
+    deviceMemoryGB: number | null;
+    opfs: boolean;
+    fileSystemAccess: boolean;
+    storageFreeBytes: number | null;
+  };
 }
 export interface ViceCancelMsg {
   type: "cancel";
@@ -99,6 +109,13 @@ export interface ViceChunkMsg {
   type: "pngchunk";
   jobId: number;
   chunk: Uint8Array; // transferable: posted with [chunk.buffer]
+}
+export interface ViceStripMsg {
+  type: "strippng";
+  jobId: number;
+  index: number;
+  total: number;
+  png: Uint8Array; // transferable: posted with [png.buffer]
 }
 export interface ViceAckMsg {
   type: "pngack";
@@ -123,6 +140,7 @@ export interface ViceReadyMsg {
 export type ViceOutgoing =
   | ViceProgressMsg
   | ViceChunkMsg
+  | ViceStripMsg
   | ViceDoneMsg
   | ViceFailMsg
   | ViceReadyMsg;

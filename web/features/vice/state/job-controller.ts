@@ -16,7 +16,7 @@ import {
   warmViceWorker,
 } from "../vice-client";
 import { FileSystemSink } from "../export/file-system-sink";
-
+import { uniqueFileHandle } from "../planner/names";
 export interface JobCallbacks {
   onProgress(progress: string): void;
   onResult(result: ViceResult): void;
@@ -88,6 +88,30 @@ async function pickDirectory(): Promise<DirHandle> {
 function stageLabel(stage: string): string | null {
   if (stage === "done") return "Done";
   return null;
+}
+
+/** Strips fallback download: one anchor click per slab PNG (browser may ask). */
+async function downloadStripPng(
+  png: Uint8Array,
+  index: number,
+  total: number,
+  stem: string,
+  used: Set<string>,
+): Promise<void> {
+  const { uniqueName } = await import("../planner/names");
+  const name = uniqueName(`${stem}-strip${index}-of-${total}`, "png", (n) => used.has(n));
+  used.add(name);
+  const url = URL.createObjectURL(new Blob([png as unknown as BlobPart], { type: "image/png" }));
+  try {
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 30_000);
+  }
 }
 
 export class JobController {
@@ -195,7 +219,10 @@ export class JobController {
           cb.onProgress(`${tag}${label}`);
         };
 
-        const { blob, meta } = await this.runOne(vf.file, scale, tuning, w, onProg, abortCtrl.signal);
+        const { blob, meta } = await this.runOne(vf.file, scale, tuning, w, onProg, abortCtrl.signal, {
+          preferSave: "blob",
+          fileCount: files.length,
+        });
         const id = ++this.resultIdCounter;
         cb.onResult({
           id,
@@ -268,14 +295,21 @@ export class JobController {
       try {
         if (w) {
           const jobId = ++this.jobIdCounter;
+          const usedStripNames = new Set<string>();
+          const stripStem = (file.file.name.replace(/\.[^.]*$/, "") || "image") + `-vice${scale}x`;
           ({ blob, meta } = await runViceJob(w, jobId, file.file, scale, this.base, onProg, {
             ...tuning,
+            preferSave: "file",
+            fileCount: 1,
             sinkWrite: (chunk) => fileSink.write(chunk),
+            onStripPng: (png, index, total) => downloadStripPng(png, index, total, stripStem, usedStripNames),
           }));
         } else {
           const mod = await import("../vice.worker");
           ({ blob, meta } = await mod.runViceUpscale(file.file, scale, onProg, {
             ...tuning,
+            preferSave: "file",
+            fileCount: 1,
             signal: abortCtrl.signal,
             base: this.base,
             sink: { write: (chunk) => fileSink.write(chunk) },
@@ -352,7 +386,6 @@ export class JobController {
         if (abortCtrl.signal.aborted) throw new DOMException("cancelled", "AbortError");
         const vf = files[i];
         const stem = vf.file.name.replace(/\.[^.]*$/, "") || "image";
-        const fileName = `${stem}-vice${scale}x.png`;
         const tag = `file ${i + 1}/${files.length} `;
         cb.onProgress(`${tag}starting…`);
 
@@ -361,22 +394,30 @@ export class JobController {
           cb.onProgress(`${tag}${label}`);
         };
 
-        const fh = await dir.getFileHandle(fileName, { create: true });
+        const { handle: fh, fileName } = await uniqueFileHandle(dir, `${stem}-vice${scale}x`, "png");
         const writable = await fh.createWritable();
         const fileSink = new FileSystemSink(writable);
 
         let blob: Blob;
         let meta: ViceResultMeta;
+        const usedStripNames = new Set<string>();
+        const stripStem = `${stem}-vice${scale}x`;
         try {
           if (w) {
             const jobId = ++this.jobIdCounter;
             ({ blob, meta } = await runViceJob(w, jobId, vf.file, scale, this.base, onProg, {
               ...tuning,
+              preferSave: "folder",
+              fileCount: files.length,
               sinkWrite: (chunk) => fileSink.write(chunk),
+              onStripPng: (png, index, total) =>
+                downloadStripPng(png, index, total, stripStem, usedStripNames),
             }));
           } else if (inlineMod) {
             ({ blob, meta } = await inlineMod.runViceUpscale(vf.file, scale, onProg, {
               ...tuning,
+              preferSave: "folder",
+              fileCount: files.length,
               signal: abortCtrl.signal,
               base: this.base,
               sink: { write: (chunk) => fileSink.write(chunk) },
@@ -428,10 +469,27 @@ export class JobController {
     w: Worker | null,
     onProg: (p: ViceProgress) => void,
     signal: AbortSignal,
+    route: {
+      preferSave: "blob" | "file" | "folder";
+      fileCount: number;
+      sinkWrite?: (chunk: Uint8Array) => Promise<void>;
+      stripStem?: string;
+    } = { preferSave: "blob", fileCount: 1 },
   ): Promise<{ blob: Blob; meta: ViceResultMeta }> {
     const jobId = ++this.jobIdCounter;
+    const usedStripNames = new Set<string>();
+    const stripStem = (file.name.replace(/\.[^.]*$/, "") || "image") + `-vice${scale}x`;
+    const onStripPng = (png: Uint8Array, index: number, total: number) =>
+      downloadStripPng(png, index, total, stripStem, usedStripNames);
+    const options = {
+      ...tuning,
+      preferSave: route.preferSave,
+      fileCount: route.fileCount,
+      onStripPng,
+      ...(route.sinkWrite ? { sinkWrite: route.sinkWrite } : {}),
+    };
     try {
-      return await runViceJob(w, jobId, file, scale, this.base, onProg, tuning);
+      return await runViceJob(w, jobId, file, scale, this.base, onProg, options);
     } catch (e) {
       if (e instanceof DOMException && e.name === "AbortError") throw e;
       console.warn("[Vice] Primary job runner failed, falling back inline:", e);
@@ -439,7 +497,7 @@ export class JobController {
       return await mod.runViceUpscale(file, scale, onProg, {
         signal,
         base: this.base,
-        ...tuning,
+        ...options,
       });
     }
   }

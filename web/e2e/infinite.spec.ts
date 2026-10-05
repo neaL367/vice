@@ -67,13 +67,13 @@ async function runInfinite(
 test("infinite halves decode to 16x16 flats with residual", async ({ page }) => {
   test.setTimeout(120_000);
   const r = await runInfinite(page, "halves-bw");
-  expect(r.backend).toContain("infinite");
+  expect(r.backend).toContain("Lanczos-3");
   expect(r.savedToDisk).toBe(true);
   expect(r.fileBytes).toBeGreaterThan(50);
   expect([r.outW, r.outH, r.w, r.h]).toEqual([16, 16, 16, 16]);
   expect(r.residual).toBeLessThan(1e-4);
   expect([r.previewW, r.previewH]).toEqual([16, 16]);
-  // Threaded core engagement: isolated page + multi-core runner -> T2+.
+  // Slab-worker engagement: multi-core runner -> K >= 2 workers (meta.threads).
   const cores = await page.evaluate(() => navigator.hardwareConcurrency ?? 1);
   expect(r.threads).toBeGreaterThanOrEqual(cores > 1 ? 2 : 1);
   const colMean = (x0: number, x1: number): number => {

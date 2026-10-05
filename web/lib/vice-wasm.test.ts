@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { loadWasmModule } from "../features/vice/engine/wasm-module";
+import { EXPECTED_ABI_VERSION, loadWasmModule } from "../features/vice/engine/wasm-module";
 import { WasmMemory } from "../features/vice/engine/wasm-memory";
 import { NativeStreamContext } from "../features/vice/engine/stream-renderer";
 import { NativePngWriter } from "../features/vice/engine/png-writer";
@@ -21,6 +21,7 @@ async function loadHarness(): Promise<StreamHarness> {
   const loaded = await loadWasmModule("../public/");
   expect(loaded).toBeTruthy();
   if (!loaded) throw new Error("no wasm core");
+  expect(loaded.instance._vice_abi_version?.()).toBe(EXPECTED_ABI_VERSION);
   expect(hasStreamSupport(loaded.instance)).toBe(true);
   return { mem: new WasmMemory(loaded.instance), threaded: loaded.threaded };
 }

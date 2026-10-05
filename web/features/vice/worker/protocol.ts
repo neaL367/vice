@@ -9,6 +9,7 @@ import type {
   ViceResultMeta,
   ViceScale,
 } from "../types/vice";
+import type { DeviceFacts } from "../planner/plan";
 
 export interface WorkerRunRequest {
   type: "run";
@@ -19,7 +20,9 @@ export interface WorkerRunRequest {
   chained4x?: boolean;
   streamThresholdPx?: number;
   saveToDisk?: boolean;
-  fourXDetail?: boolean;
+  preferSave?: "blob" | "file" | "folder";
+  fileCount?: number;
+  device?: DeviceFacts;
 }
 
 export interface WorkerCancelRequest {
@@ -56,6 +59,14 @@ export interface WorkerChunkEvent {
   chunk: Uint8Array;
 }
 
+export interface WorkerStripEvent {
+  type: "strippng";
+  jobId: number;
+  index: number;
+  total: number;
+  png: Uint8Array;
+}
+
 export interface WorkerDoneEvent {
   type: "done";
   jobId: number;
@@ -78,6 +89,7 @@ export interface WorkerReadyEvent {
 export type WorkerOutgoingMessage =
   | WorkerProgressEvent
   | WorkerChunkEvent
+  | WorkerStripEvent
   | WorkerDoneEvent
   | WorkerFailEvent
   | WorkerReadyEvent;

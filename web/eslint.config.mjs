@@ -14,6 +14,7 @@ const eslintConfig = defineConfig([
     "next-env.d.ts",
     // Generated worker bundle (bun build output, not source):
     "public/vice-worker.js",
+    "public/slab-worker.js",
     // Generated Emscripten glue (wasm-build output, not source):
     "public/wasm/**",
   ]),

@@ -8,8 +8,6 @@
 // path keeps `{ type: "module" }` intact and the browser loads real ESM.
 // Falls back inline when the asset is missing (dev without predev) or the
 // thread can't spawn — CSP, old browser, SSR import (never constructed there).
-import { isWebGPUSupported } from "../../lib/webgpu/webgpu-support";
-import { runWebGPUUpscale, warmupWebGPUPipelines } from "../../lib/webgpu/webgpu-upscaler";
 import type {
   ViceIncoming,
   ViceOutgoing,
@@ -17,14 +15,39 @@ import type {
   ViceResultMeta,
   ViceScale,
 } from "./types/vice";
+import type { DeviceFacts } from "./planner/plan";
+import { opfsSupported } from "./export/opfs-sink";
 
 export interface ViceJobOptions {
   chained4x?: boolean;
   streamThresholdPx?: number;
-  fourXDetail?: boolean;
+  preferSave?: "blob" | "file" | "folder";
+  fileCount?: number;
   // Infinite path: chunks from the worker are written here (FileSystem
   // Writable), then acknowledged one at a time (backpressure: 1 in flight).
   sinkWrite?: (chunk: Uint8Array) => Promise<void>;
+  // Strips fallback: per-slab PNGs arrive here for download.
+  onStripPng?: (png: Uint8Array, index: number, total: number) => Promise<void>;
+}
+
+export function collectDeviceFacts(): DeviceFacts {
+  const nav = (
+    typeof navigator !== "undefined" ? navigator : {}
+  ) as Navigator & { deviceMemory?: unknown };
+  const dm = nav.deviceMemory;
+  return {
+    logicalCores:
+      typeof nav.hardwareConcurrency === "number" && nav.hardwareConcurrency > 0
+        ? nav.hardwareConcurrency
+        : 4,
+    deviceMemoryGB: typeof dm === "number" && dm > 0 ? dm : null,
+    opfs: opfsSupported(),
+    fileSystemAccess:
+      typeof window !== "undefined" &&
+      typeof (window as unknown as { showSaveFilePicker?: unknown }).showSaveFilePicker ===
+        "function",
+    storageFreeBytes: null, // estimated at save time, not probed up front
+  };
 }
 
 const workerReadyMap = new WeakMap<Worker, Promise<void>>();
@@ -134,6 +157,16 @@ export function runOnWorkerThread(
             reject(err instanceof Error ? err : new Error("chunk write failed"));
           }
         })();
+      } else if (msg.type === "strippng") {
+        void (async () => {
+          try {
+            if (!options?.onStripPng) throw new Error("no strip sink for strips job");
+            await options.onStripPng(msg.png, msg.index, msg.total);
+          } catch (err) {
+            cleanup();
+            reject(err instanceof Error ? err : new Error("strip write failed"));
+          }
+        })();
       } else if (msg.type === "done") {
         cleanup();
         resolve({ blob: msg.blob, meta: msg.meta });
@@ -173,16 +206,18 @@ function toRunRequest(
     chained4x: options?.chained4x,
     streamThresholdPx: options?.streamThresholdPx,
     saveToDisk: options?.sinkWrite ? true : undefined,
-    fourXDetail: options?.fourXDetail,
+    preferSave: options?.preferSave ?? (options?.sinkWrite ? "file" : "blob"),
+    fileCount: options?.fileCount ?? 1,
+    device: collectDeviceFacts(),
   };
 }
 
 /**
  * Universal job runner:
- * 1. Primary: Verified SIMD WASM Worker thread (owns full ICC preservation,
- *    exact band-local smooth + clamp-aware box projection, and linear alpha
- *    un-premultiplication).
- * 2. Fallback: WebGPU compute pipeline when Worker thread is unavailable.
+ * 1. Primary: coordinator worker thread (slab workers, share-nothing).
+ * 2. Inline: same coordinator, same thread (no Worker available).
+ * WebGPU fallback is gone (deleted with the degraded label): without a
+ * compute backend the job fails loudly instead of degrading pixels.
  */
 export async function runViceJob(
   worker: Worker | null,
@@ -193,47 +228,21 @@ export async function runViceJob(
   onProgress: (p: ViceProgress) => void,
   options?: ViceJobOptions,
 ): Promise<{ blob: Blob; meta: ViceResultMeta }> {
-  // 1. Primary verified engine: WebAssembly Worker thread
   if (worker) {
     return runOnWorkerThread(worker, jobId, file, scale, base, onProgress, options);
   }
 
-  // 2. Fallback: WebGPU compute shader when Worker cannot be spawned.
-  // Degraded by design: EXIF orientation is honored, alpha passes through
-  // the shaders untouched, but ICC profiles are dropped (canvas PNG encode
-  // has no iCCP API). The worker/WASM path remains the only ICC-safe engine.
-  try {
-    const gpuOk = await isWebGPUSupported();
-    if (gpuOk && !options?.chained4x && typeof createImageBitmap !== "undefined") {
-      onProgress({ band: 1, totalBands: 3, stage: "WebGPU Compute…", backend: "WebGPU" });
-      const bmp = await createImageBitmap(file, {
-        colorSpaceConversion: "none",
-        imageOrientation: "from-image",
-      });
-      try {
-        const gpuRes = await runWebGPUUpscale(bmp, scale, options);
-        if (gpuRes) {
-          onProgress({ band: 3, totalBands: 3, stage: "done", backend: "WebGPU" });
-          return {
-            blob: gpuRes.blob,
-            meta: {
-              residual: gpuRes.residual,
-              backend: `WebGPU (${Math.round(gpuRes.durationMs)}ms)`,
-              outW: gpuRes.outW,
-              outH: gpuRes.outH,
-              durationMs: Math.round(gpuRes.durationMs),
-            },
-          };
-        }
-      } finally {
-        bmp.close();
-      }
-    }
-  } catch (gpuErr) {
-    console.warn("[Vice] WebGPU compute fallback failed:", gpuErr);
-  }
-
-  throw new Error("No compute backend available");
+  const mod = await import("./vice.worker");
+  return mod.runViceUpscale(file, scale, onProgress, {
+    signal: undefined,
+    base,
+    chained4x: options?.chained4x,
+    streamThresholdPx: options?.streamThresholdPx,
+    preferSave: options?.preferSave,
+    fileCount: options?.fileCount,
+    onStripPng: options?.onStripPng,
+    ...(options?.sinkWrite ? { sink: { write: options.sinkWrite } } : {}),
+  });
 }
 
 export function cancelWorkerJob(worker: Worker, jobId: number): void {
@@ -241,10 +250,7 @@ export function cancelWorkerJob(worker: Worker, jobId: number): void {
   worker.postMessage(msg);
 }
 
-// Fire-and-forget ORT and WebGPU warmup.
 export function warmViceWorker(worker: Worker, base: string): void {
   const msg: ViceIncoming = { type: "warm", jobId: 0, base };
   worker.postMessage(msg);
-  warmupWebGPUPipelines();
 }
-

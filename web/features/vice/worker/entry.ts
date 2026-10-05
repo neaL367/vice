@@ -1,12 +1,13 @@
-// Worker entry point: thin postMessage routing boundary only. Strictly under 120 lines.
+// Worker entry point: thin postMessage routing boundary only.
 
 import type {
   WorkerIncomingMessage,
   WorkerOutgoingMessage,
 } from "./protocol";
-import type { ExportTarget } from "../contracts/render-contracts";
-import { ensureCore, runViceJobInternal } from "./run-job";
+import { ensureCore, runCoordinatedJob } from "./coordinate";
 import { WorkerChunkSink } from "../export/worker-chunk-sink";
+import type { ExportTarget } from "../contracts/render-contracts";
+import type { DeviceFacts } from "../planner/plan";
 
 function isWorkerScope(): boolean {
   return (
@@ -63,19 +64,30 @@ if (isWorkerScope()) {
       target = { kind: "file", sink };
     }
 
-    runViceJobInternal(
-      msg.file,
-      msg.scale,
+    const device: DeviceFacts = msg.device ?? {
+      logicalCores: 4,
+      deviceMemoryGB: null,
+      opfs: false,
+      fileSystemAccess: false,
+      storageFreeBytes: null,
+    };
+
+    runCoordinatedJob({
+      file: msg.file,
+      scale: msg.scale,
+      chained4x: msg.chained4x,
+      preferSave: msg.saveToDisk ? "file" : msg.preferSave ?? "blob",
+      fileCount: msg.fileCount ?? 1,
+      device,
+      base: msg.base,
       target,
-      (progress) => scope.postMessage({ type: "progress", jobId: msg.jobId, progress }),
-      {
-        signal: ctrl.signal,
-        base: msg.base,
-        chained4x: msg.chained4x,
-        streamThresholdPx: msg.streamThresholdPx,
-        fourXDetail: msg.fourXDetail,
+      streamThresholdPx: msg.streamThresholdPx,
+      onProgress: (progress) => scope.postMessage({ type: "progress", jobId: msg.jobId, progress }),
+      onStripPng: async (png, index, total) => {
+        scope.postMessage({ type: "strippng", jobId: msg.jobId, index, total, png }, [png.buffer]);
       },
-    ).then(
+      signal: ctrl.signal,
+    }).then(
       ({ blob, meta }) => {
         controllers.delete(msg.jobId);
         ackWaiters.delete(msg.jobId);

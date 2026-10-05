@@ -63,8 +63,16 @@ export class NativeStreamContext {
     }
   }
 
-  pushInputRows(rows: Float32Array, rowCount: number): void {
+  /** Slab origin for share-nothing renders (fresh ctx only). See vice.h. */
+  beginSlab(inY0: number, outY0: number): void {
     this.assertAlive();
+    const fn = this.mem.instance._vice_stream_begin_slab;
+    if (!fn) throw new Error("stale WASM core: vice_stream_begin_slab missing");
+    const rc = fn(this.sctx, inY0, outY0);
+    if (rc !== 0) throw new Error(`vice_stream_begin_slab failed (${inY0}, ${outY0} rc=${rc})`);
+  }
+
+  pushInputRows(rows: Float32Array, rowCount: number): void {    this.assertAlive();
     if (rowCount <= 0 || !Number.isInteger(rowCount)) {
       throw new Error(`invalid row count: ${rowCount}`);
     }
@@ -142,5 +150,20 @@ export class NativeStreamContext {
 
   private assertAlive(): void {
     if (this.destroyed) throw new Error("NativeStreamContext has been destroyed");
+  }
+}
+
+/** Input halo rows beyond an owned window (mirrors the C strip-req math). */
+export function haloRows(mem: WasmMemory, scale: number, fused: 0 | 1 | 2): { top: number; bottom: number } {
+  const fn = mem.instance._vice_stream_halo_rows;
+  if (!fn) throw new Error("stale WASM core: vice_stream_halo_rows missing");
+  const topPtr = mem.malloc(4);
+  const bottomPtr = mem.malloc(4);
+  try {
+    fn(scale, fused, topPtr, bottomPtr);
+    return { top: mem.readInt32(topPtr), bottom: mem.readInt32(bottomPtr) };
+  } finally {
+    mem.free(topPtr);
+    mem.free(bottomPtr);
   }
 }
