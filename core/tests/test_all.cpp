@@ -2,11 +2,14 @@
 #include "vice.h"
 #include "vice_metrics.h"
 #include "miniz.h"
+#include "png_filters.h"
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
+#include <string>
 #include <vector>
 // C++-linkage checksum helpers defined in core/src/png.cpp.
 uint32_t vice_crc32(const unsigned char* d, size_t n);
@@ -110,8 +113,52 @@ static void test_icc_profile() {
   vice_stream_destroy(sctx);
 }
 
-static void test_color_roundtrip() {
-  for (int i = 0; i <= 255; i++) {
+static void test_color_nan_safety() {
+  // NaN must map to black, never index the LUT out of bounds.
+  const float qnan = std::numeric_limits<float>::quiet_NaN();
+  CHECK(vice_fast_linear_to_srgb(qnan) == 0.0f);
+  CHECK(vice_fast_srgb_to_linear(qnan) == 0.0f);
+  CHECK(vice_linear_to_srgb(qnan) == 0.0f);
+  CHECK(vice_srgb_to_linear(qnan) == 0.0f);
+  // Non-NaN behavior unchanged at the rails.
+  CHECK(vice_fast_linear_to_srgb(0.0f) == 0.0f);
+  CHECK(vice_fast_linear_to_srgb(1.0f) == 1.0f);
+  CHECK(vice_fast_srgb_to_linear(0.0f) == 0.0f);
+  CHECK(vice_fast_srgb_to_linear(1.0f) == 1.0f);
+  printf("color_nan ok\n");
+}
+
+static void test_stream_readiness_agreement() {
+  // has_next_band and pull_band must agree: a ready band pulls rows,
+  // an unready one reports backpressure (-2), never -3 and never zeros.
+  // Pins the +4 (advertise) / +5 (require) halo invariant.
+  for (int scale : {2, 3, 4}) {
+    int w = 16, h = 16, c = 3;
+    int out_w = w * scale, out_h = h * scale;
+    vice_stream_ctx* sctx = vice_stream_create(w, h, scale, c, 32);
+    CHECK(sctx != nullptr);
+    std::vector<float> row((size_t)w * c, 0.3f);
+    std::vector<unsigned char> band((size_t)64 * out_w * c, 0xAB);
+    int pushed = 0, emitted = 0;
+    while (emitted < out_h) {
+      if (vice_stream_has_next_band(sctx)) {
+        int rows = -1;
+        int rc = vice_stream_pull_band(sctx, band.data(), &rows);
+        CHECK(rc >= 0 && rows > 0);
+        emitted += rows;
+      } else {
+        CHECK(pushed < h);
+        CHECK(vice_stream_push_input_rows(sctx, row.data(), 1) == 0);
+        pushed += 1;
+      }
+    }
+    CHECK(emitted == out_h);
+    vice_stream_destroy(sctx);
+  }
+  printf("stream_readiness ok\n");
+}
+
+static void test_color_roundtrip() {  for (int i = 0; i <= 255; i++) {
     float s = i / 255.0f;
     float lin = vice_srgb_to_linear(s);
     float back = vice_linear_to_srgb(lin);
@@ -480,6 +527,116 @@ static void test_png_stream_decode_equiv() {
   }
 }
 
+static void test_png_segments() {
+  // adler_combine unit check on literals.
+  {
+    const unsigned char* a = (const unsigned char*)"hello ";
+    const unsigned char* b = (const unsigned char*)"world";
+    uint32_t ad_a = vice_adler32(a, 6);
+    uint32_t ad_b = vice_adler32(b, 5);
+    std::vector<unsigned char> both(a, a + 6);
+    both.insert(both.end(), b, b + 5);
+    CHECK(vice_adler32_combine(ad_a, ad_b, 5) == vice_adler32(both.data(), both.size()));
+  }
+  // Two slabs -> segments -> coordinator-style assembly -> strict decode.
+  // Assembly: sig + IHDR + ordered IDATs over (zlib_hdr + seg0 + seg1 +
+  // combined adler) + IEND. decode_png_rows inflates and checks the adler.
+  int W = 37, H = 23;
+  std::vector<unsigned char> img((size_t)W * H * 4);
+  for (int y = 0; y < H; y++)
+    for (int x = 0; x < W; x++) {
+      size_t i = ((size_t)y * W + x) * 4;
+      img[i + 0] = (unsigned char)((x * 37 + y * 91) & 255);
+      img[i + 1] = (unsigned char)((x * 11 + y * 57 + 40) & 255);
+      img[i + 2] = (unsigned char)((x * 5 + y * 131 + 90) & 255);
+      img[i + 3] = (x < 20) ? 255 : (unsigned char)((y * 10) & 255);
+    }
+  struct Seg {
+    std::vector<unsigned char> bytes;
+    uint32_t adler = 1;
+    size_t raw_len = 0;
+  };
+  auto render_slab = [&](int y0, int rows, bool last) {
+    Seg sg;
+    vice_png_segment* st = vice_png_segment_open(W, rows, 4, 4);
+    CHECK(st != nullptr);
+    CHECK(vice_png_segment_write_rows(st, img.data() + (size_t)y0 * W * 4, rows) == 0);
+    CHECK(vice_png_segment_finish(st, last ? 1 : 0, &sg.adler, &sg.raw_len) == 0);
+    CHECK(sg.raw_len == (size_t)rows * (W * 4 + 1));
+    std::vector<unsigned char> piece(997);
+    for (;;) {
+      size_t got = 0;
+      CHECK(vice_png_segment_drain(st, piece.data(), piece.size(), &got) == 0);
+      if (!got) break;
+      sg.bytes.insert(sg.bytes.end(), piece.data(), piece.data() + got);
+    }
+    vice_png_segment_destroy(st);
+    CHECK(!sg.bytes.empty());
+    return sg;
+  };
+  Seg s0 = render_slab(0, 11, false);
+  Seg s0b = render_slab(0, 11, false);
+  CHECK(s0.bytes == s0b.bytes && s0.adler == s0b.adler); // deterministic
+  Seg s1 = render_slab(11, 12, true);
+
+  std::vector<unsigned char> idat_all = {0x78, 0x9c};
+  idat_all.insert(idat_all.end(), s0.bytes.begin(), s0.bytes.end());
+  idat_all.insert(idat_all.end(), s1.bytes.begin(), s1.bytes.end());
+  uint32_t ad = vice_adler32_combine(s0.adler, s1.adler, s1.raw_len);
+  idat_all.push_back((unsigned char)(ad >> 24));
+  idat_all.push_back((unsigned char)(ad >> 16));
+  idat_all.push_back((unsigned char)(ad >> 8));
+  idat_all.push_back((unsigned char)ad);
+
+  std::vector<unsigned char> full = {137, 80, 78, 71, 13, 10, 26, 10};
+  unsigned char ihdr13[13] = {(unsigned char)(W >> 24), (unsigned char)(W >> 16),
+                              (unsigned char)(W >> 8),  (unsigned char)W,
+                              (unsigned char)(H >> 24), (unsigned char)(H >> 16),
+                              (unsigned char)(H >> 8),  (unsigned char)H,
+                              8,                       6, 0, 0, 0};
+  png_chunk(full, "IHDR", ihdr13, 13);
+  size_t off = 0;
+  while (off < idat_all.size()) {
+    size_t n = idat_all.size() - off > 32768 ? 32768 : idat_all.size() - off;
+    png_chunk(full, "IDAT", idat_all.data() + off, n);
+    off += n;
+  }
+  png_chunk(full, "IEND", nullptr, 0);
+
+  int dW = 0, dH = 0, dC = 0;
+  std::vector<unsigned char> px;
+  CHECK(decode_png_rows(full, &dW, &dH, &dC, px, nullptr));
+  CHECK(dW == W && dH == H && dC == 4);
+  CHECK(px.size() == img.size());
+  for (size_t i = 0; i < px.size(); i++) CHECK(px[i] == img[i]);
+  printf("png_segments assembled=%zu seg0=%zu seg1=%zu\n", full.size(), s0.bytes.size(),
+         s1.bytes.size());
+
+  // Misuse: bad dims rejected, overrun rejected, finish needs exact rows.
+  CHECK(vice_png_segment_open(0, 8, 4, 4) == nullptr);
+  CHECK(vice_png_segment_open(8, 8, 2, 2) == nullptr);
+  {
+    vice_png_segment* st = vice_png_segment_open(8, 4, 4, 4);
+    CHECK(st != nullptr);
+    std::vector<unsigned char> rows((size_t)8 * 4 * 4, 128);
+    CHECK(vice_png_segment_write_rows(st, rows.data(), 0) != 0);
+    CHECK(vice_png_segment_write_rows(st, nullptr, 1) != 0);
+    CHECK(vice_png_segment_write_rows(st, rows.data(), 2) == 0);
+    CHECK(vice_png_segment_write_rows(st, rows.data(), 3) != 0); // overrun
+    uint32_t fad = 0;
+    size_t frl = 0;
+    CHECK(vice_png_segment_finish(st, 0, &fad, &frl) != 0); // incomplete
+    CHECK(vice_png_segment_write_rows(st, rows.data(), 2) == 0);
+    CHECK(vice_png_segment_finish(st, 0, &fad, &frl) == 0);
+    CHECK(frl == (size_t)4 * (8 * 4 + 1));
+    unsigned char tmp[64];
+    size_t got = 0;
+    CHECK(vice_png_segment_drain(nullptr, tmp, sizeof(tmp), &got) != 0);
+    vice_png_segment_destroy(st);
+  }
+  printf("png_segments ok\n");
+}
+
 static void test_png_stream_misuse() {
   CHECK(vice_png_open(0, 10, 4, 4, nullptr, 0) == nullptr);
   CHECK(vice_png_open(10, 10, 2, 2, nullptr, 0) == nullptr);
@@ -780,8 +937,7 @@ static void test_fused4x() {
   printf("fused4x ok\n");
 }
 
-static void test_stream_band_smooth() {
-  // Band-local smooth back-projection must actually run: on a hard vertical
+static void test_stream_band_smooth() {  // Band-local smooth back-projection must actually run: on a hard vertical
   // edge the stream seam at 3x/4x must beat the old box-only path (~3.9-4.4
   // on this content) while the residual stays exact.
   for (int scale : {3, 4}) {
@@ -803,6 +959,274 @@ static void test_stream_band_smooth() {
   }
 }
 
+static void test_stream_opaque_rgba_sums() {
+  // Opaque RGBA through the stream engine: every RGB block sum equals
+  // s^2 x source byte (decode-inverse) and every alpha sum s^2 x alpha byte.
+  for (int scale : {2, 4}) {
+    int in_w = 16, in_h = 16, ch = 4;
+    std::vector<float> input((size_t)in_w * in_h * ch);
+    for (int y = 0; y < in_h; y++)
+      for (int x = 0; x < in_w; x++) {
+        float v = (float)(x + y * 3) / (float)(in_w + in_h * 3);
+        input[((size_t)y * in_w + x) * 4 + 0] = v;
+        input[((size_t)y * in_w + x) * 4 + 1] = v * 0.6f;
+        input[((size_t)y * in_w + x) * 4 + 2] = 1.0f - v;
+        input[((size_t)y * in_w + x) * 4 + 3] = 1.0f; // opaque
+      }
+    double res = 0;
+    auto bytes = render_stream_rows(in_w, in_h, scale, ch, 64, 0, input, &res);
+    CHECK(res < 1e-5);
+    int W = in_w * scale, H = in_h * scale;
+    CHECK((int)bytes.size() == W * H * ch);
+    int N = scale * scale;
+    for (int by = 0; by < in_h; by++)
+      for (int bx = 0; bx < in_w; bx++)
+        for (int c = 0; c < ch; c++) {
+          float y_lin = input[((size_t)by * in_w + bx) * ch + c];
+          float src_f = (c == 3) ? y_lin * 255.0f
+                                 : vice_linear_to_srgb(y_lin < 0.0f    ? 0.0f
+                                                       : (y_lin > 1.0f ? 1.0f : y_lin)) *
+                                       255.0f;
+          int src_byte = (int)(src_f + 0.5f);
+          if (src_byte < 0) src_byte = 0;
+          if (src_byte > 255) src_byte = 255;
+          int sum = 0;
+          for (int dy = 0; dy < scale; dy++)
+            for (int dx = 0; dx < scale; dx++)
+              sum += bytes[(((size_t)(by * scale + dy) * W + bx * scale + dx) * ch) + c];
+          CHECK(sum == N * src_byte);
+        }
+    printf("stream_opaque_rgba scale=%d sums exact ok\n", scale);
+  }
+}
+
+static void test_stream_slab_origin() {
+  // Slab contract: halo query matches the strip math, begin_slab rejects
+  // misuse, and a mid-image slab renders owned rows byte-identical to the
+  // sequential full render. Pre-proves the P3 slab-equivalence mechanism.
+  {
+    int top = -1, bottom = -1;
+    vice_stream_halo_rows(2, 0, &top, &bottom);
+    CHECK(top == 8 && bottom == 8);
+    vice_stream_halo_rows(4, 1, &top, &bottom);
+    CHECK(top == 14 && bottom == 14);
+    vice_stream_halo_rows(5, 0, &top, &bottom);
+    CHECK(top == 0 && bottom == 0);
+    vice_stream_halo_rows(4, 0, nullptr, nullptr); // null sinks ok
+  }
+  for (int pass = 0; pass < 2; pass++) {
+    int s = (pass == 0) ? 2 : 4;
+    int fused = (pass == 0) ? 0 : 1;
+    int w = 64, h = 64, c = 3;
+    int out_w = w * s, out_h = h * s;
+    std::vector<float> input((size_t)w * h * c);
+    for (size_t i = 0; i < input.size(); i++) input[i] = (float)(i % 251) / 251.0f;
+
+    // Reference: tall-band render (one band = image height). Banded renders
+    // may wobble ≤ 1 LSB at joints; the tall render has no interior strip
+    // edges, so a correct slab must match it exactly.
+    std::vector<unsigned char> full;
+    {
+      vice_stream_ctx* seq = vice_stream_create(w, h, s, c, out_h);
+      CHECK(seq != nullptr);
+      if (fused) CHECK(vice_stream_set_fused(seq, fused) == 0);
+      CHECK(vice_stream_push_input_rows(seq, input.data(), h) == 0);
+      CHECK(vice_stream_has_next_band(seq) == 1);
+      full.assign((size_t)out_w * out_h * c, 0);
+      int rows = 0;
+      CHECK(vice_stream_pull_band(seq, full.data(), &rows) == 1);
+      CHECK(rows == out_h);
+      vice_stream_destroy(seq);
+    }
+
+    // Slab: owned output rows deep interior (strip touches no image edge),
+    // so only the halo stands between slab and tall bytes.
+    int out_y0 = (out_h / 2 / s) * s; // block-aligned mid image
+    int out_y1 = out_y0 + 32;
+    int in_owned0 = out_y0 / s;
+    int top = 0, bottom = 0;
+    vice_stream_halo_rows(s, fused, &top, &bottom);
+    int in_y0 = in_owned0 - top < 0 ? 0 : in_owned0 - top;
+    vice_stream_ctx* slab = vice_stream_create(w, h, s, c, 32);
+    CHECK(slab != nullptr);
+    if (fused) CHECK(vice_stream_set_fused(slab, fused) == 0);
+    CHECK(vice_stream_begin_slab(slab, in_y0, out_y0) == VICE_OK);
+    CHECK(vice_stream_begin_slab(slab, in_y0, out_y0) == VICE_E_STATE); // once only
+    CHECK(vice_stream_begin_slab(nullptr, 0, 0) == VICE_E_ARG);
+    int pushed = in_y0, emitted = out_y0;
+    std::vector<unsigned char> band((size_t)64 * out_w * c);
+    std::vector<unsigned char> got((size_t)(out_y1 - out_y0) * out_w * c);
+    while (emitted < out_y1) {
+      while (pushed < h && !vice_stream_has_next_band(slab)) {
+        int n = (h - pushed < 8) ? h - pushed : 8;
+        CHECK(vice_stream_push_input_rows(slab, input.data() + (size_t)pushed * w * c, n) == 0);
+        pushed += n;
+      }
+      CHECK(vice_stream_has_next_band(slab) == 1);
+      int rows = 0;
+      int rc = vice_stream_pull_band(slab, band.data(), &rows);
+      CHECK(rc >= 0 && rows > 0);
+      int take = rows;
+      if (emitted + take > out_y1) take = out_y1 - emitted;
+      std::memcpy(got.data() + (size_t)(emitted - out_y0) * out_w * c, band.data(),
+                  (size_t)take * out_w * c);
+      emitted += rows;
+      if (rc == 1) break;
+    }
+    vice_stream_destroy(slab);
+    CHECK(emitted >= out_y1);
+    // Degenerate slab (origin 0,0): must match bit-exact, else bookkeeping bug.
+    {
+      vice_stream_ctx* dgen = vice_stream_create(w, h, s, c, 32);
+      CHECK(dgen != nullptr);
+      if (fused) CHECK(vice_stream_set_fused(dgen, fused) == 0);
+      CHECK(vice_stream_begin_slab(dgen, 0, 0) == VICE_OK);
+      int dp = 0, de = 0;
+      std::vector<unsigned char> dgot(full.size(), 0);
+      while (de < out_h) {
+        while (dp < h && !vice_stream_has_next_band(dgen)) {
+          int n = (h - dp < 8) ? h - dp : 8;
+          CHECK(vice_stream_push_input_rows(dgen, input.data() + (size_t)dp * w * c, n) == 0);
+          dp += n;
+        }
+        CHECK(vice_stream_has_next_band(dgen) == 1);
+        int rows = 0;
+        int rc = vice_stream_pull_band(dgen, band.data(), &rows);
+        CHECK(rc >= 0 && rows > 0);
+        std::memcpy(dgot.data() + (size_t)de * out_w * c, band.data(), (size_t)rows * out_w * c);
+        de += rows;
+        if (rc == 1) break;
+      }
+      vice_stream_destroy(dgen);
+      CHECK(de == out_h);
+      if (std::memcmp(dgot.data(), full.data(), full.size()) != 0)
+        printf("SLABDBG degenerate slab DIFFERS scale=%d fused=%d\n", s, fused);
+      else
+        printf("SLABDBG degenerate slab identical scale=%d fused=%d\n", s, fused);
+    }
+    if (std::memcmp(got.data(), full.data() + (size_t)out_y0 * out_w * c, got.size()) != 0) {
+      double worst = 0;
+      int worst_r = -1;
+      std::string profile;
+      for (int r = 0; r < out_y1 - out_y0; r++) {
+        double row_worst = 0;
+        for (int i = 0; i < out_w * c; i++) {
+          double d = std::abs((double)got[(size_t)r * out_w * c + i] -
+                              (double)full[((size_t)out_y0 + r) * out_w * c + i]);
+          if (d > row_worst) row_worst = d;
+        }
+        if (row_worst > worst) {
+          worst = row_worst;
+          worst_r = r;
+        }
+        if (row_worst > 0) {
+          char buf[64];
+          std::snprintf(buf, sizeof(buf), " r%d=%.0f", r, row_worst);
+          profile += buf;
+        }
+      }
+      printf("SLABDBG scale=%d fused=%d out_y0=%d rows=%d worst=%.1f at slab-row %d (global %d)\n",
+             s, fused, out_y0, out_y1 - out_y0, worst, worst_r, out_y0 + worst_r);
+      printf("SLABDBG profile:%s\n", profile.c_str());
+      CHECK(false);
+    }
+    printf("stream_slab scale=%d fused=%d identical ok\n", s, fused);
+  }
+  // Misaligned origin rejected.
+  {
+    vice_stream_ctx* sctx = vice_stream_create(16, 16, 2, 3, 16);
+    CHECK(sctx != nullptr);
+    CHECK(vice_stream_begin_slab(sctx, 0, 1) == VICE_E_ARG);
+    vice_stream_destroy(sctx);
+  }
+}
+
+// Golden: fixed slab boundaries tile the image; concatenated owned rows equal
+// the tall-band render byte-exactly. Slab geometry (never worker count)
+// determines bytes — the P4+ determinism story rests on this test.
+static void test_stream_slab_tiling() {
+  for (int pass = 0; pass < 2; pass++) {
+    int s = (pass == 0) ? 2 : 4;
+    int fused = (pass == 0) ? 0 : 1;
+    int w = 48, h = 48, c = 3;
+    int out_w = w * s, out_h = h * s;
+    std::vector<float> input((size_t)w * h * c);
+    for (size_t i = 0; i < input.size(); i++) input[i] = (float)(i % 251) / 251.0f;
+
+    // Tall reference: one band = image height.
+    std::vector<unsigned char> tall((size_t)out_w * out_h * c);
+    {
+      vice_stream_ctx* t = vice_stream_create(w, h, s, c, out_h);
+      CHECK(t != nullptr);
+      if (fused) CHECK(vice_stream_set_fused(t, fused) == 0);
+      CHECK(vice_stream_push_input_rows(t, input.data(), h) == 0);
+      CHECK(vice_stream_has_next_band(t) == 1);
+      int rows = 0;
+      CHECK(vice_stream_pull_band(t, tall.data(), &rows) == 1);
+      CHECK(rows == out_h);
+      vice_stream_destroy(t);
+    }
+
+    // Fixed slabs of 32 output rows cover the image; halo per query.
+    int top = 0, bottom = 0;
+    vice_stream_halo_rows(s, fused, &top, &bottom);
+    const int SLAB = 32;
+    std::vector<unsigned char> tiled((size_t)out_w * out_h * c, 0);
+    std::vector<unsigned char> band((size_t)64 * out_w * c);
+    for (int out_y0 = 0; out_y0 < out_h; out_y0 += SLAB) {
+      int out_y1 = out_y0 + SLAB < out_h ? out_y0 + SLAB : out_h;
+      int in_y0 = out_y0 / s - top < 0 ? 0 : out_y0 / s - top;
+      vice_stream_ctx* slab = vice_stream_create(w, h, s, c, SLAB);
+      CHECK(slab != nullptr);
+      if (fused) CHECK(vice_stream_set_fused(slab, fused) == 0);
+      CHECK(vice_stream_begin_slab(slab, in_y0, out_y0) == VICE_OK);
+      int pushed = in_y0, emitted = out_y0;
+      while (emitted < out_y1) {
+        while (pushed < h && !vice_stream_has_next_band(slab)) {
+          int n = (h - pushed < 8) ? h - pushed : 8;
+          CHECK(vice_stream_push_input_rows(slab, input.data() + (size_t)pushed * w * c, n) == 0);
+          pushed += n;
+        }
+        CHECK(vice_stream_has_next_band(slab) == 1);
+        int rows = 0;
+        int rc = vice_stream_pull_band(slab, band.data(), &rows);
+        CHECK(rc >= 0 && rows > 0);
+        int take = rows;
+        if (emitted + take > out_y1) take = out_y1 - emitted;
+        std::memcpy(tiled.data() + (size_t)emitted * out_w * c, band.data(),
+                    (size_t)take * out_w * c);
+        emitted += rows;
+        if (rc == 1) break;
+      }
+      vice_stream_destroy(slab);
+      CHECK(emitted >= out_y1);
+    }
+    CHECK(std::memcmp(tiled.data(), tall.data(), tall.size()) == 0);
+    printf("stream_slab_tiling scale=%d fused=%d identical ok\n", s, fused);
+  }
+}
+
+static void test_stream_memory_estimator() {
+  // Bad geometry -> 0. Estimate always covers the obvious floor (full linear
+  // input + stored output + WASM base heap): it must never under-predict.
+  CHECK(vice_stream_memory_bytes(0, 8, 2, 3, 64, 0) == 0);
+  CHECK(vice_stream_memory_bytes(8, 8, 5, 3, 64, 0) == 0);
+  CHECK(vice_stream_memory_bytes(8, 8, 2, 2, 64, 0) == 0);
+  CHECK(vice_stream_memory_bytes(8, 8, 2, 3, 64, 3) == 0);
+  for (int s : {2, 3, 4}) {
+    size_t e = vice_stream_memory_bytes(64, 48, s, 4, 64, 0);
+    size_t floor = (size_t)64 * 48 * 4 * 4 + (size_t)(64 * s) * (48 * s) * 4 + 67108864u;
+    CHECK(e >= floor);
+    // Monotonic in every dimension; fused costs at least direct.
+    CHECK(vice_stream_memory_bytes(128, 48, s, 4, 64, 0) > e);
+    CHECK(vice_stream_memory_bytes(64, 96, s, 4, 64, 0) > e);
+    if (s == 4) CHECK(vice_stream_memory_bytes(64, 48, s, 4, 64, 1) >= e);
+  }
+  // Absurd dims saturate instead of overflowing.
+  CHECK(vice_stream_memory_bytes(2000000000, 2000000000, 4, 4, 64, 0) == SIZE_MAX);
+  printf("stream_memory ok\n");
+}
+
 static void test_stream_no_silent_zeros() {  // Pulling without enough input must report backpressure (-2) and leave the
   // caller's buffer untouched — never emit silent black rows.
   vice_stream_ctx* sctx = vice_stream_create(16, 16, 2, 3, 16);
@@ -821,18 +1245,25 @@ int main() {
   test_scales();
   test_ctx_roundtrip();
   test_icc_profile();
+  test_color_nan_safety();
   test_color_roundtrip();
   test_metrics();
   test_upscale_lanczos_adaptive();
   test_streaming_strip();
+  test_stream_readiness_agreement();
   test_stream_options();
   test_transparency();
   test_saturated_residual();
   test_png_stream_decode_equiv();
   test_png_stream_misuse();
+  test_png_segments();
   test_png_stream_soak();
   test_stream_seam_bands();
   test_stream_band_smooth();
+  test_stream_opaque_rgba_sums();
+  test_stream_slab_origin();
+  test_stream_slab_tiling();
+  test_stream_memory_estimator();
   test_fused4x();
   test_stream_no_silent_zeros();
   printf("ALL PASS\n");

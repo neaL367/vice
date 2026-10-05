@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 #include <vector>
 #include "vice.h"
@@ -133,14 +134,21 @@ struct Accum {
 // chained = 2x twice, full tuning on both passes (engine-only detail path).
 // clean   = 2x twice, plain Lanczos+dering second pass (shipped 2x2x toggle).
 static int g_policy4 = 2;
+// Encoded-domain scoring (argv[4] == "encoded", branch experiment D1):
+// metrics run on stored 8-bit values vs the sRGB HR, and every output block
+// sum is verified against s*s x source byte (integer-exact proof).
+static bool g_encoded = false;
+static long g_sum_violations = 0;
+static long g_sum_blocks = 0;
 
 // Shipped-path projection leg: the app's UnifiedRenderer drives the streaming
-// strip API (64-row bands, clamp-aware box only, no multigrid/smoothing), so
-// proj renders through vice_stream_* and the 8-bit sRGB bands convert back
-// for scoring. This keeps the table honest about shipped bytes; see bench4x
-// for the full-image multigrid/smooth comparison.
+// strip API (64-row bands, band-local smooth + exact box), so proj renders
+// through vice_stream_* and the 8-bit sRGB bands convert back for scoring.
+// This keeps the table honest about shipped bytes; see bench4x for the
+// tall-vs-banded comparison.
 static bool render_stream_proj(const float* lr, int w, int h, int s, int fused,
-                               std::vector<float>& out, double* residual) {
+                               std::vector<float>& out, double* residual,
+                               std::vector<unsigned char>* out_bytes = nullptr) {
   int W = w * s, H = h * s;
   const int C = 3;
   // The stream context rounds band_h up to a multiple of s; size the byte
@@ -181,12 +189,51 @@ static bool render_stream_proj(const float* lr, int w, int h, int s, int fused,
         // physical domain the pipeline actually works in.
         out[((size_t)(emitted + r) * W * C) + x] =
             vice_srgb_to_linear(band[(size_t)r * W * C + x] / 255.0f);
+    if (out_bytes) {
+      if (out_bytes->empty()) out_bytes->assign((size_t)W * H * C, 0);
+      for (int r = 0; r < rows; r++)
+        std::memcpy(out_bytes->data() + (size_t)(emitted + r) * W * C,
+                    band.data() + (size_t)r * W * C, (size_t)W * C);
+    }
     emitted += rows;
     if (rc == 1) break;
   }
   *residual = vice_stream_last_residual(ctx);
   vice_stream_destroy(ctx);
   return emitted == H;
+}
+
+// Plain-round sRGB quantization of a linear float image (variant-B baseline:
+// encoded values, no exact sums).
+static void quantize_plain_bytes(const float* lin, unsigned char* bytes, size_t n) {
+  for (size_t i = 0; i < n; i++) {
+    float v = lin[i] < 0.0f ? 0.0f : (lin[i] > 1.0f ? 1.0f : lin[i]);
+    int q = (int)(vice_linear_to_srgb(v) * 255.0f + 0.5f);
+    bytes[i] = (unsigned char)(q < 0 ? 0 : (q > 255 ? 255 : q));
+  }
+}
+
+// Integer-exact proof: every stored block sum must equal s^2 x source byte,
+// where the source byte inverts the decode the same way the engine does.
+static void verify_block_sums(const unsigned char* proj_bytes, const float* lr_lin,
+                              int w, int h, int s, int C) {
+  int W = w * s;
+  int N = s * s;
+  for (int by = 0; by < h; by++)
+    for (int bx = 0; bx < w; bx++)
+      for (int ch = 0; ch < C; ch++) {
+        float y_lin = lr_lin[((size_t)by * w + bx) * C + ch];
+        float src_f = vice_linear_to_srgb(y_lin < 0.0f ? 0.0f : (y_lin > 1.0f ? 1.0f : y_lin));
+        int src_byte = (int)(src_f * 255.0f + 0.5f);
+        if (src_byte < 0) src_byte = 0;
+        if (src_byte > 255) src_byte = 255;
+        int sum = 0;
+        for (int dy = 0; dy < s; dy++)
+          for (int dx = 0; dx < s; ++dx)
+            sum += proj_bytes[(((size_t)(by * s + dy) * W + bx * s + dx) * C) + ch];
+        g_sum_blocks++;
+        if (sum != N * src_byte) g_sum_violations++;
+      }
 }
 
 bool run_case(const float* hr, int W, int H, int s, Accum& ac) {
@@ -211,13 +258,34 @@ bool run_case(const float* hr, int W, int H, int s, Accum& ac) {
     int fused = 0;
     if (s == 4 && g_policy4 != 2) fused = (g_policy4 == 0) ? 2 : 1;
     double worst = 0;
-    if (!render_stream_proj(lr.data(), w, h, s, fused, proj, &worst)) return false;
+    std::vector<unsigned char> proj_bytes;
+    if (!render_stream_proj(lr.data(), w, h, s, fused, proj, &worst,
+                            g_encoded ? &proj_bytes : nullptr))
+      return false;
     ac.resid = worst > ac.resid ? worst : ac.resid;
-    ac.pr += vice_psnr(raw.data(), hr_lin.data(), W, H, C);
-    ac.pp += vice_psnr(proj.data(), hr_lin.data(), W, H, C);
-    ac.sr += vice_ssim(raw.data(), hr_lin.data(), W, H, C);
-    ac.sp += vice_ssim(proj.data(), hr_lin.data(), W, H, C);
-    ac.seam += vice_seam_ratio(proj.data(), W, H, s, C);
+    if (g_encoded) {
+      // Branch experiment D1: score stored bytes vs sRGB HR (variant B raw
+      // vs variant E proj), and prove integer-exact block sums vs the LR.
+      std::vector<unsigned char> raw_bytes((size_t)W * H * C);
+      quantize_plain_bytes(raw.data(), raw_bytes.data(), raw_bytes.size());
+      std::vector<float> raw_f((size_t)W * H * C), proj_f((size_t)W * H * C);
+      for (size_t i = 0; i < raw_f.size(); i++) {
+        raw_f[i] = raw_bytes[i] / 255.0f;
+        proj_f[i] = proj_bytes[i] / 255.0f;
+      }
+      verify_block_sums(proj_bytes.data(), lr.data(), w, h, s, C);
+      ac.pr += vice_psnr(raw_f.data(), hr, W, H, C);
+      ac.pp += vice_psnr(proj_f.data(), hr, W, H, C);
+      ac.sr += vice_ssim(raw_f.data(), hr, W, H, C);
+      ac.sp += vice_ssim(proj_f.data(), hr, W, H, C);
+      ac.seam += vice_seam_ratio(proj_f.data(), W, H, s, C);
+    } else {
+      ac.pr += vice_psnr(raw.data(), hr_lin.data(), W, H, C);
+      ac.pp += vice_psnr(proj.data(), hr_lin.data(), W, H, C);
+      ac.sr += vice_ssim(raw.data(), hr_lin.data(), W, H, C);
+      ac.sp += vice_ssim(proj.data(), hr_lin.data(), W, H, C);
+      ac.seam += vice_seam_ratio(proj.data(), W, H, s, C);
+    }
     ac.n++;
   }
   return true;
@@ -272,6 +340,7 @@ int main(int argc, char** argv) {
   int max_imgs = argc > 2 ? std::atoi(argv[2]) : 0;
   std::string policy = argc > 3 ? argv[3] : "direct";
   g_policy4 = (policy == "chained") ? 0 : (policy == "clean") ? 1 : 2;
+  g_encoded = argc > 4 && std::string(argv[4]) == "encoded";
   bool ok = true;
   std::printf("%-10s %-5s %10s %10s %10s %10s %10s %8s %5s\n", "set", "scale", "residual",
               "psnr_raw", "psnr_proj", "ssim_raw", "ssim_proj", "seam", "n");
@@ -366,6 +435,10 @@ int main(int argc, char** argv) {
     }
   }
 
+  if (g_encoded) {
+    std::printf("# exact-sum blocks=%ld violations=%ld\n", g_sum_blocks, g_sum_violations);
+    if (g_sum_violations != 0) ok = false;
+  }
   std::printf(ok ? "EVAL PASS\n" : "EVAL FAIL\n");
   return ok ? 0 : 1;
 }
