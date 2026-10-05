@@ -10,6 +10,7 @@ else()
 endif()
 
 add_library(vice_core STATIC
+  src/abi.cpp
   src/color.cpp
   src/project.cpp
   src/png_filters.cpp
@@ -62,4 +63,14 @@ endif()
 
 enable_testing()
 add_test(NAME vice_tests COMMAND vice_tests)
+
+# Deterministic hostile-input driver (no libFuzzer needed). Set
+# VICE_SANITIZE=address,undefined for a sanitized run (GCC/Clang CI).
+add_executable(vice_fuzz tests/fuzz_stream.cpp)
+target_link_libraries(vice_fuzz PRIVATE vice_core)
+if(DEFINED VICE_SANITIZE)
+  target_compile_options(vice_fuzz PRIVATE -fsanitize=${VICE_SANITIZE} -g)
+  target_link_options(vice_fuzz PRIVATE -fsanitize=${VICE_SANITIZE})
+endif()
+add_test(NAME vice_fuzz COMMAND vice_fuzz)
 add_test(NAME vice_eval COMMAND vice_eval)

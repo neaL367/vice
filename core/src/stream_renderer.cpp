@@ -1,6 +1,6 @@
 #include "vice.h"
+#include "block_project.h"
 #include "fused_4x.h"
-#include "quantize.h"
 #include "png.h"
 #include "parallel_runtime.h"
 #include <algorithm>
@@ -34,10 +34,12 @@ struct vice_stream_ctx {
 
 static constexpr int kFusedHalo = 6;
 // Extra input rows each side feeding the band-local smooth back-projection:
-// the bilinear correction of an owned output row taps residual blocks at
-// most one block away, so one halo block makes band joints match the
-// full-image smooth path up to the missing global low frequencies.
-static constexpr int kSmoothHalo = 1;
+// the bilinear correction taps residual blocks at most one block away, but
+// strip-edge clamp artifacts (lanczos taps, sharp/shock spread) propagate
+// inward about a block per smooth iteration. Halo 4 keeps owned rows clear
+// of the edge with margin, which also makes mid-image slabs byte-identical
+// to the tall-band render (pinned by test_stream_slab_origin).
+static constexpr int kSmoothHalo = 4;
 
 vice_stream_ctx* vice_stream_create(int in_w, int in_h, int scale, int channels, int band_h) {
   if (in_w <= 0 || in_h <= 0 || (scale != 2 && scale != 3 && scale != 4) ||
@@ -84,6 +86,30 @@ int vice_stream_set_fused(vice_stream_ctx* sctx, int mode) {
   sctx->fused = mode;
   sctx->halo_extra = mode ? kFusedHalo : 0;
   return 0;
+}
+
+void vice_stream_halo_rows(int scale, int fused, int* top, int* bottom) {
+  int t = 0, b = 0;
+  if ((scale == 2 || scale == 3 || scale == 4) && (fused == 0 || fused == 1 || fused == 2)) {
+    // floor() in the req math costs one row beyond taps+halos on each side:
+    // top = 1 + (3 lanczos) + HE + smooth, bottom mirrors it.
+    int he = (fused && scale == 4) ? kFusedHalo : 0;
+    t = 1 + 3 + he + kSmoothHalo;
+    b = 1 + 3 + he + kSmoothHalo;
+  }
+  if (top) *top = t;
+  if (bottom) *bottom = b;
+}
+
+int vice_stream_begin_slab(vice_stream_ctx* sctx, int in_y0, int out_y0) {  if (!sctx) return VICE_E_ARG;
+  if (!sctx->in_buf.empty() || sctx->out_rows_emitted != 0 || sctx->in_rows_pushed != 0)
+    return VICE_E_STATE; // slabs start on a fresh ctx only
+  if (in_y0 < 0 || out_y0 < 0 || out_y0 % sctx->scale != 0) return VICE_E_ARG;
+  if (in_y0 > sctx->in_h || out_y0 > sctx->out_h) return VICE_E_ARG;
+  sctx->in_buf_start_y = in_y0;
+  sctx->in_rows_pushed = in_y0;
+  sctx->out_rows_emitted = out_y0;
+  return VICE_OK;
 }
 
 int vice_stream_push_input_rows(vice_stream_ctx* sctx, const float* in_rows, int row_count) {
@@ -169,6 +195,201 @@ static void vice_stream_smooth_strip(
   }
 }
 
+// Encoded-domain integer-exact quantization.
+// Per owned block: plain-round every sample (no dither), then move single
+// levels — largest rounding error first, multi-pass — until the stored
+// integer sum equals s*s x source byte. Source bytes invert the decode:
+// sRGB-encoded premultiplied linear for RGB, linear-direct for alpha.
+//
+// Translucent pixels store UN-premultiplied bytes, whose sums have no reason
+// to equal premultiplied-domain targets (forcing them darkens edges: 255
+// would collapse toward 188 at 50% alpha). So the RGB fix applies only to
+// fully opaque blocks (alpha byte 255 everywhere; premult == direct there);
+// translucent blocks keep plain rounding. Alpha sums are always fixed.
+static void vice_exact_sum_band(
+    const float* band_raw, const float* in_strip,
+    int in_w, int out_w, int cur_band_h, int out_y0,
+    int req_in_y0, int req_in_rows, int s, int c, unsigned char* out_bytes) {
+  const int N = s * s;
+  for (int by = 0; by < cur_band_h / s; ++by) {
+    int global_in_y = (out_y0 / s) + by;
+    int local_in_y = global_in_y - req_in_y0;
+    if (local_in_y < 0 || local_in_y >= req_in_rows) continue; // mirrors box guard
+    for (int bx = 0; bx < in_w; ++bx) {
+      // Opacity + alpha bytes first: alpha target is always meaningful.
+      bool opaque = true;
+      int a_byte[16];
+      for (int dy = 0; dy < s; ++dy) {
+        for (int dx = 0; dx < s; ++dx) {
+          int k = dy * s + dx;
+          float a_lin = 1.0f;
+          if (c == 4) {
+            a_lin = band_raw[(((size_t)by * s + dy) * out_w + bx * s + dx) * c + 3];
+            if (a_lin < 0.0f) a_lin = 0.0f;
+            if (a_lin > 1.0f) a_lin = 1.0f;
+          }
+          // Alpha is quantized from the POST-box value like the main path.
+          int ab = (int)(a_lin * 255.0f + 0.5f);
+          if (ab < 0) ab = 0;
+          if (ab > 255) ab = 255;
+          a_byte[k] = ab;
+          if (ab != 255) opaque = false;
+        }
+      }
+      int ch_end = (c == 4) ? 3 : c;
+      for (int ch = 0; ch < ch_end; ++ch) {
+        float y_lin = in_strip[((size_t)local_in_y * in_w + bx) * c + ch];
+        float yc = y_lin < 0.0f ? 0.0f : (y_lin > 1.0f ? 1.0f : y_lin);
+        float v_raw[16];
+        for (int dy = 0; dy < s; ++dy) {
+          for (int dx = 0; dx < s; ++dx) {
+            int k = dy * s + dx;
+            float pix = band_raw[(((size_t)by * s + dy) * out_w + bx * s + dx) * c + ch];
+            if (c == 4) {
+              float a = band_raw[(((size_t)by * s + dy) * out_w + bx * s + dx) * c + 3];
+              float inv = (a > 1e-6f) ? (1.0f / a) : 0.0f;
+              pix *= inv; // un-premultiply (premult pipeline stores linear*a)
+            }
+            if (pix < 0.0f) pix = 0.0f;
+            if (pix > 1.0f) pix = 1.0f;
+            v_raw[k] = vice_linear_to_srgb(pix) * 255.0f;
+          }
+        }
+        int q[16];
+        double frac[16];
+        int sum = 0;
+        for (int k = 0; k < N; ++k) {
+          float v = v_raw[k];
+          if (v < 0.0f) v = 0.0f;
+          if (v > 255.0f) v = 255.0f;
+          int qi = (int)v; // floor of clamped value
+          q[k] = qi;
+          frac[k] = (double)v - qi;
+          sum += qi;
+        }
+        // Fix sums only where the target is meaningful: opaque blocks (and
+        // all of C==3). Translucent RGB keeps plain rounding.
+        bool fix = (c == 3) || opaque;
+        int target = 0;
+        if (fix) {
+          float src_f = vice_linear_to_srgb(yc) * 255.0f;
+          int src_byte = (int)(src_f + 0.5f);
+          if (src_byte < 0) src_byte = 0;
+          if (src_byte > 255) src_byte = 255;
+          target = N * src_byte;
+        }
+        int need = fix ? (target - sum) : 0;
+        // Insertion order by fractional error (N <= 16, trivial).
+        int order[16];
+        for (int k = 0; k < N; ++k) order[k] = k;
+        for (int a = 1; a < N; ++a) {
+          int m = order[a];
+          int b = a - 1;
+          bool more = need > 0 ? (frac[m] > frac[order[b]]) : (frac[m] < frac[order[b]]);
+          while (b >= 0 && more) {
+            order[b + 1] = order[b];
+            b--;
+            more = (b >= 0) && (need > 0 ? (frac[m] > frac[order[b]]) : (frac[m] < frac[order[b]]));
+          }
+          order[b + 1] = m;
+        }
+        // Multi-pass: sRGB concavity (Jensen gap) can exceed N levels, so
+        // cycle largest-error-first until the sum lands or no level moves.
+        while (need != 0) {
+          bool moved = false;
+          if (need > 0) {
+            for (int k = 0; k < N && need > 0; ++k) {
+              if (q[order[k]] < 255) {
+                q[order[k]]++;
+                need--;
+                moved = true;
+              }
+            }
+          } else {
+            for (int k = 0; k < N && need < 0; ++k) {
+              if (q[order[k]] > 0) {
+                q[order[k]]--;
+                need++;
+                moved = true;
+              }
+            }
+          }
+          if (!moved) break; // saturated: keep rounded values
+        }
+        for (int dy = 0; dy < s; ++dy)
+          for (int dx = 0; dx < s; ++dx)
+            out_bytes[(((size_t)by * s + dy) * out_w + bx * s + dx) * c + ch] =
+                (unsigned char)q[dy * s + dx];
+      }
+      if (c == 4) {
+        // Alpha sums are always fixed: stored alpha is linear-direct, so the
+        // target is always meaningful (no un-premultiply involved).
+        float y_a = in_strip[((size_t)local_in_y * in_w + bx) * c + 3];
+        if (y_a < 0.0f) y_a = 0.0f;
+        if (y_a > 1.0f) y_a = 1.0f;
+        int a_src = (int)(y_a * 255.0f + 0.5f);
+        if (a_src < 0) a_src = 0;
+        if (a_src > 255) a_src = 255;
+        int aq[16];
+        double afrac[16];
+        int asum = 0;
+        for (int dy = 0; dy < s; ++dy) {
+          for (int dx = 0; dx < s; ++dx) {
+            int k = dy * s + dx;
+            float av = band_raw[(((size_t)by * s + dy) * out_w + bx * s + dx) * c + 3];
+            if (av < 0.0f) av = 0.0f;
+            if (av > 1.0f) av = 1.0f;
+            float v = av * 255.0f;
+            int qi = (int)v;
+            aq[k] = qi;
+            afrac[k] = (double)v - qi;
+            asum += qi;
+          }
+        }
+        int need = N * a_src - asum;
+        int order[16];
+        for (int k = 0; k < N; ++k) order[k] = k;
+        for (int a = 1; a < N; ++a) {
+          int m = order[a];
+          int b = a - 1;
+          bool more = need > 0 ? (afrac[m] > afrac[order[b]]) : (afrac[m] < afrac[order[b]]);
+          while (b >= 0 && more) {
+            order[b + 1] = order[b];
+            b--;
+            more = (b >= 0) && (need > 0 ? (afrac[m] > afrac[order[b]]) : (afrac[m] < afrac[order[b]]));
+          }
+          order[b + 1] = m;
+        }
+        while (need != 0) {
+          bool moved = false;
+          if (need > 0) {
+            for (int k = 0; k < N && need > 0; ++k) {
+              if (aq[order[k]] < 255) {
+                aq[order[k]]++;
+                need--;
+                moved = true;
+              }
+            }
+          } else {
+            for (int k = 0; k < N && need < 0; ++k) {
+              if (aq[order[k]] > 0) {
+                aq[order[k]]--;
+                need++;
+                moved = true;
+              }
+            }
+          }
+          if (!moved) break;
+        }
+        for (int dy = 0; dy < s; ++dy)
+          for (int dx = 0; dx < s; ++dx)
+            out_bytes[(((size_t)by * s + dy) * out_w + bx * s + dx) * c + 3] =
+                (unsigned char)aq[dy * s + dx];
+      }
+    }
+  }
+}
+
 int vice_stream_pull_band(vice_stream_ctx* sctx, unsigned char* out_bytes, int* written_rows) {
   if (!sctx || !out_bytes || !written_rows) return -1;
   if (sctx->out_rows_emitted >= sctx->out_h) {
@@ -250,80 +471,23 @@ int vice_stream_pull_band(vice_stream_ctx* sctx, unsigned char* out_bytes, int* 
     }
   }
 
-  // Exact clamp-aware box consistency on band blocks
+  // Exact clamp-aware box consistency on band blocks (single copy in
+  // block_project.h; blocks are independent across threads).
   int s = sctx->scale;
-  int N = s * s;
-  double inv_s2 = 1.0 / (double)N;
   vice_parallel_for_rows(0, cur_band_h / s, [&](int by) {
     int global_in_y = (out_y0 / s) + by;
     int local_in_y = global_in_y - req_in_y0;
     if (local_in_y < 0 || local_in_y >= req_in_rows) return;
 
     for (int bx = 0; bx < sctx->in_w; ++bx) {
-      for (int c = 0; c < sctx->channels; ++c) {
-        float orig = in_strip[((size_t)local_in_y * sctx->in_w + bx) * sctx->channels + c];
-        if (orig <= 0.0f) {
-          for (int dy = 0; dy < s; ++dy)
-            for (int dx = 0; dx < s; ++dx)
-              band_raw[(((size_t)by * s + dy) * sctx->out_w + bx * s + dx) * sctx->channels + c] = 0.0f;
-          continue;
-        }
-        if (orig >= 1.0f) {
-          for (int dy = 0; dy < s; ++dy)
-            for (int dx = 0; dx < s; ++dx)
-              band_raw[(((size_t)by * s + dy) * sctx->out_w + bx * s + dx) * sctx->channels + c] = 1.0f;
-          continue;
-        }
-
-        float vals[16];
-        float min_v = 1e30f, max_v = -1e30f;
-        double sum = 0.0;
-        for (int dy = 0; dy < s; ++dy) {
-          for (int dx = 0; dx < s; ++dx) {
-            int idx = dy * s + dx;
-            float v = band_raw[(((size_t)by * s + dy) * sctx->out_w + bx * s + dx) * sctx->channels + c];
-            vals[idx] = v;
-            if (v < min_v) min_v = v;
-            if (v > max_v) max_v = v;
-            sum += v;
-          }
-        }
-        double d_linear = (double)orig - sum * inv_s2;
-        if ((double)min_v + d_linear >= 0.0 && (double)max_v + d_linear <= 1.0) {
-          float d = (float)d_linear;
-          for (int dy = 0; dy < s; ++dy)
-            for (int dx = 0; dx < s; ++dx)
-              band_raw[(((size_t)by * s + dy) * sctx->out_w + bx * s + dx) * sctx->channels + c] += d;
-          continue;
-        }
-
-        double lo = -(double)max_v;
-        double hi = 1.0 - (double)min_v;
-        for (int it = 0; it < 36; ++it) {
-          double mid = 0.5 * (lo + hi);
-          double cur_sum = 0.0;
-          for (int k = 0; k < N; ++k) {
-            double v = (double)vals[k] + mid;
-            if (v < 0.0) v = 0.0;
-            else if (v > 1.0) v = 1.0;
-            cur_sum += v;
-          }
-          if (cur_sum * inv_s2 < (double)orig) lo = mid;
-          else hi = mid;
-        }
-        double d_opt = 0.5 * (lo + hi);
-        for (int dy = 0; dy < s; ++dy) {
-          for (int dx = 0; dx < s; ++dx) {
-            float v = (float)((double)vals[dy * s + dx] + d_opt);
-            if (v < 0.0f) v = 0.0f;
-            else if (v > 1.0f) v = 1.0f;
-            band_raw[(((size_t)by * s + dy) * sctx->out_w + bx * s + dx) * sctx->channels + c] = v;
-          }
-        }
-      }
+      const float* y_px =
+          in_strip + ((size_t)local_in_y * sctx->in_w + bx) * sctx->channels;
+      float* raw_block = band_raw + (((size_t)by * s * sctx->out_w + bx * s) * sctx->channels);
+      vice_clamp_project_block(y_px, raw_block, sctx->out_w, s, sctx->channels);
     }
   });
 
+  double inv_s2 = 1.0 / (double)(s * s);
   for (int by = 0; by < cur_band_h / s; ++by) {
     int global_in_y = (out_y0 / s) + by;
     int local_in_y = global_in_y - req_in_y0;
@@ -343,13 +507,11 @@ int vice_stream_pull_band(vice_stream_ctx* sctx, unsigned char* out_bytes, int* 
     }
   }
 
-  for (int y = 0; y < cur_band_h; ++y) {
-    int global_y = out_y0 + y;
-    for (int x = 0; x < sctx->out_w; ++x) {
-      size_t idx = ((size_t)y * sctx->out_w + x) * sctx->channels;
-      quantize_pixel(&band_raw[idx], &out_bytes[idx], sctx->channels, x, global_y);
-    }
-  }
+  // Encoded-domain integer-exact output: plain round (no dither), then a
+  // per-block integer fix so stored sums equal s^2 x source byte. Writes
+  // every owned byte; see vice_exact_sum_band.
+  vice_exact_sum_band(band_raw, in_strip, sctx->in_w, sctx->out_w, cur_band_h, out_y0,
+                      req_in_y0, req_in_rows, s, sctx->channels, out_bytes);
 
   sctx->out_rows_emitted += cur_band_h;
   *written_rows = cur_band_h;
@@ -369,6 +531,50 @@ int vice_stream_pull_band(vice_stream_ctx* sctx, unsigned char* out_bytes, int* 
 
 void vice_stream_destroy(vice_stream_ctx* sctx) {
   delete sctx;
+}
+
+size_t vice_stream_memory_bytes(int in_w, int in_h, int scale, int ch, int band_h, int fused) {
+  if (in_w <= 0 || in_h <= 0 || (scale != 2 && scale != 3 && scale != 4) ||
+      (ch != 3 && ch != 4) || band_h <= 0)
+    return 0;
+  if (fused < 0 || fused > 2) return 0;
+  auto sat_add = [](uint64_t a, uint64_t b) {
+    uint64_t r = a + b;
+    return r < a ? (uint64_t)SIZE_MAX : r;
+  };
+  auto sat_mul = [](uint64_t a, uint64_t b) -> uint64_t {
+    if (a == 0 || b == 0) return 0;
+    if (a > (uint64_t)SIZE_MAX / b) return (uint64_t)SIZE_MAX;
+    return a * b;
+  };
+  uint64_t W = (uint64_t)in_w * (uint64_t)scale;
+  uint64_t H = (uint64_t)in_h * (uint64_t)scale;
+  uint64_t px_in = (uint64_t)in_w * (uint64_t)in_h * (uint64_t)ch;
+  uint64_t px_out = W * H * (uint64_t)ch;
+  uint64_t total = 0;
+  // WASM base heap (INITIAL_MEMORY) + instance overhead.
+  total = sat_add(total, 67108864ull + (1ull << 20));
+  // Retained input worst case: full linear image + push staging.
+  total = sat_add(total, sat_mul(px_in, 4));
+  total = sat_add(total, sat_mul((uint64_t)in_w * (uint64_t)ch * 256, 4));
+  // Strip scratch: input strip + upscaled strip (+ fused tmp/big) + smooth d
+  // + band float/bytes. Halo overestimated flat.
+  uint64_t strip_in_rows = (uint64_t)band_h / (uint64_t)scale + 64;
+  uint64_t strip_out_rows = (uint64_t)band_h + 256;
+  total = sat_add(total, sat_mul(strip_in_rows * (uint64_t)in_w * (uint64_t)ch, 4));
+  total = sat_add(total, sat_mul(strip_out_rows * W * (uint64_t)ch, 4));
+  if (fused && scale == 4)
+    total = sat_add(total, sat_mul(strip_out_rows * W * (uint64_t)ch, 8));
+  total = sat_add(total, sat_mul(strip_in_rows * (uint64_t)in_w * (uint64_t)ch, 4));
+  total = sat_add(total, sat_mul((uint64_t)band_h * W * (uint64_t)ch, 5));
+  // PNG writer: row scratch + deflate window + undrained chunks (soak < 1 MB).
+  total = sat_add(total, sat_mul(W * (uint64_t)ch, 8));
+  total = sat_add(total, 2ull << 20);
+  // Blob-route output accumulation + PNG overhead + bounded preview.
+  total = sat_add(total, sat_mul(px_out, 2));
+  total = sat_add(total, (1600ull * 1600ull * 4) + (1600ull * 4 * 4));
+  size_t out = total > (uint64_t)SIZE_MAX ? (size_t)SIZE_MAX : (size_t)total;
+  return out;
 }
 
 double vice_stream_last_residual(const vice_stream_ctx* sctx) {

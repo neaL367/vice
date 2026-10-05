@@ -1,4 +1,5 @@
 #include "png_filters.h"
+#include "vice.h"
 #define MINIZ_NO_ZLIB_COMPATIBLE_NAMES
 #include "miniz.h"
 #include <cmath>
@@ -128,4 +129,32 @@ void filter_best_row(const unsigned char* row, const unsigned char* prev_or_null
       std::memcpy(crow, cand, stride + 1);
     }
   }
+}
+
+void filter_best_first_row(const unsigned char* row, unsigned char* crow,
+                           unsigned char* cand, size_t stride, int bpp) {
+  unsigned best_sad = 0;
+  for (int f : {0, 1}) {
+    unsigned sad = filter_row(row, nullptr, cand, stride, bpp, f);
+    if (f == 0 || sad < best_sad) {
+      best_sad = sad;
+      std::memcpy(crow, cand, stride + 1);
+    }
+  }
+}
+
+uint32_t vice_adler32_combine(uint32_t ad1, uint32_t ad2, size_t len2) {
+  // zlib adler32_combine: adler of (A followed by B) from adler(A),
+  // adler(B), len(B). Coordinator-side framing needs this for segments.
+  constexpr uint32_t BASE = 65521u;
+  uint64_t rem = (uint64_t)(len2 % BASE);
+  uint64_t sum1 = ad1 & 0xffffu;
+  uint64_t sum2 = (rem * sum1) % BASE;
+  sum1 += (ad2 & 0xffffu) + BASE - 1u;
+  sum2 += ((ad1 >> 16) & 0xffffu) + ((ad2 >> 16) & 0xffffu) + BASE - rem;
+  if (sum1 >= BASE) sum1 -= BASE;
+  if (sum1 >= BASE) sum1 -= BASE;
+  if (sum2 >= ((uint64_t)BASE << 1)) sum2 -= ((uint64_t)BASE << 1);
+  if (sum2 >= BASE) sum2 -= BASE;
+  return (uint32_t)(sum1 | (sum2 << 16));
 }

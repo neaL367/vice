@@ -12,6 +12,8 @@ void append_iccp(std::vector<unsigned char>& o, const unsigned char* icc_data,
 uint32_t vice_crc32(const unsigned char* d, size_t n);
 uint32_t vice_adler32(const unsigned char* d, size_t n);
 uint32_t adler_extend(uint32_t adler, const unsigned char* d, size_t n);
+// NOTE: vice_adler32_combine is declared in vice.h (C linkage) and defined
+// in png_filters.cpp; do not redeclare it here.
 
 int paeth_pred(int a, int b, int c);
 unsigned filter_row(const unsigned char* row, const unsigned char* prev,
@@ -19,3 +21,7 @@ unsigned filter_row(const unsigned char* row, const unsigned char* prev,
 void filter_best_row(const unsigned char* row, const unsigned char* prev_or_null,
                      unsigned char* crow, unsigned char* cand, size_t stride,
                      int bpp);
+// Slab-first row: only None/Sub (need no previous row). Used by segments,
+// whose previous slab row lives in another worker.
+void filter_best_first_row(const unsigned char* row, unsigned char* crow,
+                           unsigned char* cand, size_t stride, int bpp);
