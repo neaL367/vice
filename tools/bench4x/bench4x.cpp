@@ -1,6 +1,10 @@
 // vice_bench4x: 4x policy comparison (not a gate; prints a table).
-// Policies: A full direct 4x | B full chained 2x2 clean (shipped default)
-//           C stream direct | D stream fused clean | E stream fused detail.
+// One engine: every policy renders through the stream API. Tall bands
+// (band_h = out height) stand in for the old full-image path; the A/B
+// reference columns then measure exactly the band-size effect, which is
+// ~1 LSB on a handful of bytes.
+// Policies: A tall direct | B tall fused clean (reference)
+//           C banded direct | D banded fused clean | E banded fused detail.
 // Reference for PSNR/SSIM: B. All policies must hold residual < 1e-5.
 //
 // Measured verdict (Set5/BSD100/Urban100 SRF_4 + procedural edge): all five
@@ -41,64 +45,19 @@ std::vector<float> load_rgb(const char* path, int* w, int* h) {
   return f;
 }
 
-void run_upscale(vice_ctx* ctx) {
-  if (vice_upscale(ctx) != 0) {
-    printf("upscale failed\n");
-    std::abort();
-  }
-}
-
-// Full-image render to float. chained: 2x o 2x with optional clean 2nd pass.
-std::vector<float> render_full(const float* in, int w, int h, bool chained,
-                               bool clean_second, double* residual, double* ms) {
-  (void)clean_second;
-  auto t0 = clock::now();
-  std::vector<float> out;
-  if (!chained) {
-    vice_ctx* ctx = vice_create(w, h, 4, 3);
-    if (!ctx) abort();
-    std::vector<float> y(in, in + (size_t)w * h * 3);
-    vice_set_input(ctx, y.data(), (int)y.size());
-    run_upscale(ctx);
-    vice_project(ctx);
-    *residual = vice_last_residual(ctx);
-    out.resize((size_t)w * 4 * h * 4 * 3);
-    vice_download_raw(ctx, out.data(), (int)out.size());
-    vice_destroy(ctx);
-  } else {
-    vice_ctx* c1 = vice_create(w, h, 2, 3);
-    if (!c1) abort();
-    std::vector<float> y(in, in + (size_t)w * h * 3);
-    vice_set_input(c1, y.data(), (int)y.size());
-    run_upscale(c1);
-    vice_project(c1);
-    std::vector<float> mid((size_t)w * 2 * h * 2 * 3);
-    vice_download_raw(c1, mid.data(), (int)mid.size());
-    vice_destroy(c1);
-    vice_ctx* c2 = vice_create(w * 2, h * 2, 2, 3);
-    if (!c2) abort();
-    vice_set_input(c2, mid.data(), (int)mid.size());
-    run_upscale(c2);
-    vice_project(c2);
-    *residual = vice_last_residual(c2);
-    out.resize((size_t)w * 4 * h * 4 * 3);
-    vice_download_raw(c2, out.data(), (int)out.size());
-    vice_destroy(c2);
-  }
-  *ms = std::chrono::duration<double, std::milli>(clock::now() - t0).count();
-  return out;
-}
-
-// Stream render to float (8-bit bands, like the shipped path).
-std::vector<float> render_stream(const float* in, int w, int h, int fused,
+// Render to float through the stream engine. band_h = out height reproduces
+// the old full-image path (single tall band); 64 gives the shipped banding.
+std::vector<float> render_stream(const float* in, int w, int h, int fused, int band_h,
                                  double* residual, double* ms) {
   auto t0 = clock::now();
-  vice_stream_ctx* s = vice_stream_create(w, h, 4, 3, 64);
+  vice_stream_ctx* s = vice_stream_create(w, h, 4, 3, band_h);
   if (!s) abort();
   if (fused && vice_stream_set_fused(s, fused) != 0) abort();
   int W = w * 4, H = h * 4;
   int pushed = 0, emitted = 0;
-  std::vector<unsigned char> band((size_t)64 * W * 3);
+  // Size for the scale-rounded band (band_h = H stays H at 4x).
+  int band_alloc = ((band_h + 4 - 1) / 4) * 4;
+  std::vector<unsigned char> band((size_t)band_alloc * W * 3);
   std::vector<float> out((size_t)W * H * 3);
   while (emitted < H) {
     while (pushed < h && !vice_stream_has_next_band(s)) {
@@ -133,11 +92,11 @@ void bench_image(const char* name, const float* in, int w, int h,
          "seam", "psnr/ref", "ssim/ref", "psnr/B", "psnr/A");
   double rA = 0, mA = 0, rB = 0, mB = 0, rC = 0, mC = 0, rD = 0, mD = 0, rE = 0,
          mE = 0;
-  auto A = render_full(in, w, h, false, false, &rA, &mA);
-  auto B = render_full(in, w, h, true, true, &rB, &mB);
-  auto C = render_stream(in, w, h, 0, &rC, &mC);
-  auto D = render_stream(in, w, h, 1, &rD, &mD);
-  auto E = render_stream(in, w, h, 2, &rE, &mE);
+  auto A = render_stream(in, w, h, 0, H, &rA, &mA);
+  auto B = render_stream(in, w, h, 1, H, &rB, &mB);
+  auto C = render_stream(in, w, h, 0, 64, &rC, &mC);
+  auto D = render_stream(in, w, h, 1, 64, &rD, &mD);
+  auto E = render_stream(in, w, h, 2, 64, &rE, &mE);
   auto row = [&](const char* tag, const std::vector<float>& img, double res, double ms) {
     double psnr_ref = ref ? vice_psnr(img.data(), ref, W, H, 3) : 0;
     double ssim_ref = ref ? vice_ssim(img.data(), ref, W, H, 3) : 0;
@@ -148,11 +107,11 @@ void bench_image(const char* name, const float* in, int w, int h,
            vice_seam_ratio(img.data(), W, H, 4, 3), pdb(psnr_ref), ssim_ref,
            pdb(psnr_b), pdb(psnr_a));
   };
-  row("A full-direct", A, rA, mA);
-  row("B full-chained", B, rB, mB);
-  row("C stream-direct", C, rC, mC);
-  row("D fused-clean", D, rD, mD);
-  row("E fused-detail", E, rE, mE);
+  row("A tall-direct", A, rA, mA);
+  row("B tall-clean", B, rB, mB);
+  row("C band-direct", C, rC, mC);
+  row("D band-clean", D, rD, mD);
+  row("E band-detail", E, rE, mE);
   for (double r : {rA, rB, rC, rD, rE})
     if (!(r < 1e-5)) {
       printf("RESIDUAL GATE FAIL\n");

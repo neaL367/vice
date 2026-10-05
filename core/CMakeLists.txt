@@ -12,11 +12,9 @@ endif()
 add_library(vice_core STATIC
   src/color.cpp
   src/project.cpp
-  src/tile.cpp
   src/png_filters.cpp
   src/png_writer.cpp
   src/png.cpp
-  src/engine_context.cpp
   src/stream_renderer.cpp
   src/fused_4x.cpp
   src/parallel_runtime.cpp

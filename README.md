@@ -28,13 +28,13 @@ prevent banding in gradients, introducing $\pm 0.5$ LSB rounding variance.
 
 ```
 vice/
-├─ core/            # C++20: color, projection, tiling, upscale, metrics (CMake)
+├─ core/            # C++20: color, projection, upscale, metrics (CMake)
 │  ├─ src/png_filters.cpp, png_writer.cpp, png.cpp   # PNG filter / incremental writer / facade
-│  ├─ src/engine_context.cpp, stream_renderer.cpp     # compat ctx + streaming strip renderer
+│  ├─ src/stream_renderer.cpp     # streaming strip renderer (the only render path)
 │  ├─ src/fused_4x.cpp, parallel_runtime.cpp          # fused chained-4x + thread pool
-│  └─ include/vice.h  # typed ViceStatus + streaming/incremental/math/compat C ABI
+│  └─ include/vice.h  # streaming + incremental-PNG + math-kernel C ABI
 ├─ tools/eval/      # vice_eval CLI: procedural + Set5/Set14/BSD100/Urban100
-├─ tools/bench4x/   # vice_bench4x: 5-policy 4x comparison (direct vs chained vs stream vs fused)
+├─ tools/bench4x/   # vice_bench4x: 5-policy stream 4x comparison (tall vs banded bands)
 ├─ tools/lab/       # vice_lab: retired tuning search (engine is fixed-tuning now)
 ├─ tools/wasm/      # Emscripten entry point
 └─ web/             # Next.js 16 App Router + worker (deploy this on Vercel)
@@ -94,9 +94,14 @@ deploys work without emsdk.
   rows) stay serial. Both WASM builds are release (`-sASSERTIONS=0`).
 - **UnifiedRenderer** (`web/features/vice/renderers/unified-renderer.ts`) —
   the only render path. Streams 64-row bands → incremental PNG writer →
-  `ChunkSink` (Blob / File / Folder). No separate full/stream/fused/fallback
-  renderers. `ViceCore` (`web/lib/vice-wasm.ts`) is a thin compat facade over
-  `engine/wasm-module + wasm-memory + capabilities`.
+  `ChunkSink` (Blob / File / Folder). One engine everywhere: "full image" is
+  just a stream render with one band as tall as the image — tall vs 64-row
+  bands differ by ≤ 1 LSB on a handful of bytes (pinned by test), and the
+  tall-vs-banded bench columns track at 95–999 dB. No TS mirror of the
+  algorithm remains (`lib/pipeline` holds only `color.ts` LUTs used by the
+  worker decoder); the WASM capability check requires stream functions only,
+  and the C ABI keeps just the Lanczos kernel, the box projections, and the
+  streaming/incremental-PNG surface.
 - **WebGPU** is a degraded fallback only (no ICC embedding, no adapter in
   headless CI). Not presented as equivalent quality; see
   `web/e2e/webgpu.spec.ts`.
@@ -144,7 +149,7 @@ only the streaming path, so the proj leg renders through the streaming strip
 API (64-row bands) and scores in linear light: the table below measures
 shipped bytes. The strip runs band-local smooth back-projection (one-block
 halo, `VICE_SMOOTH_ITERS` iterations) followed by the exact clamp-aware box
-projection; see `vice_bench4x` for the full-image multigrid comparison.
+projection; `vice_bench4x` cross-checks tall bands against 64-row bands.
 Residual is mathematically guaranteed $\le 1.1\times 10^{-7}$ across all
 natural and synthetic content, including pure blacks and saturated primaries
 (via clamp-aware bisection projection). Seam is the block-boundary gradient
@@ -178,22 +183,23 @@ The TypeScript fallback (`projectClamp`) uses the same projection and is
 checked against the WASM core in `web/lib/vice-wasm.test.ts`.
 
 Why band-local smooth exists: an independent synthetic hard-edge probe
-showed the old box-only stream path trailing the multigrid path (3× seam
-3.98 vs 3.08, 4× 3.89 vs 3.12, residual exact either way — that probe image
-was synthetic, so it says nothing about natural content). The one-block-halo
-smooth closes it: on our hard-edge fixture the stream seam now measures 2.37
-at 3× and 2.50 at 4× (native test `test_stream_band_smooth`, bound 3.5),
-and the adversarial synthetic suite drops 4.44 → 3.07 (3×) and 3.90 → 2.83
-(4×). It costs about 2× stream render time versus box-only for the
-`VICE_SMOOTH_ITERS` passes — the threaded pool absorbs it in-app.
+showed the box-only stream path trailing the old full-image multigrid
+reference (3× seam 3.98 vs 3.08, 4× 3.89 vs 3.12, residual exact either
+way — that probe image was synthetic, so it says nothing about natural
+content). The one-block-halo smooth closes it: on our hard-edge fixture
+the stream seam now measures 2.37 at 3× and 2.50 at 4× (native test
+`test_stream_band_smooth`, bound 3.5), and the adversarial synthetic suite
+drops 4.44 → 3.07 (3×) and 3.90 → 2.83 (4×). It costs about 2× stream
+render time versus box-only for the `VICE_SMOOTH_ITERS` passes — the
+threaded pool absorbs it in-app.
 
 4× policy bench (`vice_bench4x`, Set5/BSD100/Urban100 SRF_4 + procedural
-edge): all five policies (A full-direct, B full-chained-clean, C
-stream-direct, D stream fused-clean, E stream fused-detail) land within ~1 dB
-of HR ground truth; D tracks B at 41–44 dB (C tracks A at 36–57 dB).
-E (detail) never beats D and costs ~1.5–1.7× time, so only Clean (fused
-mode 1) and Direct ship in the UI; mode 2 stays engine-only. All policies
-gate on residual < 1e-5.
+edge): all five policies (A tall-direct, B tall-fused-clean, C band-direct,
+D band-fused-clean, E band-fused-detail) land within ~1 dB of HR ground
+truth; D tracks B at 41–44 dB and C tracks A at 36–98 dB (tall vs banded is
+the band-size effect: near-identical by construction). E (detail) never beats
+D and costs ~1.5–1.7× time, so only Clean (fused mode 1) and Direct ship in
+the UI; mode 2 stays engine-only. All policies gate on residual < 1e-5.
 
 ## Limits
 

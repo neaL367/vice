@@ -54,35 +54,49 @@ static void test_scales() {
 }
 
 static void test_ctx_roundtrip() {
-  vice_ctx* ctx = vice_create(4, 4, 2, 3);
-  CHECK(ctx);
-  std::vector<float> y(4 * 4 * 3, 0.4f);
-  CHECK(vice_set_input(ctx, y.data(), (int)y.size()) == 0);
-  std::vector<float> tile(8 * 8 * 3, 0.9f);
-  CHECK(vice_submit_raw_tile(ctx, 0, 0, tile.data(), 8, 8, (int)tile.size()) == 0);
-  CHECK(vice_project(ctx) == 0);
-  double r = vice_last_residual(ctx);
+  // Tall band (one band = image height): the old "full image" path is just
+  // the stream engine with band_h = out_h.
+  int w = 4, h = 4, scale = 2, c = 3;
+  int out_w = w * scale, out_h = h * scale;
+  vice_stream_ctx* sctx = vice_stream_create(w, h, scale, c, out_h);
+  CHECK(sctx != nullptr);
+  std::vector<float> y((size_t)w * h * c, 0.4f);
+  CHECK(vice_stream_push_input_rows(sctx, y.data(), h) == 0);
+  CHECK(vice_stream_has_next_band(sctx) == 1);
+  std::vector<unsigned char> band((size_t)out_h * out_w * c);
+  int rows = 0;
+  int rc = vice_stream_pull_band(sctx, band.data(), &rows);
+  CHECK(rc == 1 && rows == out_h);
+  double r = vice_stream_last_residual(sctx);
   printf("residual=%g\n", r);
   CHECK(r < 1e-5);
   std::vector<unsigned char> png(10 * 1024 * 1024);
   size_t written = 0;
-  CHECK(vice_finish_png(ctx, png.data(), png.size(), &written) == 0);
+  CHECK(vice_stream_finish_png(sctx, band.data(), (int)band.size(), png.data(), png.size(),
+                              &written) == 0);
   CHECK(written > 8);
   CHECK(png[0] == 137 && png[1] == 80); // PNG sig
   printf("png bytes=%zu\n", written);
-  vice_destroy(ctx);
+  vice_stream_destroy(sctx);
 }
 
 static void test_icc_profile() {
-  vice_ctx* ctx = vice_create(4, 4, 2, 3);
-  CHECK(ctx);
-  std::vector<float> y(4 * 4 * 3, 0.4f);
-  CHECK(vice_set_input(ctx, y.data(), (int)y.size()) == 0);
+  int w = 4, h = 4, scale = 2, c = 3;
+  int out_w = w * scale, out_h = h * scale;
+  vice_stream_ctx* sctx = vice_stream_create(w, h, scale, c, out_h);
+  CHECK(sctx != nullptr);
+  std::vector<float> y((size_t)w * h * c, 0.4f);
+  CHECK(vice_stream_push_input_rows(sctx, y.data(), h) == 0);
   const unsigned char dummy_icc[] = {0x00, 0x01, 0x02, 0x03, 'I', 'C', 'C', 'P'};
-  CHECK(vice_set_icc_profile(ctx, dummy_icc, sizeof(dummy_icc)) == 0);
+  CHECK(vice_stream_set_icc_profile(sctx, dummy_icc, sizeof(dummy_icc)) == 0);
+  std::vector<unsigned char> band((size_t)out_h * out_w * c);
+  int rows = 0;
+  CHECK(vice_stream_pull_band(sctx, band.data(), &rows) == 1);
+  CHECK(rows == out_h);
   std::vector<unsigned char> png(1024 * 1024);
   size_t written = 0;
-  CHECK(vice_finish_png(ctx, png.data(), png.size(), &written) == 0);
+  CHECK(vice_stream_finish_png(sctx, band.data(), (int)band.size(), png.data(), png.size(),
+                              &written) == 0);
   // Search for "iCCP" chunk tag
   bool found_iccp = false;
   for (size_t i = 0; i + 4 <= written; i++) {
@@ -93,7 +107,7 @@ static void test_icc_profile() {
   }
   CHECK(found_iccp);
   printf("icc ok\n");
-  vice_destroy(ctx);
+  vice_stream_destroy(sctx);
 }
 
 static void test_color_roundtrip() {
@@ -157,80 +171,8 @@ static void test_upscale_lanczos_adaptive() {
         }
     printf("native upscale scale=%d exact_residual=%g\n", s, worst);
     CHECK(worst < 1e-5);
-
-    // Box downscale consistency on ctx
-    vice_ctx* ctx = vice_create(w, h, s, c);
-    CHECK(ctx);
-    CHECK(vice_set_input(ctx, src.data(), (int)src.size()) == 0);
-    CHECK(vice_upscale(ctx) == 0);
-    CHECK(vice_project(ctx) == 0);
-    double r = vice_last_residual(ctx);
-    CHECK(r < 0.005);
-    vice_destroy(ctx);
   }
   printf("upscale ok\n");
-}
-
-static void test_project_smooth() {
-  const int w = 24, h = 24, c = 3;
-  for (int s = 2; s <= 4; s++) {
-    std::vector<float> y((size_t)w * h * c);
-    for (int py = 0; py < h; py++)
-      for (int px = 0; px < w; px++)
-        for (int ch = 0; ch < c; ch++)
-          y[((size_t)py * w + px) * c + ch] =
-              0.2f + 0.5f * (float)(((px + ch) / 5 + py / 7) % 2) + 0.08f * std::sin(0.9f * px + 0.7f * py);
-    const int W = w * s, H = h * s;
-    std::vector<float> raw((size_t)W * H * c);
-    CHECK(vice_upscale_lanczos_adaptive(y.data(), w, h, c, s, raw.data()) == 0);
-    std::vector<float> box = raw, smooth = raw;
-    vice_project_box(y.data(), box.data(), w, h, s, c);
-    vice_project_smooth(y.data(), smooth.data(), w, h, s, c, VICE_SMOOTH_ITERS);
-    vice_project_box(y.data(), smooth.data(), w, h, s, c);
-    double worst = 0;
-    for (int by = 0; by < h; by++)
-      for (int bx = 0; bx < w; bx++)
-        for (int ch = 0; ch < c; ch++) {
-          double sum = 0;
-          for (int dy = 0; dy < s; dy++)
-            for (int dx = 0; dx < s; dx++)
-              sum += smooth[((size_t)(by * s + dy) * W + bx * s + dx) * c + ch];
-          worst = std::max(worst, std::abs(sum / (s * s) - y[((size_t)by * w + bx) * c + ch]));
-        }
-    double seam_box = vice_seam_ratio(box.data(), W, H, s, c);
-    double seam_smooth = vice_seam_ratio(smooth.data(), W, H, s, c);
-    printf("project_smooth s=%d worst=%g seam box=%.3f smooth=%.3f\n", s, worst,
-           seam_box, seam_smooth);
-    CHECK(worst < 1e-5);
-    // Tolerance 0.05: smooth+box usually beats box-only, but the margin depends
-    // on upscale tuning (sharpness/shock affect input edge energy). Guards against
-    // seam explosions, not sub-percent wiggles (shipped defaults: 0.35/0.35).
-    CHECK(seam_smooth <= seam_box + 0.05);
-  }
-}
-
-static void test_project_multigrid() {
-  int w = 16, h = 12, s = 2, c = 4;
-  int W = w * s, H = h * s;
-  std::vector<float> y(w * h * c), raw(W * H * c);
-  for (size_t i = 0; i < y.size(); i++) y[i] = (float)(i % 13) / 13.0f;
-  for (size_t i = 0; i < raw.size(); i++) raw[i] = (float)(i % 29) / 29.0f;
-  vice_project_multigrid(y.data(), raw.data(), w, h, s, c, 2);
-  double worst = 0;
-  for (int by = 0; by < h; by++) {
-    for (int bx = 0; bx < w; bx++) {
-      for (int ch = 0; ch < c; ch++) {
-        double sum = 0;
-        for (int dy = 0; dy < s; dy++)
-          for (int dx = 0; dx < s; dx++)
-            sum += raw[((size_t)(by * s + dy) * W + bx * s + dx) * c + ch];
-        double mean = sum / (s * s);
-        worst = std::max(worst, std::abs(mean - y[((size_t)by * w + bx) * c + ch]));
-      }
-    }
-  }
-  printf("multigrid worst=%g\n", worst);
-  CHECK(worst < 1e-5);
 }
 
 static void test_streaming_strip() {
@@ -317,10 +259,11 @@ static void test_stream_options() {
 
 static void test_transparency() {
   // White at 50% alpha: in linear premultiplied float space:
-  // RGB = 1.0 * 0.5 = 0.5, A = 0.5.
+  // RGB = 1.0 * 0.5 = 0.5, A = 0.5. Tall band render.
   int w = 4, h = 4, scale = 2, c = 4;
-  vice_ctx* ctx = vice_create(w, h, scale, c);
-  CHECK(ctx != nullptr);
+  int out_w = w * scale, out_h = h * scale;
+  vice_stream_ctx* sctx = vice_stream_create(w, h, scale, c, out_h);
+  CHECK(sctx != nullptr);
   std::vector<float> y((size_t)w * h * c);
   for (size_t i = 0; i < (size_t)w * h; ++i) {
     y[i * 4 + 0] = 0.5f;
@@ -328,18 +271,15 @@ static void test_transparency() {
     y[i * 4 + 2] = 0.5f;
     y[i * 4 + 3] = 0.5f;
   }
-  CHECK(vice_set_input(ctx, y.data(), (int)y.size()) == 0);
-  CHECK(vice_upscale(ctx) == 0);
-  CHECK(vice_project(ctx) == 0);
-
-  int out_w = w * scale;
-  std::vector<unsigned char> rows((size_t)64 * out_w * c);
+  CHECK(vice_stream_push_input_rows(sctx, y.data(), h) == 0);
+  std::vector<unsigned char> rows((size_t)out_h * out_w * c);
   int row_count = 0;
-  CHECK(vice_process_band(ctx, 0, rows.data(), &row_count) == 0);
-  CHECK(row_count == h * scale);
+  CHECK(vice_stream_pull_band(sctx, rows.data(), &row_count) == 1);
+  CHECK(row_count == out_h);
+  CHECK(vice_stream_last_residual(sctx) < 1e-5);
 
   // Check that white un-premultiplies back to ~255 and alpha is linearly ~128
-  for (int i = 0; i < out_w * (h * scale); ++i) {
+  for (int i = 0; i < out_w * out_h; ++i) {
     unsigned char r = rows[i * 4 + 0];
     unsigned char g = rows[i * 4 + 1];
     unsigned char b = rows[i * 4 + 2];
@@ -349,15 +289,16 @@ static void test_transparency() {
     CHECK(b >= 254 && b <= 255);
     CHECK(a >= 127 && a <= 128);
   }
-  vice_destroy(ctx);
+  vice_stream_destroy(sctx);
   printf("transparency ok\n");
 }
 
 static void test_saturated_residual() {
-  // Test image with pure black and fully saturated colors
+  // Test image with pure black and fully saturated colors, tall band render.
   int w = 8, h = 8, scale = 2, c = 3;
-  vice_ctx* ctx = vice_create(w, h, scale, c);
-  CHECK(ctx != nullptr);
+  int out_h = h * scale;
+  vice_stream_ctx* sctx = vice_stream_create(w, h, scale, c, out_h);
+  CHECK(sctx != nullptr);
   std::vector<float> y((size_t)w * h * c);
   for (int py = 0; py < h; ++py) {
     for (int px = 0; px < w; ++px) {
@@ -375,13 +316,16 @@ static void test_saturated_residual() {
       }
     }
   }
-  CHECK(vice_set_input(ctx, y.data(), (int)y.size()) == 0);
-  CHECK(vice_upscale(ctx) == 0);
-  CHECK(vice_project(ctx) == 0);
-  double r = vice_last_residual(ctx);
+  CHECK(vice_stream_push_input_rows(sctx, y.data(), h) == 0);
+  int out_w = w * scale;
+  std::vector<unsigned char> band((size_t)out_h * out_w * c);
+  int rows = 0;
+  CHECK(vice_stream_pull_band(sctx, band.data(), &rows) == 1);
+  CHECK(rows == out_h);
+  double r = vice_stream_last_residual(sctx);
   printf("saturated content residual=%g\n", r);
   CHECK(r <= 1.1e-7);
-  vice_destroy(ctx);
+  vice_stream_destroy(sctx);
   printf("saturated residual ok\n");
 }
 
@@ -880,8 +824,6 @@ int main() {
   test_color_roundtrip();
   test_metrics();
   test_upscale_lanczos_adaptive();
-  test_project_smooth();
-  test_project_multigrid();
   test_streaming_strip();
   test_stream_options();
   test_transparency();

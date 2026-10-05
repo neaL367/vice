@@ -1,14 +1,12 @@
 // Bundled at test time (bun build) and served via page.route; never shipped.
-// Runs the REAL WebGPU pipeline plus the TS reference mirror in-page so the
-// matrix below compares actual pixels. Skipped entirely when no adapter.
+// Runs the REAL WebGPU pipeline plus the WASM stream-engine reference in-page
+// so the matrix below compares actual pixels. Skipped entirely when no adapter.
 import { isWebGPUSupported } from "../../lib/webgpu/webgpu-support";
 import { runWebGPUUpscale } from "../../lib/webgpu/webgpu-upscaler";
-import { lanczosAdaptiveScale } from "../../lib/pipeline/kernels";
-import { projectClamp } from "../../lib/pipeline/projection";
-import {
-  BYTE_TO_LINEAR_LUT,
-  fastLinearToSrgb,
-} from "../../lib/pipeline/color";
+import { loadWasmModule } from "../../features/vice/engine/wasm-module";
+import { WasmMemory } from "../../features/vice/engine/wasm-memory";
+import { NativeStreamContext } from "../../features/vice/engine/stream-renderer";
+import { BYTE_TO_LINEAR_LUT } from "../../lib/pipeline/color";
 
 export interface WebGPUCaseResult {
   outW: number;
@@ -77,14 +75,29 @@ async function runCase(
   if (!gpu) throw new Error("webgpu pipeline returned null (over limits?)");
   const out = await decode(await gpu.blob);
 
-  // TS reference mirror on the same input (lanczos + full projectClamp).
+  // WASM stream-engine reference on the same input (the shipped path):
+  // both sides emit 8-bit sRGB bytes, so compare them directly.
   const lin = linearize(bytes, 8, 8);
-  const ref = lanczosAdaptiveScale(lin, 8, 8, 4, 2, {
-    dering: 1.0,
-    sharpness: 0.35,
-    shock: 0.35,
-  });
-  projectClamp(lin, ref, 8, 8, 2, 4);
+  const loaded = await loadWasmModule("/");
+  if (!loaded) throw new Error("webgpu probe needs the WASM core");
+  const mem = new WasmMemory(loaded.instance);
+  const sctx = NativeStreamContext.create(mem, 8, 8, 2, 4, 64);
+  const ref = new Uint8Array(16 * 16 * 4);
+  const bandAlloc = Math.ceil(64 / 2) * 2;
+  const bandPtr = mem.malloc(bandAlloc * 16 * 4);
+  let emitted = 0;
+  try {
+    sctx.pushInputRows(lin, 8);
+    while (emitted < 16) {
+      if (!sctx.hasNextBand()) throw new Error("stream stalled in probe");
+      const { rows } = sctx.pullBand(bandPtr, bandAlloc);
+      ref.set(mem.readBytes(bandPtr, rows * 16 * 4), emitted * 16 * 4);
+      emitted += rows;
+    }
+  } finally {
+    mem.free(bandPtr);
+    sctx.destroy();
+  }
 
   let left = 0;
   let right = 0;
@@ -105,7 +118,7 @@ async function runCase(
       }
       for (let ch = 0; ch < 3; ch++) {
         const got = out.data[i * 4 + ch] / 255;
-        const want = fastLinearToSrgb(Math.max(0, Math.min(1, ref[i * 4 + ch])));
+        const want = ref[i * 4 + ch] / 255;
         diff += Math.abs(got - want);
       }
     }

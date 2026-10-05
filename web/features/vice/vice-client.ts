@@ -180,7 +180,8 @@ function toRunRequest(
 /**
  * Universal job runner:
  * 1. Primary: Verified SIMD WASM Worker thread (owns full ICC preservation,
- *    exact multigrid/smooth/clamp-aware projection, and linear alpha un-premultiplication).
+ *    exact band-local smooth + clamp-aware box projection, and linear alpha
+ *    un-premultiplication).
  * 2. Fallback: WebGPU compute pipeline when Worker thread is unavailable.
  */
 export async function runViceJob(
