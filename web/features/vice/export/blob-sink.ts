@@ -20,7 +20,7 @@ export class BlobSink implements ChunkSink {
     this.builtBlob = new Blob(this.chunks as unknown as BlobPart[], { type: "image/png" });
   }
 
-  async abort(_reason?: unknown): Promise<void> {
+  async abort(): Promise<void> {
     this.closed = true;
     this.chunks.length = 0;
     this.totalBytes = 0;

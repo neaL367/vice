@@ -281,7 +281,6 @@ export const ComparisonHud = memo(function ComparisonHud() {
     zoom,
     zoomPreset,
     zoom1to1,
-    is1to1,
     applyZoom,
     setPixelMode,
     isPixelated,

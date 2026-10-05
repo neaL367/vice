@@ -10,7 +10,6 @@ import {
 } from "react";
 import type {
   ViceFile,
-  ViceResult,
   ViceScale,
 } from "../types/vice";
 import { initialJobState, viceJobReducer } from "../state/job-reducer";

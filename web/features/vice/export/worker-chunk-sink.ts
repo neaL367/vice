@@ -35,7 +35,7 @@ export class WorkerChunkSink implements ChunkSink {
     this.closed = true;
   }
 
-  async abort(_reason?: unknown): Promise<void> {
+  async abort(): Promise<void> {
     this.closed = true;
   }
 

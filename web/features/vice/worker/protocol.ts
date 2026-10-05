@@ -1,10 +1,6 @@
 // Versioned protocol contracts for Web Worker RPC boundary.
 
 import type {
-  ExportTarget,
-  Scale,
-} from "../contracts/render-contracts";
-import type {
   ViceProgress,
   ViceResultMeta,
   ViceScale,

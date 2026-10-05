@@ -27,7 +27,7 @@ export class PreviewAccumulator {
   }
 
   feedBand(bytes: Uint8Array, startRow: number, rowCount: number): void {
-    const { outW, outH, pW, pH, accSum, preview } = this;
+    const { outW, outH, pW, pH, accSum } = this;
     for (let r = 0; r < rowCount; r++) {
       const y = startRow + r;
       const py = Math.min(pH - 1, Math.floor((y * pH) / outH));

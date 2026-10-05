@@ -1,6 +1,6 @@
 "use client";
 
-import { startTransition, useCallback } from "react";
+import { startTransition, useCallback, useMemo } from "react";
 import type { ViceResult } from "../types/vice";
 import { useUpscaleWorkspace } from "./use-upscale-workspace";
 import { useUpscaleController } from "./use-upscale-controller";
@@ -57,9 +57,12 @@ export function useViceJob() {
     [dispatch, track],
   );
 
-  const currentTuning = {
-    chained4x: state.chained4x,
-  };
+  const currentTuning = useMemo(
+    () => ({
+      chained4x: state.chained4x,
+    }),
+    [state.chained4x],
+  );
 
   const run = useCallback(async () => {
     if (state.running || state.files.length === 0) return;
