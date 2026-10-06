@@ -38,19 +38,29 @@ test("studio shows input and produces output", async ({ page }) => {
   await page.getByRole("button", { name: "Upscale" }).click();
   await expect(page.getByText("Ready", { exact: false })).toBeVisible({ timeout: 90000 });
 
-  // Output canvas exists at 2x dims with non-blank pixels.
-  const out = await page.evaluate(() => {
-    const cs = [...document.querySelectorAll("canvas")];
-    const c = cs[cs.length - 1] as HTMLCanvasElement;
-    const d = c.getContext("2d")!.getImageData(0, 0, c.width, c.height).data;
-    let mn = 255;
-    let mx = 0;
-    for (let i = 0; i < d.length; i += 401) {
-      if (d[i] < mn) mn = d[i];
-      if (d[i] > mx) mx = d[i];
+  // Output canvas exists at 2x dims with non-blank pixels. The done commit
+  // is a transition: poll for the painted canvas instead of assuming it lands
+  // in the same frame as the Ready text.
+  const out = await (async () => {
+    for (let i = 0; i < 50; i++) {
+      const o = await page.evaluate(() => {
+        const cs = [...document.querySelectorAll("canvas")];
+        const c = cs[cs.length - 1] as HTMLCanvasElement;
+        if (c.width !== 1536) return null;
+        const d = c.getContext("2d")!.getImageData(0, 0, c.width, c.height).data;
+        let mn = 255;
+        let mx = 0;
+        for (let j = 0; j < d.length; j += 401) {
+          if (d[j] < mn) mn = d[j];
+          if (d[j] > mx) mx = d[j];
+        }
+        return { w: c.width, h: c.height, spread: mx - mn };
+      });
+      if (o) return o;
+      await page.waitForTimeout(200);
     }
-    return { w: c.width, h: c.height, spread: mx - mn };
-  });
+    throw new Error("output canvas never painted at 2x");
+  })();
   expect(out.w).toBe(1536);
   expect(out.h).toBe(1024);
   expect(out.spread).toBeGreaterThan(50);
