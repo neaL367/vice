@@ -54,6 +54,13 @@ test("studio shows input and produces output", async ({ page }) => {
   expect(out.w).toBe(1536);
   expect(out.h).toBe(1024);
   expect(out.spread).toBeGreaterThan(50);
+  // Dock never covers the image: stage bottom is at/above dock top.
+  const layout = await page.evaluate(() => {
+    const stage = document.querySelector('[role="slider"]')!.getBoundingClientRect();
+    const dock = document.querySelector('[aria-label="Scale"]')!.getBoundingClientRect();
+    return { stageBottom: stage.bottom, dockTop: dock.top };
+  });
+  expect(layout.stageBottom).toBeLessThanOrEqual(layout.dockTop + 1);
   // Comparison layers must align: identical display sizes.
   const aligned = await page.evaluate(() => {
     const cs = [...document.querySelectorAll("canvas")];
