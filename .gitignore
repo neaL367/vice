@@ -33,3 +33,10 @@ Vice_ Consistent Super-Resolution Upscaler, Implementation Guide.md
 *Guide*.md
 
 *.ppm
+
+# Local-only: agent skills, scratch work, docs, research (never push)
+.agents/
+.scratch/
+docs/
+research/
+skills-lock.json

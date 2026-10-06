@@ -1,8 +1,11 @@
 # Vice — Deterministic Image Enlargement Without AI
 
-Browser-local mathematical upscaler rebuilt from `research/`. No AI/ML, no
-uploads: a C++ engine compiles to WASM and runs in a Web Worker behind a
-single-surface comparison studio.
+Browser-local mathematical upscaler. No AI/ML, no uploads: a C++ engine
+compiles to WASM and runs in a Web Worker behind a single-surface
+comparison studio.
+
+> Research notes (`research/`), agent skills (`.agents/`), scratch work
+> (`.scratch/`), and `docs/` are local-only and never pushed — see `.gitignore`.
 
 ## Layout
 
