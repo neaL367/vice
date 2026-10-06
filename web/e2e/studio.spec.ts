@@ -348,20 +348,30 @@ test("divider spans the image height; Center recovers it at heavy zoom", async (
   await page.mouse.up();
   await slider.focus();
   for (let i = 0; i < 10; i++) await slider.press("ArrowRight");
-  // One tap on Center: divider back to 50 with the image recentered.
+  // One tap on Center: divider lands mid-viewport at the current pan/zoom
+  // (view never jumps), instead of resetting to the image center.
+  const beforeBox = await page.evaluate(() => {
+    const c = document.querySelectorAll("canvas")[0] as HTMLCanvasElement;
+    const r = c.getBoundingClientRect();
+    return { x: r.x, y: r.y };
+  });
   await page.getByRole("button", { name: "Center comparison divider" }).click();
-  await expect
-    .poll(async () => Number(await slider.getAttribute("aria-valuenow")), { timeout: 5000 })
-    .toBe(50);
   const vis = await page.evaluate(() => {
     const stage = document.querySelector('[role="slider"]')!.getBoundingClientRect();
     const line = document.querySelector('[data-testid="divider-line"]')!.getBoundingClientRect();
+    const c = document.querySelectorAll("canvas")[0] as HTMLCanvasElement;
+    const r = c.getBoundingClientRect();
     return {
-      inView: line.left >= stage.left && line.left <= stage.right,
+      mid: (line.left - stage.left) / stage.width,
       span: line.height,
+      img: { x: r.x, y: r.y },
     };
   });
-  expect(vis.inView).toBe(true);
+  expect(vis.mid).toBeGreaterThan(0.4);
+  expect(vis.mid).toBeLessThan(0.6);
+  // Image did not move: only the divider did.
+  expect(Math.abs(vis.img.x - beforeBox.x)).toBeLessThan(2);
+  expect(Math.abs(vis.img.y - beforeBox.y)).toBeLessThan(2);
   expect(vis.span).toBeGreaterThan(100);
   expect(errors).toEqual([]);
 });
