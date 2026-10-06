@@ -62,5 +62,8 @@ test("studio shows input and produces output", async ({ page }) => {
   });
   expect(Math.abs(aligned.w0 - aligned.w1)).toBeLessThan(2);
   expect(Math.abs(aligned.h0 - aligned.h1)).toBeLessThan(2);
+  // Layers must be visibly sized (regression: 1px canvases from unmeasured box).
+  expect(aligned.w0).toBeGreaterThan(100);
+  expect(aligned.h0).toBeGreaterThan(100);
   expect(errors).toEqual([]);
 });

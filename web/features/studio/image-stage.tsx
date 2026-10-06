@@ -4,8 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import type { StudioImage } from "./model";
 import { ImageViewport } from "./image-viewport";
 
-// Stage: owns transient view state (zoom/pan/split) and measures its box to
-// compute display sizes. Resets per image via key from the workspace.
+// Stage: full-bleed viewport filling its parent. Owns transient view state.
+// Overlays float: zoom pill bottom-right, reveal slider bottom strip.
 export function ImageStage({ input, result, working }: { input: StudioImage; result: StudioImage | null; working: boolean }) {
   const [split, setSplit] = useState(50);
   const [zoom, setZoom] = useState(1);
@@ -24,7 +24,6 @@ export function ImageStage({ input, result, working }: { input: StudioImage; res
     return () => ro.disconnect();
   }, []);
 
-  // Fit the INPUT (both layers share its display size, so splits align).
   const fit = box.w > 0 ? Math.min(box.w / input.w, box.h / input.h) : 1;
   const cssW = input.w * fit * zoom;
   const cssH = input.h * fit * zoom;
@@ -45,42 +44,37 @@ export function ImageStage({ input, result, working }: { input: StudioImage; res
   }
 
   return (
-    <div className="flex h-full flex-col">
-      <div
-        ref={boxRef}
-        className="relative min-h-[46vh] flex-1 touch-none select-none lg:min-h-[62vh]"
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={() => (drag.current = null)}
-        onDoubleClick={resetView}
-      >
-        <ImageViewport input={input} result={result} split={result ? split : 100} cssW={cssW} cssH={cssH} pan={pan} />
-        {result && (
-          <>
-            {/* Visible reveal grip riding the split line. */}
-            <div className="pointer-events-none absolute inset-y-0" style={{ left: `${split}%` }} aria-hidden="true">
-              <div className="h-full w-px bg-white/90 shadow-[0_0_12px_rgba(0,0,0,0.6)]" />
-              <div className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white/40 bg-black/70 px-2 py-1 text-[11px] text-white">
-                ⟷
-              </div>
-            </div>
-          </>
-        )}
-        {working && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/40">
-            <p className="font-display text-3xl text-white">Making it larger…</p>
+    <div
+      ref={boxRef}
+      className="relative h-full w-full touch-none overflow-hidden select-none"
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={() => (drag.current = null)}
+      onDoubleClick={resetView}
+    >
+      <ImageViewport input={input} result={result} split={result ? split : 100} cssW={cssW} cssH={cssH} pan={pan} />
+      {result && (
+        <div className="pointer-events-none absolute inset-y-0" style={{ left: `${split}%` }} aria-hidden="true">
+          <div className="h-full w-px bg-white/90 shadow-[0_0_12px_rgba(0,0,0,0.6)]" />
+          <div className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white/40 bg-black/70 px-2 py-1 text-[11px] text-white">
+            ⟷
           </div>
-        )}
-      </div>
-      <div className="flex items-center gap-3 border-t border-line-dark bg-[#1b1815] px-3 py-2 text-[13px] text-stone-300">
-        <div className="flex items-center gap-1" role="group" aria-label="Zoom">
-          <button className="rounded px-2 py-1 hover:bg-white/10" onClick={() => setZoom((z) => Math.max(1, z / 1.25))} aria-label="Zoom out">−</button>
-          <button className="rounded px-2 py-1 hover:bg-white/10" onClick={resetView} aria-label="Fit to view">Fit</button>
-          <button className="rounded px-2 py-1 hover:bg-white/10" onClick={() => setZoom((z) => Math.min(8, z * 1.25))} aria-label="Zoom in">+</button>
         </div>
-        {result ? (
-          <label className="ml-auto flex min-w-0 flex-1 items-center gap-2">
-            <span className="shrink-0 text-stone-400">Original</span>
+      )}
+      {working && (
+        <div className="absolute inset-0 flex items-center justify-center bg-black/40">
+          <p className="font-display text-3xl text-white">Making it larger…</p>
+        </div>
+      )}
+      <div className="absolute right-3 bottom-3 flex items-center gap-0.5 rounded-full bg-black/70 px-1 py-1 text-[13px] text-stone-200 backdrop-blur" role="group" aria-label="Zoom">
+        <button className="rounded-full px-2.5 py-1 hover:bg-white/10" onClick={() => setZoom((z) => Math.max(1, z / 1.25))} aria-label="Zoom out">−</button>
+        <button className="rounded-full px-2.5 py-1 hover:bg-white/10" onClick={resetView} aria-label="Fit to view">Fit</button>
+        <button className="rounded-full px-2.5 py-1 hover:bg-white/10" onClick={() => setZoom((z) => Math.min(8, z * 1.25))} aria-label="Zoom in">+</button>
+      </div>
+      {result && (
+        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/60 to-transparent px-4 pt-8 pb-3">
+          <label className="mx-auto flex max-w-xl items-center gap-3 text-[12px] text-stone-300">
+            <span className="shrink-0">Original</span>
             <input
               type="range"
               min={0}
@@ -90,12 +84,10 @@ export function ImageStage({ input, result, working }: { input: StudioImage; res
               className="w-full accent-[#e07856]"
               aria-label="Reveal comparison"
             />
-            <span className="shrink-0 text-stone-400">Enhanced</span>
+            <span className="shrink-0">Enhanced</span>
           </label>
-        ) : (
-          <span className="ml-auto text-stone-500">Upscale to compare</span>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }

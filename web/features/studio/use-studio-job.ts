@@ -83,15 +83,21 @@ export function useStudioJob() {
 
 export async function decodeFile(f: File): Promise<{ image: StudioImage; name: string }> {
   const bmp = await createImageBitmap(f);
-  const cap = 2048;
-  const k = Math.min(1, cap / Math.max(bmp.width, bmp.height));
-  const w = Math.max(1, Math.round(bmp.width * k));
-  const h = Math.max(1, Math.round(bmp.height * k));
-  const off = new OffscreenCanvas(w, h);
-  const ctx = off.getContext("2d")!;
-  ctx.drawImage(bmp, 0, 0, w, h);
-  const img = ctx.getImageData(0, 0, w, h);
-  const data = new Uint8ClampedArray(img.data.buffer as ArrayBuffer);
-  bmp.close();
-  return { image: { data, w, h }, name: f.name };
+  try {
+    const cap = 2048;
+    const k = Math.min(1, cap / Math.max(bmp.width, bmp.height));
+    const w = Math.max(1, Math.round(bmp.width * k));
+    const h = Math.max(1, Math.round(bmp.height * k));
+    const off = new OffscreenCanvas(w, h);
+    const ctx = off.getContext("2d", { willReadFrequently: true });
+    if (!ctx) throw new Error("no 2d context");
+    ctx.drawImage(bmp, 0, 0, w, h);
+    const img = ctx.getImageData(0, 0, w, h);
+    // Exact copy: getImageData buffers may be pooled/oversized, and ImageData
+    // requires length === 4wh exactly. A view over a pooled buffer throws.
+    const data = new Uint8ClampedArray(img.data);
+    return { image: { data: data as Uint8ClampedArray<ArrayBuffer>, w, h }, name: f.name };
+  } finally {
+    bmp.close();
+  }
 }
