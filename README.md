@@ -1,6 +1,6 @@
-# Vice — Deterministic Image Enlargement Without AI
+# Vice — Deterministic Image Enlargement
 
-Browser-local mathematical upscaler. No AI/ML, no uploads: a C++ engine
+Browser-local mathematical upscaler: a C++ engine
 compiles to WASM and runs in a Web Worker behind a single-surface
 comparison studio.
 
