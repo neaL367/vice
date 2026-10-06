@@ -143,3 +143,53 @@ test("invalid file shows a human error, not a crash", async ({ page }) => {
   await expect(page.getByText("isn't an image")).toBeVisible();
   expect(errors).toEqual([]);
 });
+
+test("portrait image fits, layers register, divider moves freely", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  await page.goto("/");
+  // kodim04.png is 512x768 portrait.
+  const photo = path.resolve(__dirname, "../../tools/eval/data/photos/kodim04.png");
+  await page.locator('input[type="file"]').first().setInputFiles(photo);
+  await page.getByRole("button", { name: "Upscale" }).click();
+  await expect(page.getByText("Ready", { exact: false })).toBeVisible({ timeout: 90000 });
+
+  const rects = () =>
+    page.evaluate(() => {
+      const cs = [...document.querySelectorAll("canvas")];
+      const stage = document.querySelector('[role="slider"]')!.getBoundingClientRect();
+      const r = cs.map((c) => c.getBoundingClientRect());
+      return {
+        stage: { w: stage.width, h: stage.height },
+        in: { x: r[0].x, y: r[0].y, w: r[0].width, h: r[0].height },
+        out: { x: r[1].x, y: r[1].y, w: r[1].width, h: r[1].height },
+      };
+    });
+  const a = await rects();
+  // Fit inside the stage.
+  expect(a.in.w).toBeLessThanOrEqual(a.stage.w + 1);
+  expect(a.in.h).toBeLessThanOrEqual(a.stage.h + 1);
+  expect(a.in.w).toBeGreaterThan(50);
+  // Layers share one rect.
+  for (const k of ["x", "y", "w", "h"] as const) {
+    expect(Math.abs(a.in[k] - a.out[k])).toBeLessThan(2);
+  }
+
+  // Divider left→right→left: clip changes, image rects never move.
+  const slider = page.getByLabel("Reveal comparison");
+  const at = () => slider.getAttribute("aria-valuenow").then(Number);
+  await slider.focus();
+  for (let i = 0; i < 12; i++) await slider.press("ArrowRight");
+  expect(await at()).toBeGreaterThan(80);
+  const b = await rects();
+  for (let i = 0; i < 22; i++) await slider.press("ArrowLeft");
+  expect(await at()).toBeLessThan(20);
+  const c = await rects();
+  for (const r of [b, c]) {
+    for (const k of ["x", "y", "w", "h"] as const) {
+      expect(Math.abs(r.in[k] - a.in[k])).toBeLessThan(2);
+      expect(Math.abs(r.in[k] - r.out[k])).toBeLessThan(2);
+    }
+  }
+  expect(errors).toEqual([]);
+});

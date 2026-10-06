@@ -2,21 +2,27 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { StudioImage } from "./model";
-import { ImageViewport } from "./image-viewport";
+import { ComparisonViewport } from "./image-viewport";
+import {
+  calculateFit,
+  calculateRect,
+  dividerViewportX,
+  fractionFromViewportX,
+  hundredPercentZoom,
+} from "./geometry";
 
 const DRAG_THRESHOLD = 6;
 
-// One gesture surface: at fit, press-drag reveals (tap toggles full compare);
-// zoomed, drag pans. Wheel zooms around the cursor (covers trackpad pinch).
-// The container is the accessible slider (arrows move split, 0 resets).
+// Canonical state: {viewport(box), image, zoom, pan, fraction}. Everything
+// else derives via geometry.ts — no duplicated rects, no sync effects.
 export function ImageStage({ input, result, working }: { input: StudioImage; result: StudioImage | null; working: boolean }) {
-  const [split, setSplit] = useState(50);
+  const [fraction, setFraction] = useState(0.5);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [box, setBox] = useState({ w: 0, h: 0 });
   const [dragging, setDragging] = useState(false);
   const boxRef = useRef<HTMLDivElement>(null);
-  const gesture = useRef<{ mode: "maybe-split" | "split" | "pan"; sx: number; sy: number; px: number; py: number } | null>(null);
+  const gesture = useRef<{ mode: "maybe-split" | "split" | "pan"; sx: number; sy: number } | null>(null);
 
   useEffect(() => {
     const el = boxRef.current!;
@@ -28,22 +34,21 @@ export function ImageStage({ input, result, working }: { input: StudioImage; res
     return () => ro.disconnect();
   }, []);
 
-  const fit = box.w > 0 ? Math.min(box.w / input.w, box.h / input.h) : 1;
-  const cssW = input.w * fit * zoom;
-  const cssH = input.h * fit * zoom;
+  const fit = calculateFit(box.w, box.h, input.w, input.h);
+  const rect = calculateRect(fit, box.w, box.h, zoom, pan);
   const zoomed = zoom > 1;
 
-  function splitFromClientX(clientX: number) {
+  function fractionAt(clientX: number) {
     const r = boxRef.current!.getBoundingClientRect();
-    setSplit(Math.min(100, Math.max(0, ((clientX - r.left) / r.width) * 100)));
+    return fractionFromViewportX(rect, clientX - r.left);
   }
 
   function onPointerDown(e: React.PointerEvent) {
     if (e.button !== 0 || working) return;
     if (zoomed) {
-      gesture.current = { mode: "pan", sx: e.clientX - pan.x, sy: e.clientY - pan.y, px: e.clientX, py: e.clientY };
+      gesture.current = { mode: "pan", sx: e.clientX - pan.x, sy: e.clientY - pan.y };
     } else if (result) {
-      gesture.current = { mode: "maybe-split", sx: e.clientX, sy: e.clientY, px: e.clientX, py: e.clientY };
+      gesture.current = { mode: "maybe-split", sx: e.clientX, sy: e.clientY };
     } else {
       return;
     }
@@ -55,15 +60,15 @@ export function ImageStage({ input, result, working }: { input: StudioImage; res
         if (Math.hypot(ev.clientX - g.sx, ev.clientY - g.sy) < DRAG_THRESHOLD) return;
         g.mode = "split";
       }
-      if (g.mode === "split") splitFromClientX(ev.clientX);
-      else setPan({ x: ev.clientX - g.sx, y: ev.clientY - g.sy });
+      if (g.mode === "split") {
+        const r = boxRef.current!.getBoundingClientRect();
+        setFraction(fractionFromViewportX(rect, ev.clientX - r.left));
+      } else setPan({ x: ev.clientX - g.sx, y: ev.clientY - g.sy });
     };
     const up = (ev: PointerEvent) => {
       const g = gesture.current;
       if (g?.mode === "maybe-split") {
-        // Plain tap toggles full compare (click/tap comparison pattern).
-        const r = boxRef.current!.getBoundingClientRect();
-        setSplit((ev.clientX - r.left) / r.width < 0.5 ? 0 : 100);
+        setFraction(fractionAt(ev.clientX) < 0.5 ? 0 : 1);
       }
       gesture.current = null;
       setDragging(false);
@@ -75,16 +80,14 @@ export function ImageStage({ input, result, working }: { input: StudioImage; res
   }
 
   function onWheel(e: React.WheelEvent) {
-    // No preventDefault: the page never scrolls (fixed viewport shell), and
-    // React wheel listeners are passive. Plain wheel zooms; trackpad pinch
-    // arrives as ctrl+wheel and takes the same path.
+    // Page never scrolls (fixed viewport shell); plain wheel zooms, trackpad
+    // pinch arrives as ctrl+wheel on the same path. Cursor-anchored.
     if (working) return;
     const r = boxRef.current!.getBoundingClientRect();
-    // Cursor position relative to container center (the transform origin).
     const cx = e.clientX - (r.left + r.width / 2);
     const cy = e.clientY - (r.top + r.height / 2);
     setZoom((z) => {
-      const z2 = Math.min(8, Math.max(1, z * Math.exp(-e.deltaY * 0.0015)));
+      const z2 = Math.min(32, Math.max(1, z * Math.exp(-e.deltaY * 0.0015)));
       if (z2 !== z) {
         setPan((p) => ({ x: cx - ((cx - p.x) * z2) / z, y: cy - ((cy - p.y) * z2) / z }));
       }
@@ -94,9 +97,11 @@ export function ImageStage({ input, result, working }: { input: StudioImage; res
 
   function onKeyDown(e: React.KeyboardEvent) {
     if (!result) return;
-    if (e.key === "ArrowLeft") setSplit((s) => Math.max(0, s - 4));
-    else if (e.key === "ArrowRight") setSplit((s) => Math.min(100, s + 4));
+    if (e.key === "ArrowLeft") setFraction((s) => Math.max(0, s - 0.04));
+    else if (e.key === "ArrowRight") setFraction((s) => Math.min(1, s + 0.04));
     else if (e.key === "0" || e.key === "Escape") resetView();
+    else if (e.key === "+" || e.key === "=") setZoom((z) => Math.min(32, z * 1.25));
+    else if (e.key === "-") setZoom((z) => Math.max(1, z / 1.25));
     else return;
     e.preventDefault();
   }
@@ -104,27 +109,34 @@ export function ImageStage({ input, result, working }: { input: StudioImage; res
   function resetView() {
     setZoom(1);
     setPan({ x: 0, y: 0 });
-    setSplit(50);
+    setFraction(0.5);
   }
+
+  function zoomToHundred() {
+    setPan({ x: 0, y: 0 });
+    setZoom(hundredPercentZoom(fit, input.w));
+  }
+
+  const dividerX = dividerViewportX(rect, fraction);
 
   return (
     <div
       ref={boxRef}
-      className={`relative h-full w-full overflow-hidden outline-none select-none ${zoomed || dragging ? "touch-none" : ""}`}
+      className={`relative h-full w-full overflow-hidden bg-[#0c0b0a] outline-none select-none ${zoomed || dragging ? "touch-none" : ""}`}
       onPointerDown={onPointerDown}
       onWheel={onWheel}
       onDoubleClick={resetView}
-      onKeyDown={onKeyDown}
       tabIndex={0}
       role={result ? "slider" : undefined}
       aria-label={result ? "Reveal comparison" : undefined}
       aria-valuemin={result ? 0 : undefined}
       aria-valuemax={result ? 100 : undefined}
-      aria-valuenow={result ? Math.round(split) : undefined}
+      aria-valuenow={result ? Math.round(fraction * 100) : undefined}
+      onKeyDown={onKeyDown}
     >
-      <ImageViewport input={input} result={result} split={result ? split : 100} cssW={cssW} cssH={cssH} pan={pan} />
+      <ComparisonViewport input={input} result={result} rect={rect} fraction={result ? fraction : 1} />
       {result && (
-        <div className="pointer-events-none absolute inset-y-0" style={{ left: `${split}%` }} aria-hidden="true">
+        <div className="pointer-events-none absolute inset-y-0" style={{ left: `${dividerX}px` }} aria-hidden="true">
           <div className="h-full w-px bg-white/90 shadow-[0_0_12px_rgba(0,0,0,0.6)]" />
         </div>
       )}
@@ -140,8 +152,9 @@ export function ImageStage({ input, result, working }: { input: StudioImage; res
         onPointerDown={(e) => e.stopPropagation()}
       >
         <button className="rounded-full px-2.5 py-1 hover:bg-white/10" onClick={() => setZoom((z) => Math.max(1, z / 1.25))} aria-label="Zoom out">−</button>
+        <button className="rounded-full px-2.5 py-1 hover:bg-white/10" onClick={zoomToHundred} aria-label="100 percent">1:1</button>
         <button className="rounded-full px-2.5 py-1 hover:bg-white/10" onClick={resetView} aria-label="Fit to view">Fit</button>
-        <button className="rounded-full px-2.5 py-1 hover:bg-white/10" onClick={() => setZoom((z) => Math.min(8, z * 1.25))} aria-label="Zoom in">+</button>
+        <button className="rounded-full px-2.5 py-1 hover:bg-white/10" onClick={() => setZoom((z) => Math.min(32, z * 1.25))} aria-label="Zoom in">+</button>
       </div>
       {result && (
         <div className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-between px-4 text-[11px] tracking-widest text-white/70 uppercase" aria-hidden="true">
