@@ -9,7 +9,7 @@ import { allFixtures } from "./adversarial.ts";
 import { adaptiveWeights, describeFor, varianceClassify } from "./adaptive.ts";
 import { boxDownsample, forwardResidual } from "./forward.ts";
 import { reconstructIbp } from "./ibp.ts";
-import { upsample, type GrayImage, type KernelName } from "./kernels.ts";
+import { upsample, upsampleAniso, type GrayImage, type KernelName } from "./kernels.ts";
 import { computeDescriptors } from "./descriptors.ts";
 import { gradientError, psnr, ringing, ssimLite } from "./metrics.ts";
 
@@ -51,6 +51,10 @@ for (const f of allFixtures()) {
     const wVar = adaptiveWeights(desc, varianceClassify(desc), sigma, s, undefined, "variance");
     const d = computeDescriptors(lr);
     const steer = { w: lr.w, h: lr.h, dirX: d.dirX, dirY: d.dirY, coh: d.coh };
+    // Aniso-x0 edge gate (iter-10): coh·gnorm·curv — smooth ramps bypass.
+    const edge = new Float64Array(d.coh.length);
+    for (let i = 0; i < edge.length; i++) edge[i] = d.coh[i] * Math.min(1, d.gnorm[i] * 2) * Math.min(1, d.curv[i] / 0.1);
+    const anisoField = { w: lr.w, h: lr.h, dirX: d.dirX, dirY: d.dirY, coh: edge };
     const methods: { name: string; run: () => { w: number; h: number; data: Float64Array } }[] = [
       ...KERNELS.map((k) => ({ name: k, run: () => upsample(lr, s, k) })),
       { name: "ibp-uniform", run: () => reconstructIbp(lr, s, { iters: 4 }).x },
@@ -61,6 +65,8 @@ for (const f of allFixtures()) {
       { name: "ibp-lz2p", run: () => reconstructIbp(lr, s, { iters: 4, steerP: { field: steer, strength: 0, sharp: 2 } }).x },
       // Directional P (iter-8): steered correction; killed verdict, kept measured.
       { name: "ibp-dir", run: () => reconstructIbp(lr, s, { iters: 4, steerP: { field: steer, strength: 0.75, sharp: 2 } }).x },
+      // Aniso-x0 (iter-10): mild directional init (rAcross 2.25, curv-gated).
+      { name: "ibp-aniso", run: () => reconstructIbp(lr, s, { iters: 4, x0: upsampleAniso(lr, s, anisoField, { rAlong: 3, rAcross: 2.25 }) }).x },
     ];
     for (const m of methods) {
       const t0 = performance.now();

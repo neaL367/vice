@@ -10,7 +10,8 @@ import { tvDenoiseMap } from "./tv.ts";
 
 export interface IbpOptions {
   iters?: number; // T ≤ 5 default 4 (matches VICE_SMOOTH_ITERS spirit)
-  init?: KernelName; // x₀ kernel
+  init?: KernelName; // x₀ kernel (ignored when x0 given)
+  x0?: GrayImage | null; // explicit initial estimate (e.g. anisotropic); default null
   project?: boolean; // exact box Π each pass (range guarantee)
   clamp?: boolean; // overshoot clamp to global [minLR,maxLR] each pass
   gain?: number; // back-projection step (1.0 default; convergence needs ≤ ~1)
@@ -64,14 +65,14 @@ export function reconstructIbp(
   opts: IbpOptions = {},
   weights: Float64Array | null = null,
 ): IbpResult {
-  const { iters = 4, init = "lanczos3", project = true, clamp = true, gain = 1, blurSigma = 0, steerP = null, tvMap = null } = opts;
+  const { iters = 4, init = "lanczos3", x0 = null, project = true, clamp = true, gain = 1, blurSigma = 0, steerP = null, tvMap = null } = opts;
   let lo = Infinity;
   let hi = -Infinity;
   for (const v of lr.data) {
     if (v < lo) lo = v;
     if (v > hi) hi = v;
   }
-  let x = upsample(lr, scale, init);
+  let x = x0 ?? upsample(lr, scale, init);
   const residuals: number[] = [forwardResidual(x, lr, scale, blurSigma)];
   for (let t = 0; t < iters; t++) {
     const pred = simulateForward(x, scale, { blurSigma });

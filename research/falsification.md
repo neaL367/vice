@@ -98,10 +98,16 @@ Standing result: tight global clamp is the right policy (block/step/jpeg gains u
 - lrc-proj top-or-tied in all 8 blocks, both domains. Linear-light gaps larger (2x box: +0.39 over lanczos3) — shadows weighted up, same ordering.
 - Locked: `photos.test.ts` bicubic-D test (lrc-proj ≥ lanczos3 per photo); `forward.test.ts` documents box/bicubic disagreement near edges (mismatch is real, just harmless here).
 
-## What survives to iter 10
+## Iter-10 findings: anisotropic x0 HELPS smooth/sine, HURTS blocks — bidirectional, not default
 
-- Reference engine + battery (16 families) + photo + matrix + full-set harnesses + TV module: keep. Portable result unchanged: guarded uniform loop.
-- `tvMap` manual primitive (zeros-bypass exact); directional-P manual option. Neither adopted, both tested.
-- Next: anisotropic reconstruction kernels (last unexplored brief item with teeth); or writeup + retro if the arc is judged complete.
-- Killed (13 entries): prior 11 + uniform TV-IBP adoption + osc-gated TV.
-- C++/WASM port gate: LOOP-MET vs fixed kernels; ADAPTIVE-UNMET vs uniform; PORT DECISION PENDING same-harness vs shipped proj (needs core from history).
+- Mechanism: per-pixel tangent-frame lanczos (`rAlong × rAcross`, renormalized), edge gate = coh·gnorm·curv (ramps bypass via curvature — same lesson as iter-2). Aggressive rAcross=1.25 distorts sine (−5.1 zone PSNR on surrogate patch); mild 2.25 wins all surrogate zones (+0.3–1.0).
+- Loop-vs-loop (rAcross 2.25, hard gate): gradient +0.64/+1.43, periodic-2x +0.9, sine-sweep +0.1–0.2, jpeg +0.1–0.3, surrogate-2x +0.56; losses: repeated-4x −1.09, surrogate-4x −0.48, step −0.1–0.2. Same content-dependent sign as every other knob.
+- Verdict: WEAK-SURVIVE as manual option (`x0` passthrough in `reconstructIbp`, tested bit-exact); not default. Locked: gradient-4x win, surrogate-2x win, bounded-loss kill-switch (step-2x/repeated-4x within 1.2 dB).
+- Killed list: 14 entries (+ aggressive-aniso rAcross≤1.5 as default).
+
+## What survives to iter 11
+
+- Reference engine + battery (16) + photo + matrix + full-set harnesses + TV + aniso modules: keep. Portable result unchanged: guarded uniform loop (bilinear-P, tight clamp, Π, lanczos3 init).
+- Manual options (tested, not default): adaptive weights, directional-P, aniso-x0, TV map.
+- Next: writeup + retro if arc judged complete; C++ port only behind gate (needs core from history for same-harness comparison).
+- Killed (14 entries).

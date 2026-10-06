@@ -20,6 +20,11 @@ function sinc(x: number): number {
   return Math.sin(px) / px;
 }
 
+function lanczosA(a: number, x: number): number {
+  const ax = Math.abs(x);
+  return ax < a ? sinc(x) * sinc(x / a) : 0;
+}
+
 export function kernelWeight(name: KernelName, x: number): number {
   const ax = Math.abs(x);
   switch (name) {
@@ -170,6 +175,68 @@ export function downsampleKernel(hr: GrayImage, s: number, name: KernelName): Gr
 
 export function constantImage(w: number, h: number, v: number): GrayImage {
   return { w, h, data: new Float64Array(w * h).fill(v) };
+}
+
+export interface AnisoParams {
+  rAlong: number; // support along edge tangent (3 = lanczos3)
+  rAcross: number; // support across edge (smaller = sharper transitions)
+}
+
+/**
+ * Anisotropic reconstruction (iter-10): per-pixel lanczos in the tangent
+ * frame, support (rAlong × rAcross), renormalized. coh=0 reproduces
+ * isotropic lanczos-rAlong. Sharp across edges (short support cuts ringing
+ * tails), smooth along them (long support averages stairsteps).
+ * Blend is per-pixel by edge confidence: radii interpolate
+ * r = rIso + edge·(rAniso − rIso) with rIso = rAlong.
+ */
+export function upsampleAniso(
+  src: GrayImage,
+  scale: number,
+  field: SteerField,
+  params: AnisoParams,
+): GrayImage {
+  if (!Number.isInteger(scale) || scale < 2 || scale > 4) throw new Error(`unsupported scale ${scale}`);
+  if (field.w !== src.w || field.h !== src.h) throw new Error("steer field size mismatch");
+  const ow = src.w * scale;
+  const oh = src.h * scale;
+  const out = new Float64Array(ow * oh);
+  const at = (x: number, y: number) => src.data[Math.min(src.h - 1, Math.max(0, y)) * src.w + Math.min(src.w - 1, Math.max(0, x))];
+  for (let oy = 0; oy < oh; oy++) {
+    for (let ox = 0; ox < ow; ox++) {
+      const cx = (ox + 0.5) / scale - 0.5;
+      const cy = (oy + 0.5) / scale - 0.5;
+      const nx = Math.min(src.w - 1, Math.max(0, Math.round(cx)));
+      const ny = Math.min(src.h - 1, Math.max(0, Math.round(cy)));
+      const ni = ny * src.w + nx;
+      // Caller gates via field.coh (pass edge confidence, not raw coherence).
+      const edge = Math.min(1, Math.max(0, field.coh[ni]));
+      const gx = field.dirX[ni];
+      const gy = field.dirY[ni];
+      // Tangent (tx,ty) and normal (gx,gy) frame.
+      const tx = -gy;
+      const ty = gx;
+      const rA = params.rAlong;
+      const rC = rA + edge * (params.rAcross - rA);
+      const R = Math.max(rA, rC);
+      let acc = 0;
+      let wsum = 0;
+      for (let iy = Math.floor(cy - R); iy <= Math.ceil(cy + R); iy++) {
+        for (let ix = Math.floor(cx - R); ix <= Math.ceil(cx + R); ix++) {
+          const dx = cx - ix;
+          const dy = cy - iy;
+          const along = dx * tx + dy * ty;
+          const across = dx * gx + dy * gy;
+          const w = lanczosA(rA, along) * lanczosA(rC, across);
+          if (w === 0) continue;
+          acc += at(ix, iy) * w;
+          wsum += w;
+        }
+      }
+      out[oy * ow + ox] = wsum !== 0 ? acc / wsum : 0;
+    }
+  }
+  return { w: ow, h: oh, data: out };
 }
 
 export interface SteerField {
