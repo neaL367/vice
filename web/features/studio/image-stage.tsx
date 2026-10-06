@@ -4,15 +4,15 @@ import { useEffect, useRef, useState } from "react";
 import type { StudioImage } from "./model";
 import { ImageViewport } from "./image-viewport";
 
-// Stage: full-bleed viewport filling its parent. Owns transient view state.
-// Overlays float: zoom pill bottom-right, reveal slider bottom strip.
+// Stage: fills its parent. Zoom pill floats top-right (never collides with the
+// bottom reveal strip). touch-action is disabled only while zoomed so the
+// reveal slider and page scroll keep working on touch.
 export function ImageStage({ input, result, working }: { input: StudioImage; result: StudioImage | null; working: boolean }) {
   const [split, setSplit] = useState(50);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [box, setBox] = useState({ w: 0, h: 0 });
   const boxRef = useRef<HTMLDivElement>(null);
-  const drag = useRef<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
     const el = boxRef.current!;
@@ -27,15 +27,19 @@ export function ImageStage({ input, result, working }: { input: StudioImage; res
   const fit = box.w > 0 ? Math.min(box.w / input.w, box.h / input.h) : 1;
   const cssW = input.w * fit * zoom;
   const cssH = input.h * fit * zoom;
+  const zoomed = zoom > 1;
 
   function onPointerDown(e: React.PointerEvent) {
-    if (zoom <= 1) return;
-    drag.current = { x: e.clientX - pan.x, y: e.clientY - pan.y };
-    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
-  }
-  function onPointerMove(e: React.PointerEvent) {
-    if (!drag.current) return;
-    setPan({ x: e.clientX - drag.current.x, y: e.clientY - drag.current.y });
+    if (!zoomed) return;
+    const sx = e.clientX - pan.x;
+    const sy = e.clientY - pan.y;
+    const move = (ev: PointerEvent) => setPan({ x: ev.clientX - sx, y: ev.clientY - sy });
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
   }
   function resetView() {
     setZoom(1);
@@ -46,10 +50,8 @@ export function ImageStage({ input, result, working }: { input: StudioImage; res
   return (
     <div
       ref={boxRef}
-      className="relative h-full w-full touch-none overflow-hidden select-none"
+      className={`relative h-full w-full overflow-hidden select-none ${zoomed ? "touch-none" : ""}`}
       onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={() => (drag.current = null)}
       onDoubleClick={resetView}
     >
       <ImageViewport input={input} result={result} split={result ? split : 100} cssW={cssW} cssH={cssH} pan={pan} />
@@ -66,13 +68,13 @@ export function ImageStage({ input, result, working }: { input: StudioImage; res
           <p className="font-display text-3xl text-white">Making it larger…</p>
         </div>
       )}
-      <div className="absolute right-3 bottom-3 flex items-center gap-0.5 rounded-full bg-black/70 px-1 py-1 text-[13px] text-stone-200 backdrop-blur" role="group" aria-label="Zoom">
+      <div className="absolute top-3 right-3 flex items-center gap-0.5 rounded-full bg-black/70 px-1 py-1 text-[13px] text-stone-200" role="group" aria-label="Zoom" onPointerDown={(e) => e.stopPropagation()}>
         <button className="rounded-full px-2.5 py-1 hover:bg-white/10" onClick={() => setZoom((z) => Math.max(1, z / 1.25))} aria-label="Zoom out">−</button>
         <button className="rounded-full px-2.5 py-1 hover:bg-white/10" onClick={resetView} aria-label="Fit to view">Fit</button>
         <button className="rounded-full px-2.5 py-1 hover:bg-white/10" onClick={() => setZoom((z) => Math.min(8, z * 1.25))} aria-label="Zoom in">+</button>
       </div>
       {result && (
-        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/60 to-transparent px-4 pt-8 pb-3">
+        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/60 to-transparent px-4 pt-8 pb-3" onPointerDown={(e) => e.stopPropagation()}>
           <label className="mx-auto flex max-w-xl items-center gap-3 text-[12px] text-stone-300">
             <span className="shrink-0">Original</span>
             <input
