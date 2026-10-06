@@ -7,17 +7,20 @@ import { ImageStage } from "./image-stage";
 import type { StudioImage } from "./model";
 import { decodeFile, useStudioJob } from "./use-studio-job";
 
-// Workspace owns the job; transform state stays inside ImageStage (keyed per
-// image so a new upload resets the view). Scale lives here: controls and
-// output dims both derive from it.
+// Workspace: full-viewport stage with floating control pill. Job state owned
+// here; transform state inside ImageStage (keyed per image); scale here.
 export function Workspace() {
   const { job, openImage, reset, upscale } = useStudioJob();
   const [scale, setScale] = useState<2 | 3 | 4>(2);
 
   async function take(f: File | undefined) {
     if (!f || !f.type.startsWith("image/")) return;
-    const { image, name } = await decodeFile(f);
-    openImage(image, name);
+    try {
+      const { image, name } = await decodeFile(f);
+      openImage(image, name);
+    } catch {
+      // Dropzone surfaces its own errors; the header picker stays silent-safe.
+    }
   }
 
   function download(out: StudioImage, name: string, s: number) {
@@ -37,62 +40,59 @@ export function Workspace() {
 
   if (job.kind === "idle") {
     return (
-      <Dropzone
-        onImage={(img, name) => {
-          openImage(img, name);
-        }}
-      />
+      <div className="flex min-h-0 flex-1 flex-col">
+        <Dropzone onImage={openImage} />
+      </div>
     );
   }
 
   const input = job.input;
   if (!input) {
     return (
-      <p role="alert" className="text-[14px] text-accent">
+      <p role="alert" className="p-6 text-[14px] text-[#e07856]">
         We couldn&apos;t process this image. <button className="underline" onClick={reset}>Try another image</button>
       </p>
     );
   }
   const result = job.kind === "done" ? job.output : null;
   const working = job.kind === "working";
-  const dims = (i: StudioImage) => `${i.w}×${i.h}`;
   const outDims = `${input.w * scale}×${input.h * scale}`;
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="vx-rise min-h-[46vh] overflow-hidden rounded-2xl border border-white/10 bg-[#0c0b0a] lg:min-h-[62vh]" data-enter="true">
-        <ImageStage
-          key={`${job.name}-${input.w}x${input.h}`}
-          input={input}
-          result={result}
-          working={working}
-        />
-      </div>
+    <div className="relative min-h-0 flex-1">
+      <ImageStage
+        key={`${job.name}-${input.w}x${input.h}`}
+        input={input}
+        result={result}
+        working={working}
+      />
+      {job.kind === "done" && (
+        <p className="absolute top-3 right-4 font-mono text-[11px] text-stone-400 tabular-nums">
+          Ready · {job.output.w}×{job.output.h} · {job.ms.toFixed(0)} ms · {job.residual.toExponential(1)}
+        </p>
+      )}
       {job.kind === "error" && (
-        <p role="alert" className="text-[14px] text-[#e07856]">
+        <p role="alert" className="absolute top-3 left-1/2 -translate-x-1/2 rounded-full bg-black/70 px-4 py-1.5 text-[13px] text-[#e07856]">
           {job.message} <button className="underline" onClick={reset}>Try another image</button>
         </p>
       )}
-      <Controls
-        scale={scale}
-        setScale={setScale}
-        inDims={dims(input)}
-        outDims={outDims}
-        canRun={job.kind === "ready" || job.kind === "done"}
-        working={working}
-        canDownload={job.kind === "done"}
-        onUpscale={() => void upscale(scale)}
-        onDownload={() => {
-          if (job.kind === "done") download(job.output, job.name, job.scale);
-        }}
-      />
-      {job.kind === "done" && (
-        <p className="font-mono text-[12px] text-stone-500 tabular-nums">
-          Ready · {job.output.w}×{job.output.h} · {job.ms.toFixed(0)} ms · residual {job.residual.toExponential(1)}
-        </p>
-      )}
-      <div className="flex gap-4 text-[13px] text-stone-500">
-        <label className="cursor-pointer hover:text-stone-300 hover:underline">
+      <div className="absolute bottom-12 left-1/2 -translate-x-1/2 sm:bottom-4">
+        <Controls
+          scale={scale}
+          setScale={setScale}
+          inDims={`${input.w}×${input.h}`}
+          outDims={outDims}
+          canRun={job.kind === "ready" || job.kind === "done"}
+          working={working}
+          canDownload={job.kind === "done"}
+          onUpscale={() => void upscale(scale)}
+          onDownload={() => {
+            if (job.kind === "done") download(job.output, job.name, job.scale);
+          }}
+        />
+      </div>
+      <div className="absolute top-3 left-4 flex gap-4 text-[13px] text-stone-500">
+        <label className="cursor-pointer hover:text-stone-300">
           New image
           <input
             type="file"
@@ -104,7 +104,7 @@ export function Workspace() {
             }}
           />
         </label>
-        <button className="hover:text-stone-300 hover:underline" onClick={reset}>
+        <button className="hover:text-stone-300" onClick={reset}>
           Start over
         </button>
       </div>

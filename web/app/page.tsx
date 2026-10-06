@@ -2,28 +2,21 @@ import { Workspace } from "../features/studio/workspace";
 
 export default function Page() {
   return (
-    <div className="mx-auto flex min-h-screen w-full max-w-7xl flex-col bg-[#131110] px-4 pb-10 text-stone-200 sm:px-6">
-      <header className="flex items-center gap-4 py-5">
-        <h1 className="font-display text-[26px] tracking-tight text-stone-100">Vice</h1>
+    <div className="flex h-dvh flex-col bg-[#131110] text-stone-200">
+      <header className="flex shrink-0 items-center gap-4 px-5 py-3">
+        <h1 className="font-display text-[22px] tracking-tight text-stone-100">Vice</h1>
         <p className="hidden text-[13px] text-stone-500 sm:block">Larger. Cleaner. Yours.</p>
-        <nav className="ml-auto flex gap-4 text-[13px] text-stone-400" aria-label="About">
-          <a href="#how" className="hover:text-stone-200">
+        <nav className="ml-auto text-[13px] text-stone-500" aria-label="About">
+          <a href="#how" className="hover:text-stone-300">
             How it works
           </a>
         </nav>
       </header>
-      <main className="flex flex-1 flex-col">
+      <main className="flex min-h-0 flex-1 flex-col">
         <Workspace />
       </main>
-      <footer className="mt-10 border-t border-white/10 pt-4 text-[12px] text-stone-500">
-        <details id="how">
-          <summary className="cursor-pointer hover:text-stone-300">How it works</summary>
-          <p className="mt-2 max-w-prose">
-            Your image is enlarged by a small math engine running entirely in this browser tab — no
-            uploads, no AI. Every output block averages exactly to its original pixel.
-          </p>
-        </details>
-        <p className="mt-2">Private by construction. Nothing leaves this device.</p>
+      <footer id="how" className="shrink-0 px-5 py-2 text-[11px] text-stone-600">
+        On-device math, no uploads · Every output block averages exactly to its pixel
       </footer>
     </div>
   );
