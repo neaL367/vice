@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Faculty_Glyphic } from "next/font/google";
+import { ViewTransitionGuard } from "../features/studio/view-transition-guard";
 import "./globals.css";
 
 const display = Faculty_Glyphic({
@@ -20,7 +21,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className={display.variable}>
-      <body>{children}</body>
+      <body>
+        <ViewTransitionGuard />
+        {children}
+      </body>
     </html>
   );
 }
