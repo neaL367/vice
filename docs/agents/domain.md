@@ -6,8 +6,8 @@ How the engineering skills should consume this repo's domain documentation when 
 
 - **`GLOSSARY.md`** at the repo root.
 - **`docs/adr/`**: read ADRs that touch the area you're about to work in.
-- **`research/`**: mathematical foundations, prior-art matrix, falsification reports for the deterministic-reconstruction program.
-- **`ARCHITECTURE.md`**: the shipped streaming engine (baseline for all comparisons).
+- **`research/`**: mathematical foundations, prior-art matrix, falsification reports.
+- **`README.md`**: program overview (research-only repo; old app engine removed).
 
 ## File structure
 
@@ -16,14 +16,14 @@ Single-context repo:
 ```
 /
 ├── GLOSSARY.md
+├── README.md
 ├── docs/adr/
 ├── docs/agents/
 ├── research/
-├── core/          # C++20 streaming engine (shipped baseline)
-├── tools/eval/    # vice_eval CLI
-├── web/           # Next.js UI
 └── .scratch/      # specs + tickets (local tracker)
 ```
+
+Datasets (gitignored) under `tools/eval/data/` feed the TS harnesses.
 
 ## Use the glossary's vocabulary
 

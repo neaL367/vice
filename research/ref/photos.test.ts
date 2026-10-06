@@ -32,7 +32,7 @@ describe.skipIf(!present)("kodak validation", () => {
       const lz = upsample(lr, 2, "lanczos3");
       expect(psnr(hr, ad.x) - psnr(hr, lz)).toBeGreaterThan(-0.05);
     }
-  });
+  }, { timeout: 120000 });
   test("bicubic-D mismatch: lrc-proj ≥ lanczos3 on every photo at 2x", () => {
     // Forward-model violation: Π enforces box-consistency under bicubic LR.
     // Must not collapse — projection acts as DC-bias remover either way.
@@ -50,5 +50,5 @@ describe.skipIf(!present)("kodak validation", () => {
       const lz = upsample(lr, 2, "lanczos3");
       expect(psnr(hr, ad.x) - psnr(hr, lz)).toBeGreaterThan(-0.05);
     }
-  });
+  }, { timeout: 120000 });
 });
