@@ -53,3 +53,30 @@ export function fractionFromViewportX(rect: Rect, viewportX: number): number {
   if (rect.w <= 0) return 0.5;
   return Math.min(1, Math.max(0, (viewportX - rect.x) / rect.w));
 }
+
+/**
+ * Clamp pan so at least 25% of the rect stays visible on each axis.
+ * Pure: rect position is linear in pan, so bounds solve directly.
+ */
+export function clampPan(
+  fit: Rect,
+  viewW: number,
+  viewH: number,
+  zoom: number,
+  pan: { x: number; y: number },
+): { x: number; y: number } {
+  const rw = fit.w * zoom;
+  const rh = fit.h * zoom;
+  const cx = viewW / 2;
+  const cy = viewH / 2;
+  const baseX = cx - (cx - fit.x) * zoom;
+  const baseY = cy - (cy - fit.y) * zoom;
+  const loX = viewW * 0.25 - rw - baseX;
+  const hiX = viewW * 0.75 - baseX;
+  const loY = viewH * 0.25 - rh - baseY;
+  const hiY = viewH * 0.75 - baseY;
+  return {
+    x: Math.min(hiX, Math.max(loX, pan.x)),
+    y: Math.min(hiY, Math.max(loY, pan.y)),
+  };
+}
