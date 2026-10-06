@@ -95,11 +95,11 @@ test("controls all work without overlap errors", async ({ page }) => {
   const fit = await size();
   expect(Math.abs(fit.w - before.w)).toBeLessThan(2);
 
-  // Reveal slider moves the split via keyboard.
+  // Reveal control moves the split via keyboard (stage is the slider).
   const slider = page.getByLabel("Reveal comparison");
   await slider.focus();
   await slider.press("ArrowLeft");
-  const left = await slider.inputValue();
+  const left = await slider.getAttribute("aria-valuenow");
   expect(Number(left)).toBeLessThan(50);
   expect(errors).toEqual([]);
 });
