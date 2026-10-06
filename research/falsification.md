@@ -69,15 +69,22 @@ Standing result: tight global clamp is the right policy (block/step/jpeg gains u
 - Method: minimal zero-dep PNG reader (`ref/png.ts`, filter-exact tests) + `ref/photos.ts` harness; data gitignored under `tools/eval/data/photos/` (Kodak classic set, research use). `photos.test.ts` locks lrc ≥ lanczos3 per photo, skips when data absent.
 - Caveats: luma-only (gamma-domain approx; linear path unit-tested, not end-to-end); 5 photos, not a full eval set; box-D only (bicubic-D mismatch untested on photos). Port gate: +0.25–0.32 approaches but does not meet the >0.3-on-2-full-sets bar — no port yet, but the case is now empirical, not speculative.
 
+## Iter-7 findings: full sets — loop clears gate vs fixed kernels, adaptive does not (vs uniform)
+
+- Build+data: MSVC 14.44 cmake build green, `vice_tests` ALL PASS, `vice_eval` shipped bar reproduced exactly (matches README table). Datasets: Set5/Set14/BSD100/Urban100 from HF mirrors, gitignored.
+- Harness `ref/sets.ts` (96 rows: 4 sets × 3 scales × 2 degradations × 4 methods, gamma luma, crop-12): uni/lrc beat lanczos3 on ALL 24 cells. 2x deltas: Set5 +0.52 (full), Set14 +0.44 (full), BSD100-10 +0.32, Urban100-10 +0.38. 3x/4x +0.2–0.47. Both degradations, same ordering. Linear-vs-gamma gap means absolute numbers don't compare with vice_eval — order does.
+- Gate audit: LOOP vs fixed kernels >0.3 dB on ≥2 full sets at 2x — MET (Set5, Set14 full). ADAPTIVE vs uniform: ±0.02 dB everywhere — NOT met. The robust winner is the guarded loop itself (bilinear-P + clamp + Π); the adaptive law adds nothing measurable on natural sets (its wins live on synthetics + Kodak +0.01–0.02).
+- Verdict refinement: HYP-1-as-adaptive downgraded to WEAK-or-dead on natural statistics; HYP-3-guarded-loop UPGRADED to the portable candidate. Port decision needs same-harness comparison vs shipped proj leg (shock+smooth+Π), not vs fixed kernels — that is C++ work, next iteration.
+
 ## Iter-6 findings: model mismatch does NOT break the guarantee (Kodak 5, 240-row matrix)
 
 - D ∈ {box, bicubic} × domain ∈ {gamma, linear} × proj ∈ {on, off} (`results/photos-matrix.*`): prediction was that box-Π hurts under bicubic-D. Measured opposite — proj ≥ noproj in ALL 8 blocks (e.g. gamma-2x bicubic-D: lrc-proj 28.86 vs lrc-noproj 28.76; uni-proj 28.87 vs 28.86). Mechanism: Π acts as DC-bias remover + stabilizer; bicubic-LR vs box-means differ little on photos, while init-kernel DC error dominates. Guarantee is ROBUST to moderate mismatch, not fragile. Genuinely surprising; prior belief updated.
 - lrc-proj top-or-tied in all 8 blocks, both domains. Linear-light gaps larger (2x box: +0.39 over lanczos3) — shadows weighted up, same ordering.
 - Locked: `photos.test.ts` bicubic-D test (lrc-proj ≥ lanczos3 per photo); `forward.test.ts` documents box/bicubic disagreement near edges (mismatch is real, just harmless here).
 
-## What survives to iter 7
+## What survives to iter 8
 
-- Reference engine + battery (16 families) + photo + matrix harnesses: keep. Best results: consistent wins on 5 natural photos in both domains and both degradations, exact consistency under box-D, robust under bicubic-D.
-- Next options: (a) full-set eval (BSD100/Urban100 — MSVC 14.44 confirmed present, needs 480 MB datasets + cmake build) to test the port gate properly; (b) C++ port of the adaptive loop behind the gate if (a) clears >0.3 dB; (c) anisotropic kernels (unexplored brief item, only if (a) disappoints).
+- Reference engine + battery (16 families) + photo + matrix + full-set harnesses: keep. Best results: guarded loop beats fixed kernels on full Set5/Set14 (+0.5/+0.4 dB at 2x) and samples of BSD100/Urban100, both degradations.
+- Next: same-harness C++ comparison of guarded-uniform-IBP vs shipped proj leg (the real port decision); adaptive law stays reference-only unless it beats uniform somewhere natural.
 - Killed (unchanged, 10 entries): LRC classes, alias gate, hpCoh, residual-coherence gate, clamp boundaries, global T-routing, per-pixel osc bounds, cut-ratio stop, HF-trajectory stop, kurtosis routing.
-- C++/WASM port gate UNMET (requires >0.3 dB PSNR or >0.005 SSIM on ≥2 full natural sets, residual ≤1e-5) — no port.
+- C++/WASM port gate: LOOP-MET vs fixed kernels; ADAPTIVE-UNMET vs uniform; PORT DECISION PENDING same-harness vs shipped proj.
