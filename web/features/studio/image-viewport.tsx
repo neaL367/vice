@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, ViewTransition } from "react";
 import type { StudioImage } from "./model";
 import { hasAlpha } from "./model";
 import { calculateClip, type Rect } from "./geometry";
@@ -54,12 +54,14 @@ export function ComparisonViewport({
     >
       <canvas ref={inRef} className="absolute inset-0 h-full w-full" />
       {result && (
-        <div
-          className="absolute inset-0 overflow-hidden"
-          style={{ clipPath: calculateClip(fraction) }}
-        >
-          <canvas ref={outRef} className="absolute inset-0 h-full w-full" />
-        </div>
+        <ViewTransition enter="vu-enter" default="none">
+          <div
+            className="absolute inset-0 overflow-hidden"
+            style={{ clipPath: calculateClip(fraction) }}
+          >
+            <canvas ref={outRef} className="absolute inset-0 h-full w-full" />
+          </div>
+        </ViewTransition>
       )}
     </div>
   );

@@ -9,9 +9,8 @@ const display = Faculty_Glyphic({
 });
 
 export const metadata: Metadata = {
-  title: "Vice — Larger. Cleaner. Yours.",
-  description:
-    "Browser-local deterministic image enlargement. No AI, no uploads.",
+  title: "Vice",
+  description: "Browser-local deterministic image enlargement.",
 };
 
 export default function RootLayout({
