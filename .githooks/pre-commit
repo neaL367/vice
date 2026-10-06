@@ -1,0 +1,9 @@
+#!/bin/sh
+# Pre-commit guardrail: reference suite must be green (fast, ~10s).
+# Installed via: git config core.hooksPath .githooks
+set -e
+if ! command -v bun >/dev/null 2>&1; then
+  echo "pre-commit: bun not found on PATH, skipping tests" >&2
+  exit 0
+fi
+bun test research/ref

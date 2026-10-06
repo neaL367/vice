@@ -1,0 +1,12 @@
+{
+  "name": "vice-research",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Deterministic image reconstruction research (reference TS, zero deps)",
+  "scripts": {
+    "test": "bun test research/ref",
+    "bench": "bun research/ref/bench.ts",
+    "photos": "bun research/ref/photos.ts",
+    "sets": "bun research/ref/sets.ts"
+  }
+}
