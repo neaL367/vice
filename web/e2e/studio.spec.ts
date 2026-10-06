@@ -80,7 +80,14 @@ test("controls all work without overlap errors", async ({ page }) => {
   await page.getByRole("button", { name: "Upscale" }).click();
   await expect(page.getByText("Ready", { exact: false })).toBeVisible({ timeout: 90000 });
 
-  // Zoom in grows the layer; Fit restores.
+  // Reveal control moves the split via keyboard (stage is the slider).
+  const slider = page.getByLabel("Reveal comparison");
+  await slider.focus();
+  await slider.press("ArrowLeft");
+  const left = await slider.getAttribute("aria-valuenow");
+  expect(Number(left)).toBeLessThan(50);
+
+  // Wheel zooms the layer; drag on the image moves the split.
   const size = () =>
     page.evaluate(() => {
       const c = document.querySelectorAll("canvas")[0] as HTMLCanvasElement;
@@ -88,18 +95,24 @@ test("controls all work without overlap errors", async ({ page }) => {
       return { w: r.width, h: r.height };
     });
   const before = await size();
-  await page.getByRole("button", { name: "Zoom in" }).click();
-  const zoomed = await size();
-  expect(zoomed.w).toBeGreaterThan(before.w + 5);
+  await page.mouse.move(600, 400);
+  await page.mouse.wheel(0, -400);
+  // Poll: wheel dispatch resolves before React flushes the re-render.
+  await expect
+    .poll(async () => (await size()).w, { timeout: 5000 })
+    .toBeGreaterThan(before.w + 5);
+  const wheeled = await size();
   await page.getByRole("button", { name: "Fit to view" }).click();
   const fit = await size();
   expect(Math.abs(fit.w - before.w)).toBeLessThan(2);
 
-  // Reveal control moves the split via keyboard (stage is the slider).
-  const slider = page.getByLabel("Reveal comparison");
-  await slider.focus();
-  await slider.press("ArrowLeft");
-  const left = await slider.getAttribute("aria-valuenow");
-  expect(Number(left)).toBeLessThan(50);
+  // Drag reveals: press left-of-center and drag right, split follows.
+  await page.mouse.move(200, 400);
+  await page.mouse.down();
+  await page.mouse.move(700, 400, { steps: 5 });
+  await page.mouse.up();
+  await expect
+    .poll(async () => Number(await slider.getAttribute("aria-valuenow")), { timeout: 5000 })
+    .toBeGreaterThan(50);
   expect(errors).toEqual([]);
 });
