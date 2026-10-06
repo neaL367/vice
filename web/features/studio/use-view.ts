@@ -113,7 +113,7 @@ export function useView(
       }
       if (g.mode === "split") {
         const r = boxRef.current!.getBoundingClientRect();
-        setFraction(fractionFromViewportX(rect, ev.clientX - r.left));
+        setSplit(fractionFromViewportX(rect, ev.clientX - r.left));
       } else {
         setPan(
           clampPan(fit, box.w, box.h, zoom, {
@@ -126,7 +126,7 @@ export function useView(
     const up = (ev: PointerEvent) => {
       const g = gesture.current;
       if (g?.mode === "maybe-split") {
-        setFraction(fractionAt(ev.clientX) < 0.5 ? 0 : 1);
+        setSplit(fractionAt(ev.clientX) < 0.5 ? 0 : 1);
       }
       gesture.current = null;
       setDragging(false);
@@ -160,8 +160,8 @@ export function useView(
 
   function onKeyDown(e: React.KeyboardEvent) {
     if (!result) return;
-    if (e.key === "ArrowLeft") setFraction((s) => Math.max(0, s - 0.04));
-    else if (e.key === "ArrowRight") setFraction((s) => Math.min(1, s + 0.04));
+    if (e.key === "ArrowLeft") setSplit(fraction - 0.04);
+    else if (e.key === "ArrowRight") setSplit(fraction + 0.04);
     else if (e.key === "0" || e.key === "Escape") resetView();
     else if (e.key === "+" || e.key === "=") zoomBy(1.25);
     else if (e.key === "-") zoomBy(1 / 1.25);
@@ -191,7 +191,10 @@ export function useView(
   }
 
   function setSplit(f: number) {
-    setFraction(Math.min(1, Math.max(0, f)));
+    // Clamp travel to [5, 95]: at the extremes one side (and the grip) would
+    // vanish off-screen and users must hunt for the divider. Tap toggles
+    // between the clamped ends — a sliver of each side always remains.
+    setFraction(Math.min(0.95, Math.max(0.05, f)));
   }
 
   return {
