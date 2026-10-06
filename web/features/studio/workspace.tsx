@@ -60,7 +60,7 @@ export function Workspace() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="vx-rise min-h-[420px] overflow-hidden rounded-lg border border-line bg-stage" data-enter="true">
+      <div className="vx-rise min-h-[46vh] overflow-hidden rounded-2xl border border-white/10 bg-[#0c0b0a] lg:min-h-[62vh]" data-enter="true">
         <ImageStage
           key={`${job.name}-${input.w}x${input.h}`}
           input={input}
@@ -69,7 +69,7 @@ export function Workspace() {
         />
       </div>
       {job.kind === "error" && (
-        <p role="alert" className="text-[14px] text-accent">
+        <p role="alert" className="text-[14px] text-[#e07856]">
           {job.message} <button className="underline" onClick={reset}>Try another image</button>
         </p>
       )}
@@ -87,12 +87,12 @@ export function Workspace() {
         }}
       />
       {job.kind === "done" && (
-        <p className="font-mono text-[12px] text-ink-soft tabular-nums">
+        <p className="font-mono text-[12px] text-stone-500 tabular-nums">
           Ready · {job.output.w}×{job.output.h} · {job.ms.toFixed(0)} ms · residual {job.residual.toExponential(1)}
         </p>
       )}
-      <div className="flex gap-3 text-[13px] text-ink-faint">
-        <label className="cursor-pointer underline">
+      <div className="flex gap-4 text-[13px] text-stone-500">
+        <label className="cursor-pointer hover:text-stone-300 hover:underline">
           New image
           <input
             type="file"
@@ -104,7 +104,7 @@ export function Workspace() {
             }}
           />
         </label>
-        <button className="underline" onClick={reset}>
+        <button className="hover:text-stone-300 hover:underline" onClick={reset}>
           Start over
         </button>
       </div>

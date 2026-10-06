@@ -4,7 +4,7 @@ import { useRef } from "react";
 import type { StudioImage } from "./model";
 import { decodeFile } from "./use-studio-job";
 
-// Empty state + frictionless entry: drop anywhere, browse, paste.
+// Empty state: beautiful, simple. Drop anywhere, browse, paste, keyboard.
 export function Dropzone({ onImage }: { onImage: (img: StudioImage, name: string) => void }) {
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -16,7 +16,7 @@ export function Dropzone({ onImage }: { onImage: (img: StudioImage, name: string
 
   return (
     <div
-      className="vx-rise flex min-h-[420px] flex-col items-center justify-center gap-3 rounded-lg border border-line bg-paper px-6 text-center"
+      className="vx-rise flex min-h-[62vh] flex-col items-center justify-center gap-4 rounded-2xl border border-dashed border-white/15 bg-[#171412] px-6 text-center"
       data-enter="true"
       onDragOver={(e) => e.preventDefault()}
       onDrop={(e) => {
@@ -35,9 +35,12 @@ export function Dropzone({ onImage }: { onImage: (img: StudioImage, name: string
         if (e.key === "Enter" || e.key === " ") fileRef.current?.click();
       }}
     >
-      <h2 className="font-display text-5xl">Upscale your image</h2>
-      <p className="text-ink-soft">Drop an image anywhere</p>
-      <p className="text-[12px] tracking-wide text-ink-faint">PNG · JPEG · WebP · AVIF</p>
+      <p className="text-[12px] tracking-[0.2em] text-stone-500 uppercase">Vice laboratory</p>
+      <h2 className="font-display max-w-xl text-5xl leading-tight text-stone-100 sm:text-6xl">
+        Upscale your image
+      </h2>
+      <p className="text-[15px] text-stone-400">Drop an image anywhere</p>
+      <p className="text-[12px] tracking-widest text-stone-600">PNG · JPEG · WEBP · AVIF</p>
       <input
         ref={fileRef}
         type="file"
