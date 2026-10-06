@@ -192,10 +192,10 @@ export function useView(
   }
 
   function setSplit(f: number) {
-    // Clamp travel to [5, 95]: at the extremes one side (and the grip) would
-    // vanish off-screen and users must hunt for the divider. Tap toggles
-    // between the clamped ends — a sliver of each side always remains.
-    setFraction(Math.min(0.95, Math.max(0.05, f)));
+    // Full 0..1 travel: the divider must reach both image edges. Findability
+    // at the extremes is handled by the Center control, not by restricting
+    // travel (a clamp here left dead space the slider could never reach).
+    setFraction(Math.min(1, Math.max(0, f)));
   }
 
   function centerComparison() {
