@@ -241,3 +241,41 @@ test("divider grip drags while zoomed; pan stays clamped", async ({ page }) => {
   expect(vis.iy).toBeGreaterThan(50);
   expect(errors).toEqual([]);
 });
+test("zoom out returns to center; download is full-res output", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  await page.goto("/");
+  const photo = path.resolve(__dirname, "../../tools/eval/data/photos/kodim23.png");
+  await page.locator('input[type="file"]').first().setInputFiles(photo);
+  await page.getByRole("button", { name: "Upscale" }).click();
+  await expect(page.getByText("Ready", { exact: false })).toBeVisible({ timeout: 90000 });
+
+  // Zoom in (drifts pan via cursor anchor), then zoom back out with buttons:
+  // the image must return to its fitted center.
+  const center = () =>
+    page.evaluate(() => {
+      const stage = document.querySelector('[role="slider"]')!.getBoundingClientRect();
+      const c = document.querySelectorAll("canvas")[0] as HTMLCanvasElement;
+      const r = c.getBoundingClientRect();
+      return { dx: r.left + r.width / 2 - (stage.left + stage.width / 2), w: r.width };
+    });
+  const c0 = await center();
+  await page.mouse.move(400, 300);
+  await page.mouse.wheel(0, -600);
+  await expect.poll(async () => (await center()).w, { timeout: 5000 }).toBeGreaterThan(c0.w + 5);
+  for (let i = 0; i < 6; i++) await page.getByRole("button", { name: "Zoom out" }).click();
+  await expect.poll(async () => (await center()).w, { timeout: 5000 }).toBeLessThan(c0.w + 2);
+  const c1 = await center();
+  expect(Math.abs(c1.dx)).toBeLessThan(3);
+
+  // Download delivers full-resolution bytes under the right name.
+  const dl = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Download result" }).click();
+  const download = await dl;
+  expect(download.suggestedFilename()).toMatch(/kodim23-2x\.png$/);
+  const filePath = await download.path();
+  const { size } = await import("node:fs").then((fs) => fs.promises.stat(filePath as string));
+  // 1536x1024 photographic PNG is hundreds of KB, never a thumbnail.
+  expect(size).toBeGreaterThan(200000);
+  expect(errors).toEqual([]);
+});

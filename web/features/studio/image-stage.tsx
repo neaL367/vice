@@ -86,7 +86,8 @@ export function ImageStage({ input, result, working }: { input: StudioImage; res
 
   function onWheel(e: React.WheelEvent) {
     // Page never scrolls (fixed viewport shell); plain wheel zooms, trackpad
-    // pinch arrives as ctrl+wheel on the same path. Cursor-anchored.
+    // pinch arrives as ctrl+wheel on the same path. Cursor-anchored, except
+    // zooming all the way out always snaps back to center.
     if (working) return;
     const r = boxRef.current!.getBoundingClientRect();
     const cx = e.clientX - (r.left + r.width / 2);
@@ -94,8 +95,20 @@ export function ImageStage({ input, result, working }: { input: StudioImage; res
     setZoom((z) => {
       const z2 = Math.min(32, Math.max(1, z * Math.exp(-e.deltaY * 0.0015)));
       if (z2 !== z) {
-        setPan((p) => clampPan(fit, box.w, box.h, z2, { x: cx - ((cx - p.x) * z2) / z, y: cy - ((cy - p.y) * z2) / z }));
+        if (z2 === 1) setPan({ x: 0, y: 0 });
+        else setPan((p) => clampPan(fit, box.w, box.h, z2, { x: cx - ((cx - p.x) * z2) / z, y: cy - ((cy - p.y) * z2) / z }));
       }
+      return z2;
+    });
+  }
+
+  // Button zoom keeps the current center stable (pan scales with zoom) and
+  // snaps to center at 1x, so in/out always returns to center.
+  function zoomBy(factor: number) {
+    setZoom((z) => {
+      const z2 = Math.min(32, Math.max(1, z * factor));
+      if (z2 === 1) setPan({ x: 0, y: 0 });
+      else if (z2 !== z) setPan((p) => ({ x: (p.x * z2) / z, y: (p.y * z2) / z }));
       return z2;
     });
   }
@@ -105,8 +118,8 @@ export function ImageStage({ input, result, working }: { input: StudioImage; res
     if (e.key === "ArrowLeft") setFraction((s) => Math.max(0, s - 0.04));
     else if (e.key === "ArrowRight") setFraction((s) => Math.min(1, s + 0.04));
     else if (e.key === "0" || e.key === "Escape") resetView();
-    else if (e.key === "+" || e.key === "=") setZoom((z) => Math.min(32, z * 1.25));
-    else if (e.key === "-") setZoom((z) => Math.max(1, z / 1.25));
+    else if (e.key === "+" || e.key === "=") zoomBy(1.25);
+    else if (e.key === "-") zoomBy(1 / 1.25);
     else return;
     e.preventDefault();
   }
@@ -186,10 +199,10 @@ export function ImageStage({ input, result, working }: { input: StudioImage; res
         aria-label="Zoom"
         onPointerDown={(e) => e.stopPropagation()}
       >
-        <button className="rounded-full px-2.5 py-1 hover:bg-white/10" onClick={() => setZoom((z) => Math.max(1, z / 1.25))} aria-label="Zoom out">−</button>
+        <button className="rounded-full px-2.5 py-1 hover:bg-white/10" onClick={() => zoomBy(1 / 1.25)} aria-label="Zoom out">−</button>
         <button className="rounded-full px-2.5 py-1 hover:bg-white/10" onClick={zoomToHundred} aria-label="100 percent">1:1</button>
         <button className="rounded-full px-2.5 py-1 hover:bg-white/10" onClick={resetView} aria-label="Fit to view">Fit</button>
-        <button className="rounded-full px-2.5 py-1 hover:bg-white/10" onClick={() => setZoom((z) => Math.min(32, z * 1.25))} aria-label="Zoom in">+</button>
+        <button className="rounded-full px-2.5 py-1 hover:bg-white/10" onClick={() => zoomBy(1.25)} aria-label="Zoom in">+</button>
       </div>
       {result && (
         <div className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-between px-4 text-[11px] tracking-widest text-white/70 uppercase" aria-hidden="true">
