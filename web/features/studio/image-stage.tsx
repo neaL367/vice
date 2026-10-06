@@ -16,7 +16,21 @@ const DRAG_THRESHOLD = 6;
 
 // Canonical state: {viewport(box), image, zoom, pan, fraction}. Everything
 // else derives via geometry.ts — no duplicated rects, no sync effects.
-export function ImageStage({ input, result, working }: { input: StudioImage; result: StudioImage | null; working: boolean }) {
+export function ImageStage({
+  input,
+  result,
+  working,
+  topLeft,
+  topRight,
+  statusLine,
+}: {
+  input: StudioImage;
+  result: StudioImage | null;
+  working: boolean;
+  topLeft?: React.ReactNode;
+  topRight?: React.ReactNode;
+  statusLine?: React.ReactNode;
+}) {
   const [fraction, setFraction] = useState(0.5);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -153,6 +167,13 @@ export function ImageStage({ input, result, working }: { input: StudioImage; res
       onKeyDown={onKeyDown}
     >
       <ComparisonViewport input={input} result={result} rect={rect} fraction={result ? fraction : 1} />
+      <div className="pointer-events-none absolute inset-x-0 top-3 flex items-start justify-between px-4" aria-hidden="true">
+        <div>{topLeft}</div>
+        <div className="flex flex-col items-end gap-1">
+          <div>{topRight}</div>
+          {statusLine && <div className="font-mono text-[11px] text-white/40 tabular-nums">{statusLine}</div>}
+        </div>
+      </div>
       {result && (
         <>
           <div className="pointer-events-none absolute inset-y-0" style={{ left: `${dividerX}px` }} aria-hidden="true">
@@ -194,7 +215,7 @@ export function ImageStage({ input, result, working }: { input: StudioImage; res
         </div>
       )}
       <div
-        className="absolute top-3 right-3 flex items-center gap-0.5 rounded-full bg-black/70 px-1 py-1 text-[13px] text-stone-200"
+        className="absolute top-12 right-3 flex items-center gap-0.5 rounded-full bg-black/70 px-1 py-1 text-[13px] text-stone-200"
         role="group"
         aria-label="Zoom"
         onPointerDown={(e) => e.stopPropagation()}
@@ -204,12 +225,6 @@ export function ImageStage({ input, result, working }: { input: StudioImage; res
         <button className="rounded-full px-2.5 py-1 hover:bg-white/10" onClick={resetView} aria-label="Fit to view">Fit</button>
         <button className="rounded-full px-2.5 py-1 hover:bg-white/10" onClick={() => zoomBy(1.25)} aria-label="Zoom in">+</button>
       </div>
-      {result && (
-        <div className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-between px-4 text-[11px] tracking-widest text-white/70 uppercase" aria-hidden="true">
-          <span>Original</span>
-          <span>Enhanced</span>
-        </div>
-      )}
     </div>
   );
 }

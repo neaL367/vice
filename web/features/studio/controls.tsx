@@ -1,7 +1,7 @@
 "use client";
 
-// Floating dock: one pill, four groups separated by hairlines. Segmented scale
-// with pressed state, derived dims, primary upscale, icon download (when done).
+// One bottom dock: brand · scale · dims · upscale · download · new image.
+// Single pill, hairline sections, no stacked bars.
 export function Controls({
   scale,
   setScale,
@@ -12,6 +12,7 @@ export function Controls({
   canDownload,
   onUpscale,
   onDownload,
+  onNewImage,
 }: {
   scale: 2 | 3 | 4;
   setScale: (s: 2 | 3 | 4) => void;
@@ -22,9 +23,12 @@ export function Controls({
   canDownload: boolean;
   onUpscale: () => void;
   onDownload: () => void;
+  onNewImage: (f: File | undefined) => void;
 }) {
   return (
     <div className="flex max-w-[calc(100vw-2rem)] flex-wrap items-center justify-center gap-x-4 gap-y-2 rounded-2xl bg-[#171412]/90 py-2 pr-2 pl-4 shadow-[0_16px_48px_rgba(0,0,0,0.55)] ring-1 ring-white/10 backdrop-blur-md">
+      <span className="font-display text-[17px] tracking-tight text-stone-100">Vice</span>
+      <div className="h-6 w-px bg-white/10" aria-hidden="true" />
       <div className="flex gap-0.5 rounded-full bg-white/5 p-0.5" role="group" aria-label="Scale">
         {([2, 3, 4] as const).map((s) => (
           <button
@@ -60,6 +64,18 @@ export function Controls({
           ↓
         </button>
       )}
+      <label className="cursor-pointer rounded-xl px-3 py-1.5 text-[13px] text-stone-400 transition-colors hover:bg-white/5 hover:text-stone-200">
+        New
+        <input
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={(e) => {
+            onNewImage(e.target.files?.[0] ?? undefined);
+            e.target.value = "";
+          }}
+        />
+      </label>
     </div>
   );
 }
