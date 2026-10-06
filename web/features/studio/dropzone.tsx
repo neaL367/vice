@@ -85,8 +85,10 @@ export function Dropzone({
           fileRef.current?.click();
       }}
     >
-      <h1 className="font-display text-[26px] tracking-tight text-stone-100">Vice</h1>
-      <h2 className="font-display max-w-xl text-5xl leading-tight text-stone-100 sm:text-6xl">
+      <h1 className="font-display text-[88px] leading-none tracking-tight text-stone-100 sm:text-[120px]">
+        Vice
+      </h1>
+      <h2 className="font-display max-w-xl text-2xl leading-snug text-stone-300 sm:text-[28px]">
         {reading ? "Reading…" : "Upscale your image"}
       </h2>
       <p
