@@ -1,4 +1,4 @@
-import { Suspense, ViewTransition } from "react";
+import { Suspense } from "react";
 import { Workspace } from "../features/studio/workspace";
 
 function Shell() {
@@ -13,16 +13,8 @@ function Shell() {
 export default function Page() {
   return (
     <div className="flex h-dvh flex-col bg-[#131110] text-stone-200">
-      <Suspense
-        fallback={
-          <ViewTransition exit="vu-exit" default="none">
-            <Shell />
-          </ViewTransition>
-        }
-      >
-        <ViewTransition enter="vu-enter" default="none">
-          <Workspace />
-        </ViewTransition>
+      <Suspense fallback={<Shell />}>
+        <Workspace />
       </Suspense>
     </div>
   );

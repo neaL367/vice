@@ -19,8 +19,8 @@ export function useStudioJob() {
   const [job, setJob] = useState<Job>({ kind: "idle" });
   const workerRef = useRef<Worker | null>(null);
   const idRef = useRef(0);
-  // ViewTransitions activate on Transitions (never plain setState): job
-  // arrivals commit inside startTransition so reveals can animate.
+  // Job arrivals commit inside startTransition so heavy commits stay
+  // interruptible; kept even without <ViewTransition> consumers.
   const [, startTransition] = useTransition();
 
   useEffect(() => {
