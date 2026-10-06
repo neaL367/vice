@@ -28,7 +28,11 @@ export function ComparisonViewport({
     const c = inRef.current!;
     c.width = input.w;
     c.height = input.h;
-    c.getContext("2d")!.putImageData(new ImageData(input.data, input.w, input.h), 0, 0);
+    c.getContext("2d")!.putImageData(
+      new ImageData(input.data, input.w, input.h),
+      0,
+      0,
+    );
   }, [input]);
 
   useEffect(() => {
@@ -36,14 +40,24 @@ export function ComparisonViewport({
     const c = outRef.current;
     c.width = result.w;
     c.height = result.h;
-    c.getContext("2d")!.putImageData(new ImageData(result.data, result.w, result.h), 0, 0);
+    c.getContext("2d")!.putImageData(
+      new ImageData(result.data, result.w, result.h),
+      0,
+      0,
+    );
   }, [result]);
 
   return (
-    <div className={`absolute overflow-hidden ${alpha ? "vx-checker" : ""}`} style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h }}>
+    <div
+      className={`absolute overflow-hidden ${alpha ? "vx-checker" : ""}`}
+      style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h }}
+    >
       <canvas ref={inRef} className="absolute inset-0 h-full w-full" />
       {result && (
-        <div className="absolute inset-0 overflow-hidden" style={{ clipPath: calculateClip(fraction) }}>
+        <div
+          className="absolute inset-0 overflow-hidden"
+          style={{ clipPath: calculateClip(fraction) }}
+        >
           <canvas ref={outRef} className="absolute inset-0 h-full w-full" />
         </div>
       )}

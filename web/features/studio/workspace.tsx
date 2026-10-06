@@ -31,7 +31,11 @@ export function Workspace() {
     const c = document.createElement("canvas");
     c.width = out.w;
     c.height = out.h;
-    c.getContext("2d")!.putImageData(new ImageData(out.data, out.w, out.h), 0, 0);
+    c.getContext("2d")!.putImageData(
+      new ImageData(out.data, out.w, out.h),
+      0,
+      0,
+    );
     c.toBlob((b) => {
       if (!b) return;
       const a = document.createElement("a");
@@ -45,12 +49,7 @@ export function Workspace() {
   if (job.kind === "idle") {
     return (
       <div className="flex min-h-0 flex-1 flex-col px-5 pt-4">
-        <div className="flex shrink-0 items-baseline gap-3">
-          <h1 className="font-display text-[22px] tracking-tight text-stone-100">Vice</h1>
-          <p className="text-[13px] text-stone-500">Larger. Cleaner. Yours.</p>
-        </div>
         <Dropzone onImage={openImage} />
-        <p className="shrink-0 py-3 text-center text-[11px] text-stone-600">On-device · No uploads</p>
       </div>
     );
   }
@@ -136,27 +135,39 @@ function ActiveWorkspace({
           setSplit={setSplit}
         />
         {/* Chrome: viewport-anchored siblings of the measured box. */}
-        <div className="pointer-events-none absolute inset-x-0 top-3 flex items-start justify-between px-4" aria-hidden="true">
+        <div
+          className="pointer-events-none absolute inset-x-0 top-3 flex items-start justify-between px-4"
+          aria-hidden="true"
+        >
           <div>
             {result ? (
-              <span className="text-[11px] tracking-widest text-white/70 uppercase">Original</span>
+              <span className="text-[11px] tracking-widest text-white/70 uppercase">
+                Original
+              </span>
             ) : (
-              <span className="block max-w-[40vw] truncate font-mono text-[11px] text-white/50 tabular-nums">{job.name}</span>
+              <span className="block max-w-[40vw] truncate font-mono text-[11px] text-white/50 tabular-nums">
+                {job.name}
+              </span>
             )}
           </div>
           <div className="flex flex-col items-end gap-1">
             <div>
               {result ? (
-                <span className="text-[11px] tracking-widest text-white/70 uppercase">Enhanced</span>
+                <span className="text-[11px] tracking-widest text-white/70 uppercase">
+                  Enhanced
+                </span>
               ) : (
                 <span className="font-mono text-[11px] text-white/50 tabular-nums">
-                  {job.kind === "working" ? "Working…" : `${input.w}×${input.h}`}
+                  {job.kind === "working"
+                    ? "Working…"
+                    : `${input.w}×${input.h}`}
                 </span>
               )}
             </div>
             {job.kind === "done" && (
               <div className="font-mono text-[11px] text-white/40 tabular-nums">
-                Ready · {job.output.w}×{job.output.h} · {job.ms.toFixed(0)} ms · {job.residual.toExponential(1)}
+                Ready · {job.output.w}×{job.output.h} · {job.ms.toFixed(0)} ms ·{" "}
+                {job.residual.toExponential(1)}
               </div>
             )}
           </div>
@@ -167,13 +178,40 @@ function ActiveWorkspace({
           aria-label="Zoom"
           onPointerDown={(e) => e.stopPropagation()}
         >
-          <button className="rounded-full px-2.5 py-1 hover:bg-white/10" onClick={() => zoomBy(1 / 1.25)} aria-label="Zoom out">−</button>
-          <button className="rounded-full px-2.5 py-1 hover:bg-white/10" onClick={zoomToHundred} aria-label="100 percent">1:1</button>
-          <button className="rounded-full px-2.5 py-1 hover:bg-white/10" onClick={resetView} aria-label="Fit to view">Fit</button>
-          <button className="rounded-full px-2.5 py-1 hover:bg-white/10" onClick={() => zoomBy(1.25)} aria-label="Zoom in">+</button>
+          <button
+            className="rounded-full px-2.5 py-1 hover:bg-white/10"
+            onClick={() => zoomBy(1 / 1.25)}
+            aria-label="Zoom out"
+          >
+            −
+          </button>
+          <button
+            className="rounded-full px-2.5 py-1 hover:bg-white/10"
+            onClick={zoomToHundred}
+            aria-label="100 percent"
+          >
+            1:1
+          </button>
+          <button
+            className="rounded-full px-2.5 py-1 hover:bg-white/10"
+            onClick={resetView}
+            aria-label="Fit to view"
+          >
+            Fit
+          </button>
+          <button
+            className="rounded-full px-2.5 py-1 hover:bg-white/10"
+            onClick={() => zoomBy(1.25)}
+            aria-label="Zoom in"
+          >
+            +
+          </button>
         </div>
         {job.kind === "error" && (
-          <p role="alert" className="absolute top-12 left-1/2 -translate-x-1/2 rounded-full bg-black/70 px-4 py-1.5 text-[13px] text-[#e07856]">
+          <p
+            role="alert"
+            className="absolute top-12 left-1/2 -translate-x-1/2 rounded-full bg-black/70 px-4 py-1.5 text-[13px] text-[#e07856]"
+          >
             {job.message}
           </p>
         )}

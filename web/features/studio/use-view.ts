@@ -2,7 +2,14 @@
 
 import { useCallback, useRef, useState } from "react";
 import type { StudioImage } from "./model";
-import { calculateFit, calculateRect, clampPan, dividerViewportX, fractionFromViewportX, hundredPercentZoom } from "./geometry";
+import {
+  calculateFit,
+  calculateRect,
+  clampPan,
+  dividerViewportX,
+  fractionFromViewportX,
+  hundredPercentZoom,
+} from "./geometry";
 
 const DRAG_THRESHOLD = 6;
 
@@ -38,14 +45,22 @@ interface ViewInternal extends ViewApi {
   setSplit: (f: number) => void;
 }
 
-export function useView(input: StudioImage, result: StudioImage | null, working: boolean): ViewInternal {
+export function useView(
+  input: StudioImage,
+  result: StudioImage | null,
+  working: boolean,
+): ViewInternal {
   const [fraction, setFraction] = useState(0.5);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [box, setBox] = useState({ w: 0, h: 0 });
   const [dragging, setDragging] = useState(false);
   const boxRef = useRef<HTMLDivElement | null>(null);
-  const gesture = useRef<{ mode: "maybe-split" | "split" | "pan"; sx: number; sy: number } | null>(null);
+  const gesture = useRef<{
+    mode: "maybe-split" | "split" | "pan";
+    sx: number;
+    sy: number;
+  } | null>(null);
 
   // Callback ref: attaches + measures without ever exposing the ref object.
   const attachBox = useCallback((el: HTMLDivElement | null) => {
@@ -77,7 +92,11 @@ export function useView(input: StudioImage, result: StudioImage | null, working:
     if (e.button !== 0 || working) return;
     boxRef.current?.focus({ preventScroll: true });
     if (zoomed) {
-      gesture.current = { mode: "pan", sx: e.clientX - pan.x, sy: e.clientY - pan.y };
+      gesture.current = {
+        mode: "pan",
+        sx: e.clientX - pan.x,
+        sy: e.clientY - pan.y,
+      };
     } else if (result) {
       gesture.current = { mode: "maybe-split", sx: e.clientX, sy: e.clientY };
     } else {
@@ -88,14 +107,20 @@ export function useView(input: StudioImage, result: StudioImage | null, working:
       const g = gesture.current;
       if (!g) return;
       if (g.mode === "maybe-split") {
-        if (Math.hypot(ev.clientX - g.sx, ev.clientY - g.sy) < DRAG_THRESHOLD) return;
+        if (Math.hypot(ev.clientX - g.sx, ev.clientY - g.sy) < DRAG_THRESHOLD)
+          return;
         g.mode = "split";
       }
       if (g.mode === "split") {
         const r = boxRef.current!.getBoundingClientRect();
         setFraction(fractionFromViewportX(rect, ev.clientX - r.left));
       } else {
-        setPan(clampPan(fit, box.w, box.h, zoom, { x: ev.clientX - g.sx, y: ev.clientY - g.sy }));
+        setPan(
+          clampPan(fit, box.w, box.h, zoom, {
+            x: ev.clientX - g.sx,
+            y: ev.clientY - g.sy,
+          }),
+        );
       }
     };
     const up = (ev: PointerEvent) => {
@@ -121,7 +146,13 @@ export function useView(input: StudioImage, result: StudioImage | null, working:
       const z2 = Math.min(32, Math.max(1, z * Math.exp(-e.deltaY * 0.0015)));
       if (z2 !== z) {
         if (z2 === 1) setPan({ x: 0, y: 0 });
-        else setPan((p) => clampPan(fit, box.w, box.h, z2, { x: cx - ((cx - p.x) * z2) / z, y: cy - ((cy - p.y) * z2) / z }));
+        else
+          setPan((p) =>
+            clampPan(fit, box.w, box.h, z2, {
+              x: cx - ((cx - p.x) * z2) / z,
+              y: cy - ((cy - p.y) * z2) / z,
+            }),
+          );
       }
       return z2;
     });
@@ -148,7 +179,8 @@ export function useView(input: StudioImage, result: StudioImage | null, working:
     setZoom((z) => {
       const z2 = Math.min(32, Math.max(1, z * factor));
       if (z2 === 1) setPan({ x: 0, y: 0 });
-      else if (z2 !== z) setPan((p) => ({ x: (p.x * z2) / z, y: (p.y * z2) / z }));
+      else if (z2 !== z)
+        setPan((p) => ({ x: (p.x * z2) / z, y: (p.y * z2) / z }));
       return z2;
     });
   }

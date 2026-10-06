@@ -72,10 +72,19 @@ export function ImageStage({
       aria-valuenow={result ? Math.round(fraction * 100) : undefined}
       onKeyDown={onKeyDown}
     >
-      <ComparisonViewport input={input} result={result} rect={rect} fraction={result ? fraction : 1} />
+      <ComparisonViewport
+        input={input}
+        result={result}
+        rect={rect}
+        fraction={result ? fraction : 1}
+      />
       {result && (
         <>
-          <div className="pointer-events-none absolute inset-y-0" style={{ left: `${dividerX}px` }} aria-hidden="true">
+          <div
+            className="pointer-events-none absolute inset-y-0"
+            style={{ left: `${dividerX}px` }}
+            aria-hidden="true"
+          >
             <div className="h-full w-px bg-white/90 shadow-[0_0_12px_rgba(0,0,0,0.6)]" />
           </div>
           <div
@@ -84,7 +93,9 @@ export function ImageStage({
             onPointerDown={onGripDown}
             aria-hidden="true"
           >
-            <div className="rounded-full border border-white/40 bg-black/70 px-2 py-1 text-[11px] text-white">⟷</div>
+            <div className="rounded-full border border-white/40 bg-black/70 px-2 py-1 text-[11px] text-white">
+              ⟷
+            </div>
           </div>
         </>
       )}

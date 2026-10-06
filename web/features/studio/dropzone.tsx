@@ -4,31 +4,38 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { StudioImage } from "./model";
 import { decodeFile } from "./use-studio-job";
 
-// Empty state: beautiful, simple. Drop anywhere (with hover feedback), browse,
-// paste from anywhere on the page, keyboard.
+// Empty state: one surface for drop, browse, paste, keyboard. Drag depth is
+// tracked with a counter (dragleave fires on child entry — a boolean flickers).
+// Images over 2048px are fitted down before processing; stated, not hidden.
 export function Dropzone({ onImage }: { onImage: (img: StudioImage, name: string) => void }) {
   const fileRef = useRef<HTMLInputElement>(null);
-  const [error, setError] = useState<string | null>(null);
+  const depth = useRef(0);
   const [over, setOver] = useState(false);
+  const [reading, setReading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const take = useCallback(
     async (f: File | undefined | null) => {
-      if (!f) return;
+      if (!f || reading) return;
       if (!f.type.startsWith("image/")) {
         setError("That file isn't an image. Try another image.");
         return;
       }
+      setError(null);
+      setReading(true);
       try {
         const { image, name } = await decodeFile(f);
         onImage(image, name);
       } catch {
         setError("We couldn't read this image. Try another image.");
+      } finally {
+        setReading(false);
       }
     },
-    [onImage],
+    [onImage, reading],
   );
 
-  // Page-wide paste: the dropzone's own onPaste needs focus, users paste anywhere.
+  // Page-wide paste: the surface handler needs focus, users paste anywhere.
   useEffect(() => {
     const onPaste = (e: ClipboardEvent) => {
       const f = [...(e.clipboardData?.items ?? [])].find((i) => i.type.startsWith("image/"))?.getAsFile();
@@ -41,35 +48,56 @@ export function Dropzone({ onImage }: { onImage: (img: StudioImage, name: string
   return (
     <div
       className={`vx-rise flex flex-1 cursor-pointer flex-col items-center justify-center gap-4 px-6 text-center outline-none transition-colors ${
-        over ? "bg-white/[0.03]" : ""
+        over ? "bg-white/[0.04]" : ""
       }`}
       data-enter="true"
-      onDragOver={(e) => {
+      onDragEnter={(e) => {
         e.preventDefault();
+        depth.current++;
         setOver(true);
       }}
-      onDragLeave={() => setOver(false)}
+      onDragOver={(e) => e.preventDefault()}
+      onDragLeave={() => {
+        depth.current = Math.max(0, depth.current - 1);
+        if (depth.current === 0) setOver(false);
+      }}
       onDrop={(e) => {
         e.preventDefault();
+        depth.current = 0;
         setOver(false);
         void take(e.dataTransfer.files?.[0]);
       }}
       tabIndex={0}
       role="button"
       aria-label="Drop an image or choose a file"
-      onClick={() => fileRef.current?.click()}
+      aria-busy={reading}
+      onClick={() => {
+        if (!reading) fileRef.current?.click();
+      }}
       onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") fileRef.current?.click();
+        if ((e.key === "Enter" || e.key === " ") && !reading) fileRef.current?.click();
       }}
     >
       <p className="text-[12px] tracking-[0.2em] text-stone-500 uppercase">Vice laboratory</p>
+      <div
+        aria-hidden="true"
+        className={`flex h-16 w-16 items-center justify-center rounded-full border transition-colors ${
+          over ? "border-stone-300 text-stone-100" : "border-white/15 text-stone-500"
+        }`}
+      >
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M12 16V4" />
+          <path d="m6 10 6-6 6 6" />
+          <path d="M4 20h16" />
+        </svg>
+      </div>
       <h2 className="font-display max-w-xl text-5xl leading-tight text-stone-100 sm:text-6xl">
-        Upscale your image
+        {reading ? "Reading…" : "Upscale your image"}
       </h2>
       <p className={`text-[15px] transition-colors ${over ? "text-stone-100" : "text-stone-400"}`}>
-        {over ? "Let go to begin" : "Drop an image anywhere"}
+        {over ? "Let go to begin" : reading ? "Decoding pixels…" : "Drop an image anywhere"}
       </p>
-      <p className="text-[12px] tracking-widest text-stone-600">PNG · JPEG · WEBP · AVIF</p>
+      <p className="text-[12px] tracking-widest text-stone-600">PNG · JPEG · WEBP · AVIF · FITTED TO 2048PX</p>
       {error && (
         <p role="alert" className="text-[14px] text-[#e07856]">
           {error}
