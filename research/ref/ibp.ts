@@ -4,7 +4,7 @@
 // Π = exact box projection (range-space guarantee); clamp bounds overshoot;
 // W = per-HR-pixel weight map (null in unweighted mode; ticket 05 supplies it).
 
-import { forwardResidual, projectBox, simulateForward } from "./forward.ts";
+import { forwardResidual, projectBox, projectBoxTapered, simulateForward } from "./forward.ts";
 import { upsample, upsampleSteered, type GrayImage, type KernelName, type SteerField } from "./kernels.ts";
 import { tvDenoiseMap } from "./tv.ts";
 
@@ -28,6 +28,12 @@ export interface IbpOptions {
    * Lets texture zones take TV while isolated edges keep the pure loop.
    */
   tvMap?: { lambda: Float64Array; tvIters?: number } | null;
+  /**
+   * Tapered projection (zoom-pixelation fix): tent-weighted Π distributes
+   * block-mean correction toward block centers, shrinking boundary steps.
+   * Same exactness. No-op at s=2 (tent is uniform). Default off.
+   */
+  tapered?: boolean;
 }
 
 export interface IbpResult {
@@ -65,7 +71,7 @@ export function reconstructIbp(
   opts: IbpOptions = {},
   weights: Float64Array | null = null,
 ): IbpResult {
-  const { iters = 4, init = "lanczos3", x0 = null, project = true, clamp = true, gain = 1, blurSigma = 0, steerP = null, tvMap = null } = opts;
+  const { iters = 4, init = "lanczos3", x0 = null, project = true, clamp = true, gain = 1, blurSigma = 0, steerP = null, tvMap = null, tapered = false } = opts;
   let lo = Infinity;
   let hi = -Infinity;
   for (const v of lr.data) {
@@ -94,7 +100,7 @@ export function reconstructIbp(
     x = { w: x.w, h: x.h, data: nd };
     // Π after clamp: clamp can break block sums, projection restores them.
     // Order is clamp-then-project so the range guarantee always holds at pass end.
-    if (project) x = projectBox(x, lr, scale);
+    if (project) x = tapered ? projectBoxTapered(x, lr, scale) : projectBox(x, lr, scale);
     residuals.push(forwardResidual(x, lr, scale, blurSigma));
   }
   return { x, residuals };

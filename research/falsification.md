@@ -98,6 +98,14 @@ Standing result: tight global clamp is the right policy (block/step/jpeg gains u
 - lrc-proj top-or-tied in all 8 blocks, both domains. Linear-light gaps larger (2x box: +0.39 over lanczos3) — shadows weighted up, same ordering.
 - Locked: `photos.test.ts` bicubic-D test (lrc-proj ≥ lanczos3 per photo); `forward.test.ts` documents box/bicubic disagreement near edges (mismatch is real, just harmless here).
 
+## Iter-11 findings: tapered Π KILLED (blurs blocks; seam is the price of sharpness)
+
+- User-visible trigger: zoomed result looks more pixelated than the (browser-blurred) input. Measured: IBP seam 1.32–1.41 vs lanczos 1.12–1.15 on Kodak crop; all seam appears in pass 1 (Π snapping), later passes add nothing.
+- Tapered exact projection (tent-weighted correction, means still exact): seam drops everywhere (35→8, 14→4–6) — but step-4x −4.5 dB, repeated-4x −10 dB, jpeg −2 dB. Smoothing the projection trades block sharpness for seam softness: strictly worse where exactness matters. Only periodic improves (+0.6).
+- Verdict: seam is the price of sharp block-exactness, not a tunable artifact. 2x can't taper anyway (tent is uniform). No code adopted; primitive kept + locked by test (exactness, s=2 equivalence, block-loss kill-switch).
+- Killed list: 15 entries (+ tapered projection).
+- Honest product note: zoomed pixels are real reconstructed detail; the input only looks smoother because the browser blurs it. Magnification shows pixels for every upscaler; ours are exact.
+
 ## Iter-10 findings: anisotropic x0 HELPS smooth/sine, HURTS blocks — bidirectional, not default
 
 - Mechanism: per-pixel tangent-frame lanczos (`rAlong × rAcross`, renormalized), edge gate = coh·gnorm·curv (ramps bypass via curvature — same lesson as iter-2). Aggressive rAcross=1.25 distorts sine (−5.1 zone PSNR on surrogate patch); mild 2.25 wins all surrogate zones (+0.3–1.0).
@@ -105,9 +113,8 @@ Standing result: tight global clamp is the right policy (block/step/jpeg gains u
 - Verdict: WEAK-SURVIVE as manual option (`x0` passthrough in `reconstructIbp`, tested bit-exact); not default. Locked: gradient-4x win, surrogate-2x win, bounded-loss kill-switch (step-2x/repeated-4x within 1.2 dB).
 - Killed list: 14 entries (+ aggressive-aniso rAcross≤1.5 as default).
 
-## What survives to iter 11
+## What survives to iter 12
 
-- Reference engine + battery (16) + photo + matrix + full-set harnesses + TV + aniso modules: keep. Portable result unchanged: guarded uniform loop (bilinear-P, tight clamp, Π, lanczos3 init).
+- Reference engine + battery (16) + photo + matrix + full-set harnesses + TV + aniso modules: keep. Portable result unchanged: guarded uniform loop (bilinear-P, tight clamp, uniform Π, lanczos3 init).
 - Manual options (tested, not default): adaptive weights, directional-P, aniso-x0, TV map.
-- Next: writeup + retro if arc judged complete; C++ port only behind gate (needs core from history for same-harness comparison).
-- Killed (14 entries).
+- Killed (15 entries): + tapered projection.

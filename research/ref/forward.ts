@@ -94,8 +94,7 @@ export function forwardResidual(hr: GrayImage, lr: GrayImage, s: number, blurSig
  * s×s pixels so every block mean equals the LR sample exactly.
  * (Reference analog of shipped vice_project_box; unclamped — clamping lives in ibp.ts.)
  */
-export function projectBox(hr: GrayImage, lr: GrayImage, s: number): GrayImage {
-  if (hr.w !== lr.w * s || hr.h !== lr.h * s) throw new Error("dimension mismatch in projectBox");
+export function projectBox(hr: GrayImage, lr: GrayImage, s: number): GrayImage {  if (hr.w !== lr.w * s || hr.h !== lr.h * s) throw new Error("dimension mismatch in projectBox");
   const out = new Float64Array(hr.data);
   for (let y = 0; y < lr.h; y++)
     for (let x = 0; x < lr.w; x++) {
@@ -105,6 +104,33 @@ export function projectBox(hr: GrayImage, lr: GrayImage, s: number): GrayImage {
       const corr = lr.data[y * lr.w + x] - acc / (s * s);
       for (let dy = 0; dy < s; dy++)
         for (let dx = 0; dx < s; dx++) out[(y * s + dy) * hr.w + x * s + dx] += corr;
+    }
+  return { w: hr.w, h: hr.h, data: out };
+}
+
+/**
+ * Tapered exact projection: same block-mean guarantee, but correction is
+ * distributed with tent weights (heavy at block center, light at edges) so
+ * steps across block boundaries shrink. Block means stay EXACT (weights sum
+ * to s² by construction). At s=2 the tent is uniform — identical to projectBox.
+ * Addresses the IBP seam (block-boundary gradient ratio) without touching PSNR.
+ */
+export function projectBoxTapered(hr: GrayImage, lr: GrayImage, s: number): GrayImage {
+  if (hr.w !== lr.w * s || hr.h !== lr.h * s) throw new Error("dimension mismatch in projectBoxTapered");
+  const w1: number[] = [];
+  for (let i = 0; i < s; i++) w1.push(1 - Math.abs(i - (s - 1) / 2) / (s / 2 + 0.5));
+  let wsum = 0;
+  for (const v of w1) wsum += v;
+  wsum *= wsum;
+  const out = new Float64Array(hr.data);
+  for (let y = 0; y < lr.h; y++)
+    for (let x = 0; x < lr.w; x++) {
+      let acc = 0;
+      for (let dy = 0; dy < s; dy++)
+        for (let dx = 0; dx < s; dx++) acc += out[(y * s + dy) * hr.w + x * s + dx];
+      const corr = ((lr.data[y * lr.w + x] - acc / (s * s)) * s * s) / wsum;
+      for (let dy = 0; dy < s; dy++)
+        for (let dx = 0; dx < s; dx++) out[(y * s + dy) * hr.w + x * s + dx] += corr * w1[dx] * w1[dy];
     }
   return { w: hr.w, h: hr.h, data: out };
 }

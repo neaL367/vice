@@ -1,8 +1,10 @@
 // Ticket 01 tests: forward model exactness + projection guarantee.
 
 import { describe, expect, test } from "bun:test";
-import { boxDownsample, forwardResidual, projectBox, simulateForward } from "./forward.ts";
+import { boxDownsample, forwardResidual, projectBox, projectBoxTapered, simulateForward } from "./forward.ts";
+import { reconstructIbp } from "./ibp.ts";
 import { constantImage, downsampleKernel, upsample } from "./kernels.ts";
+import { psnr } from "./metrics.ts";
 
 describe("boxDownsample", () => {
   test("constant preserved; checker 2x2 averages to mid", () => {
@@ -60,5 +62,28 @@ describe("downsampleKernel (mismatch probe)", () => {
   });
   test("throws on indivisible geometry", () => {
     expect(() => downsampleKernel(constantImage(7, 8, 0), 2, "bicubic")).toThrow();
+  });
+});
+
+describe("projectBoxTapered (zoom-seam probe, shelved)", () => {
+  test("block means stay exact; s=2 identical to uniform (tent is uniform)", () => {
+    const lr = constantImage(4, 4, 100);
+    const raw = upsample(constantImage(4, 4, 90), 2, "lanczos3");
+    const proj = projectBoxTapered(raw, lr, 2);
+    expect(forwardResidual(proj, lr, 2)).toBeLessThan(1e-9);
+    const uni = projectBox(raw, lr, 2);
+    for (let i = 0; i < uni.data.length; i++) expect(Math.abs(proj.data[i] - uni.data[i])).toBeLessThan(1e-12);
+  });
+  test("website verdict lock: tapered blurs blocks (4x step loses >2 dB vs uniform)", () => {
+    // If a future change makes tapered beat uniform on blocks, update the
+    // falsification record instead of silently flipping behavior.
+    const data = new Float64Array(32 * 32);
+    for (let y = 0; y < 32; y++) for (let x = 0; x < 32; x++) data[y * 32 + x] = x < 16 ? 0 : 255;
+    const hr = { w: 32, h: 32, data };
+    const lr = boxDownsample(hr, 4);
+    const a = reconstructIbp(lr, 4, { iters: 4 });
+    const b = reconstructIbp(lr, 4, { iters: 4, tapered: true });
+    // Tapered must remain worse-or-equal here; its adoption was killed.
+    expect(psnr(hr, a.x) - psnr(hr, b.x)).toBeGreaterThan(2);
   });
 });
