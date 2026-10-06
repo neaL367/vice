@@ -96,7 +96,7 @@ export function ImageStage({ input, result, working }: { input: StudioImage; res
     if (!result) return;
     if (e.key === "ArrowLeft") setSplit((s) => Math.max(0, s - 4));
     else if (e.key === "ArrowRight") setSplit((s) => Math.min(100, s + 4));
-    else if (e.key === "0") resetView();
+    else if (e.key === "0" || e.key === "Escape") resetView();
     else return;
     e.preventDefault();
   }

@@ -64,9 +64,8 @@ export function useStudioJob() {
         residual: done.residual,
         ms: done.ms,
       });
-    } catch (e) {
+    } catch {
       setJob({ kind: "error", input, name, message: "We couldn't process this image." });
-      void e;
     }
   }
 

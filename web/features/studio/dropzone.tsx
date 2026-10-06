@@ -1,40 +1,58 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { StudioImage } from "./model";
 import { decodeFile } from "./use-studio-job";
 
-// Empty state: beautiful, simple. Drop anywhere, browse, paste, keyboard.
+// Empty state: beautiful, simple. Drop anywhere (with hover feedback), browse,
+// paste from anywhere on the page, keyboard.
 export function Dropzone({ onImage }: { onImage: (img: StudioImage, name: string) => void }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState<string | null>(null);
+  const [over, setOver] = useState(false);
 
-  async function take(f: File | undefined) {
-    if (!f) return;
-    if (!f.type.startsWith("image/")) {
-      setError("That file isn't an image. Try another image.");
-      return;
-    }
-    try {
-      const { image, name } = await decodeFile(f);
-      onImage(image, name);
-    } catch {
-      setError("We couldn't read this image. Try another image.");
-    }
-  }
+  const take = useCallback(
+    async (f: File | undefined | null) => {
+      if (!f) return;
+      if (!f.type.startsWith("image/")) {
+        setError("That file isn't an image. Try another image.");
+        return;
+      }
+      try {
+        const { image, name } = await decodeFile(f);
+        onImage(image, name);
+      } catch {
+        setError("We couldn't read this image. Try another image.");
+      }
+    },
+    [onImage],
+  );
+
+  // Page-wide paste: the dropzone's own onPaste needs focus, users paste anywhere.
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      const f = [...(e.clipboardData?.items ?? [])].find((i) => i.type.startsWith("image/"))?.getAsFile();
+      if (f) void take(f);
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, [take]);
 
   return (
     <div
-      className="vx-rise flex flex-1 cursor-pointer flex-col items-center justify-center gap-4 px-6 text-center outline-none"
+      className={`vx-rise flex flex-1 cursor-pointer flex-col items-center justify-center gap-4 px-6 text-center outline-none transition-colors ${
+        over ? "bg-white/[0.03]" : ""
+      }`}
       data-enter="true"
-      onDragOver={(e) => e.preventDefault()}
+      onDragOver={(e) => {
+        e.preventDefault();
+        setOver(true);
+      }}
+      onDragLeave={() => setOver(false)}
       onDrop={(e) => {
         e.preventDefault();
+        setOver(false);
         void take(e.dataTransfer.files?.[0]);
-      }}
-      onPaste={(e) => {
-        const f = [...e.clipboardData.items].find((i) => i.type.startsWith("image/"))?.getAsFile();
-        if (f) void take(f);
       }}
       tabIndex={0}
       role="button"
@@ -48,7 +66,9 @@ export function Dropzone({ onImage }: { onImage: (img: StudioImage, name: string
       <h2 className="font-display max-w-xl text-5xl leading-tight text-stone-100 sm:text-6xl">
         Upscale your image
       </h2>
-      <p className="text-[15px] text-stone-400">Drop an image anywhere</p>
+      <p className={`text-[15px] transition-colors ${over ? "text-stone-100" : "text-stone-400"}`}>
+        {over ? "Let go to begin" : "Drop an image anywhere"}
+      </p>
       <p className="text-[12px] tracking-widest text-stone-600">PNG · JPEG · WEBP · AVIF</p>
       {error && (
         <p role="alert" className="text-[14px] text-[#e07856]">

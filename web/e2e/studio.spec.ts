@@ -101,7 +101,6 @@ test("controls all work without overlap errors", async ({ page }) => {
   await expect
     .poll(async () => (await size()).w, { timeout: 5000 })
     .toBeGreaterThan(before.w + 5);
-  const wheeled = await size();
   await page.getByRole("button", { name: "Fit to view" }).click();
   const fit = await size();
   expect(Math.abs(fit.w - before.w)).toBeLessThan(2);
@@ -114,5 +113,33 @@ test("controls all work without overlap errors", async ({ page }) => {
   await expect
     .poll(async () => Number(await slider.getAttribute("aria-valuenow")), { timeout: 5000 })
     .toBeGreaterThan(50);
+  expect(errors).toEqual([]);
+});
+
+test.describe("mobile touch", () => {
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+
+  test("upload and upscale on a small touch screen", async ({ page }) => {
+    const errors: string[] = [];
+    page.on("pageerror", (e) => errors.push(String(e)));
+    await page.goto("/");
+    const photo = path.resolve(__dirname, "../../tools/eval/data/photos/kodim23.png");
+    await page.locator('input[type="file"]').first().setInputFiles(photo);
+    await page.getByRole("button", { name: "Upscale" }).tap();
+    await expect(page.getByText("Ready", { exact: false })).toBeVisible({ timeout: 90000 });
+    expect(errors).toEqual([]);
+  });
+});
+
+test("invalid file shows a human error, not a crash", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  await page.goto("/");
+  await page.locator('input[type="file"]').first().setInputFiles({
+    name: "note.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.from("not an image"),
+  });
+  await expect(page.getByText("isn't an image")).toBeVisible();
   expect(errors).toEqual([]);
 });
