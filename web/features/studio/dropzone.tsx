@@ -85,9 +85,7 @@ export function Dropzone({
           fileRef.current?.click();
       }}
     >
-      <p className="text-[12px] tracking-[0.2em] text-stone-500 uppercase">
-        Vice laboratory
-      </p>
+      <h1 className="font-display text-[26px] tracking-tight text-stone-100">Vice</h1>
       <h2 className="font-display max-w-xl text-5xl leading-tight text-stone-100 sm:text-6xl">
         {reading ? "Reading…" : "Upscale your image"}
       </h2>
@@ -103,6 +101,7 @@ export function Dropzone({
       <p className="text-[12px] tracking-widest text-stone-600">
         PNG · JPEG · WEBP · AVIF · FITTED TO 2048PX
       </p>
+      <p className="text-[11px] text-stone-700">On-device · No uploads</p>
       {error && (
         <p role="alert" className="text-[14px] text-[#e07856]">
           {error}
