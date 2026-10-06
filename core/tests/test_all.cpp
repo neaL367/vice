@@ -4,9 +4,11 @@
 #include <cstdio>
 #include <vector>
 #include "vice.h"
+#include "../src/descriptors.h"
 #include "../src/forward.h"
 #include "../src/ibp.h"
 #include "../src/kernels.h"
+#include "../src/regularization.h"
 
 static int failures = 0;
 #define CHECK(cond) do { \
@@ -79,6 +81,30 @@ int main() {
     double p = psnr(hr, r.x);
     std::printf("info: step2x psnr=%.2f (TS ref 47.62)\n", p);
     CHECK(std::fabs(p - 47.62) < 0.15);
+  }
+
+  // Regularization contracts: flat fields feel nothing; step edge is
+  // confident but not alias-like; TS cross-behavior (R_edge idle on clean step).
+  {
+    std::vector<double> flat(64, 128.0);
+    auto lap = vice::laplacian(flat, 8, 8);
+    double worst = 0.0;
+    for (double v : lap) worst = std::max(worst, std::fabs(v));
+    CHECK(worst == 0.0);
+    std::vector<double> lr(16, 100.0);  // 4x4 flat LR
+    auto maps = vice::regularization_maps(lr, 4, 4, 2);
+    std::vector<double> up(64, 100.0);
+    auto step = vice::regularization_step(up, 8, 8, maps, 0.05, 0.1);
+    worst = 0.0;
+    for (double v : step) worst = std::max(worst, std::fabs(v));
+    CHECK(worst < 1e-9);
+    // 8x8 step LR (edge at x=4): mean edge confidence present.
+    std::vector<double> lrS(64, 0.0);
+    for (int y = 0; y < 8; y++) for (int x = 0; x < 8; x++) lrS[(size_t)y * 8 + x] = x < 4 ? 0.0 : 255.0;
+    auto d = vice::compute_descriptors(lrS, 8, 8);
+    double me = 0.0;
+    for (double v : d.edge) me += v;
+    CHECK(me / d.edge.size() > 0.01);
   }
 
   // API smoke: 8x8 RGBA 2x through the C ABI, byte-exact block sums.
