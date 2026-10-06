@@ -67,3 +67,39 @@ test("studio shows input and produces output", async ({ page }) => {
   expect(aligned.h0).toBeGreaterThan(100);
   expect(errors).toEqual([]);
 });
+
+// Every visible control responds: scale switch, zoom in/out/fit, reveal slider.
+test("controls all work without overlap errors", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  await page.goto("/");
+  const photo = path.resolve(__dirname, "../../tools/eval/data/photos/kodim23.png");
+  await page.locator('input[type="file"]').first().setInputFiles(photo);
+  await page.getByRole("button", { name: "4×", exact: true }).click();
+  await expect(page.getByText("3072×2048")).toBeVisible();
+  await page.getByRole("button", { name: "Upscale" }).click();
+  await expect(page.getByText("Ready", { exact: false })).toBeVisible({ timeout: 90000 });
+
+  // Zoom in grows the layer; Fit restores.
+  const size = () =>
+    page.evaluate(() => {
+      const c = document.querySelectorAll("canvas")[0] as HTMLCanvasElement;
+      const r = c.getBoundingClientRect();
+      return { w: r.width, h: r.height };
+    });
+  const before = await size();
+  await page.getByRole("button", { name: "Zoom in" }).click();
+  const zoomed = await size();
+  expect(zoomed.w).toBeGreaterThan(before.w + 5);
+  await page.getByRole("button", { name: "Fit to view" }).click();
+  const fit = await size();
+  expect(Math.abs(fit.w - before.w)).toBeLessThan(2);
+
+  // Reveal slider moves the split via keyboard.
+  const slider = page.getByLabel("Reveal comparison");
+  await slider.focus();
+  await slider.press("ArrowLeft");
+  const left = await slider.inputValue();
+  expect(Number(left)).toBeLessThan(50);
+  expect(errors).toEqual([]);
+});
