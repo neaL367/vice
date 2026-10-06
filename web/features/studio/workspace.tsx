@@ -7,10 +7,10 @@ import { ImageStage } from "./image-stage";
 import type { StudioImage } from "./model";
 import { decodeFile, useStudioJob } from "./use-studio-job";
 
-// Workspace: one surface. Stage fills everything; a single pill floats at the
-// bottom; facts are a micro overlay. No stacked sections, no cards.
+// Workspace: top bar (brand · status · new image) + full-bleed stage + one
+// floating dock. No sidebars, no sections, no footer.
 export function Workspace() {
-  const { job, openImage, reset, upscale } = useStudioJob();
+  const { job, openImage, upscale } = useStudioJob();
   const [scale, setScale] = useState<2 | 3 | 4>(2);
 
   async function take(f: File | undefined) {
@@ -19,7 +19,7 @@ export function Workspace() {
       const { image, name } = await decodeFile(f);
       openImage(image, name);
     } catch {
-      // Dropzone surfaces its own errors; the header picker stays silent-safe.
+      // Dropzone surfaces its own errors; the top-bar picker stays silent-safe.
     }
   }
 
@@ -38,75 +38,74 @@ export function Workspace() {
     }, "image/png");
   }
 
-  if (job.kind === "idle") {
-    return (
-      <div className="flex min-h-0 flex-1 flex-col">
-        <Dropzone onImage={openImage} />
-      </div>
-    );
-  }
-
-  const input = job.input;
-  if (!input) {
-    return (
-      <p role="alert" className="p-6 text-[14px] text-[#e07856]">
-        We couldn&apos;t process this image. <button className="underline" onClick={reset}>Try another image</button>
-      </p>
-    );
-  }
-  const result = job.kind === "done" ? job.output : null;
-  const working = job.kind === "working";
+  const status =
+    job.kind === "done"
+      ? `Ready · ${job.output.w}×${job.output.h} · ${job.ms.toFixed(0)} ms · ${job.residual.toExponential(1)}`
+      : job.kind === "working"
+        ? "Working…"
+        : job.kind === "error"
+          ? job.message
+          : "On-device · No uploads";
 
   return (
-    <div className="relative min-h-0 flex-1">
-      <ImageStage
-        key={`${job.name}-${input.w}x${input.h}`}
-        input={input}
-        result={result}
-        working={working}
-      />
-      {job.kind === "done" && (
-        <p className="absolute top-3.5 left-4 font-mono text-[11px] text-white/50 tabular-nums">
-          Ready · {job.output.w}×{job.output.h} · {job.ms.toFixed(0)} ms · {job.residual.toExponential(1)}
+    <div className="flex h-full min-h-0 flex-col">
+      <header className="flex shrink-0 items-center gap-3 px-5 py-3">
+        <h1 className="font-display text-[22px] tracking-tight text-stone-100">Vice</h1>
+        <p className="hidden font-mono text-[11px] text-stone-500 tabular-nums sm:block" role="status">
+          {status}
+        </p>
+        {job.kind !== "idle" && (
+          <label className="ml-auto cursor-pointer rounded-full border border-white/15 px-4 py-1.5 text-[13px] text-stone-300 transition-colors hover:bg-white/5">
+            New image
+            <input
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => {
+                void take(e.target.files?.[0] ?? undefined);
+                e.target.value = "";
+              }}
+            />
+          </label>
+        )}
+      </header>
+
+      {job.kind === "idle" ? (
+        <div className="flex min-h-0 flex-1 flex-col">
+          <Dropzone onImage={openImage} />
+        </div>
+      ) : (
+        job.input && (
+          <main className="relative min-h-0 flex-1">
+            <ImageStage
+              key={`${job.name}-${job.input.w}x${job.input.h}`}
+              input={job.input}
+              result={job.kind === "done" ? job.output : null}
+              working={job.kind === "working"}
+            />
+            <div className="absolute inset-x-0 bottom-5 flex justify-center px-4">
+              <Controls
+                scale={scale}
+                setScale={setScale}
+                inDims={`${job.input.w}×${job.input.h}`}
+                outDims={`${job.input.w * scale}×${job.input.h * scale}`}
+                canRun={job.kind === "ready" || job.kind === "done"}
+                working={job.kind === "working"}
+                canDownload={job.kind === "done"}
+                onUpscale={() => void upscale(scale)}
+                onDownload={() => {
+                  if (job.kind === "done") download(job.output, job.name, job.scale);
+                }}
+              />
+            </div>
+          </main>
+        )
+      )}
+      {job.kind === "error" && !job.input && (
+        <p role="alert" className="p-6 text-[14px] text-[#e07856]">
+          We couldn&apos;t process this image.
         </p>
       )}
-      {job.kind === "error" && (
-        <p role="alert" className="absolute top-3 left-1/2 -translate-x-1/2 rounded-full bg-black/70 px-4 py-1.5 text-[13px] text-[#e07856]">
-          {job.message} <button className="underline" onClick={reset}>Try another image</button>
-        </p>
-      )}
-      <div className="absolute inset-x-0 bottom-4 flex justify-center px-4">
-        <Controls
-          scale={scale}
-          setScale={setScale}
-          inDims={`${input.w}×${input.h}`}
-          outDims={`${input.w * scale}×${input.h * scale}`}
-          canRun={job.kind === "ready" || job.kind === "done"}
-          working={working}
-          canDownload={job.kind === "done"}
-          onUpscale={() => void upscale(scale)}
-          onDownload={() => {
-            if (job.kind === "done") download(job.output, job.name, job.scale);
-          }}
-        />
-      </div>
-      <div className="absolute bottom-4 left-4 hidden gap-4 text-[13px] text-white/40 sm:flex">
-        <label className="cursor-pointer hover:text-white/80">
-          New image
-          <input
-            type="file"
-            accept="image/*"
-            className="hidden"
-            onChange={(e) => {
-              void take(e.target.files?.[0] ?? undefined);
-              e.target.value = "";
-            }}
-          />
-        </label>
-        <button className="hover:text-white/80" onClick={reset}>
-          Start over
-        </button>
-      </div>
     </div>
   );
 }
