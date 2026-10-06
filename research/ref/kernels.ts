@@ -64,8 +64,14 @@ export function kernelWeight(name: KernelName, x: number): number {
   }
 }
 
-function clampIdx(i: number, n: number): number {
-  return i < 0 ? 0 : i >= n ? n - 1 : i;
+// Whole-sample symmetric (mirror) extension: precondition for IBP is that
+// border pixels upsample without clamp asymmetry (measured: clamp borders cost
+// ~4 dB on gradient-ramp while interior matched init). i in (-n, 2n) suffices
+// for all kernel radii used here.
+function edgeIdx(i: number, n: number): number {
+  if (i < 0) return -i;
+  if (i >= n) return 2 * n - 2 - i;
+  return i;
 }
 
 // One separable pass along rows (w direction). src: h×w, returns h×(w*s).
@@ -83,7 +89,7 @@ function passRows(src: Float64Array, w: number, h: number, s: number, name: Kern
       for (let ix = lo; ix <= hi; ix++) {
         const wt = kernelWeight(name, c - ix);
         if (wt === 0) continue;
-        acc += src[y * w + clampIdx(ix, w)] * wt;
+        acc += src[y * w + edgeIdx(ix, w)] * wt;
         wsum += wt;
       }
       out[y * ow + ox] = wsum !== 0 ? acc / wsum : 0;
@@ -107,7 +113,7 @@ function passCols(src: Float64Array, w: number, h: number, s: number, name: Kern
       for (let iy = lo; iy <= hi; iy++) {
         const wt = kernelWeight(name, c - iy);
         if (wt === 0) continue;
-        acc += src[clampIdx(iy, h) * w + x] * wt;
+        acc += src[edgeIdx(iy, h) * w + x] * wt;
         wsum += wt;
       }
       out[oy * w + x] = wsum !== 0 ? acc / wsum : 0;

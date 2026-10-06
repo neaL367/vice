@@ -61,3 +61,4 @@ Per output pixel: descriptors O(k_d²) (k_d ≤ 5), upscale O(k²) (k ≤ 6), it
 - Float32 compute, float64 accumulation for sums/residuals; ε-comparisons with explicit tolerances (residual τ=1e-5, exact-sum ≤1 ULP path separate in core only).
 - Deterministic reductions (fixed order), boundary = clamp/replicate documented per function, halo math mirrors `vice_stream_halo_rows` convention.
 - Reference TS uses float64 throughout; equivalence window vs float32 port defined per-metric in spec acceptance.
+- Boundary extension: mirror (whole-sample symmetric) in upsample passes — clamp cost ~4 dB on gradient-ramp (border-dominated on small fixtures) while interior matched init. Descriptors/estimators keep clamp (less sensitive). Bench scores interior (margin 4px); boundary policy tested separately.

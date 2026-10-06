@@ -1,6 +1,6 @@
 # Spec: Deterministic Reconstruction Theory + Reference Engine (vice-theory)
 
-Status: ready-for-agent
+Status: done
 
 ## Problem Statement
 
