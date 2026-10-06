@@ -1,7 +1,8 @@
 # Falsification Report — Iter 1+2 (reference TS, tickets 01–06 evidence)
 
-Date 2026-10-06 (iter 1), 2026-10-07 (iter 2: adaptive law + color/noise probes).
-All numbers from `research/results/baseline.json` (270 rows, interior-margin scoring). No natural images tested — synthetics only, per program rules.
+Date 2026-10-06 (iter 1), 2026-10-07 (iter 2: adaptive law + color/noise probes),
+2026-10-07 (iter 3: clamp-range mechanism + photo-scale transfer).
+All numbers from `research/results/baseline.json` (288 rows, interior-margin scoring). No natural images tested — synthetics only, per program rules.
 
 ## Verdicts
 
@@ -34,10 +35,25 @@ All numbers from `research/results/baseline.json` (270 rows, interior-margin sco
 
 - `nearest` wins impulse/lines/checkerboard PSNR because L2 rewards energy concentration over correct spread on sparse signals. Do NOT read as "nearest is best". Gradient-error and ringing columns exist for this reason; future comparison must lead with them on sparse families.
 
-## What survives to iter 3
+## Iter-3 findings
 
-- Math core (kernels/forward/metrics/descriptors/color/degradation), battery, bench harness: keep.
-- Adaptive weight law (HYP-1 weak): keep as nullspace-shaping primitive; next validation on natural images via vice_eval sets (needs external datasets).
-- Killed: LRC classes, alias gate, hpCoh, residual-coherence gate, clamp boundaries. Do not revive without new evidence.
-- Open: periodic-sine 2x loss (−0.36, why HF drive mis-corrects); multi-scale coherence for texture-vs-noise; residual-domain gating done right.
+### Clamp-range mechanism (periodic loss explained, not fixed)
+
+- IBP-without-clamp converges in ONE iteration and freezes (correction→0): it is a single-step projection method. Clamp is the engine of all multi-iteration behavior — it re-creates residual each pass by cutting peaks, Π re-exacts means. Measured: step 24.44 (no clamp) vs 47.62 (clamp, T=4); jpeg 21.46 vs 26.50.
+- Clamp = implicit L∞ projection onto [minLR, maxLR]. Valid iff HR range ⊆ LR range (step: LR spans 0–255 exactly ✓). For oscillatory texture the premise is false (periodic LR spans 34–220, HR 0–255): clamp cuts TRUE peaks every pass → 25.29→24.34 decline while residual reads ~0. Residual cannot detect this; HR-PSNR can.
+- Global T-routing (1 vs 4 by texture score) is a dead end: jpeg (needs T=4) and periodic (needs T=1) overlap on meanAlias/meanEdge/meanCoh at both scales. No global separator exists in the descriptor set. Per-pixel bound routing is future work, not this iteration.
+- Periodic texture remains a loss zone vs best fixed (lanczos3 29.91 interior vs loop ~28). Scoped, not solved.
+
+### Photo-scale transfer (photo-surrogate, 128px 1/f + step + sine + wedge)
+
+- 2x: loop 37.24 (adaptive) vs lanczos3 35.66 → **+1.58 dB**, best gradErr (1.77), zero ringing, residual 1e-14. HYP-1 wins on mixed photo-scale content, not just toys. Locked by test.
+- 4x: loop 27.86 vs lanczos3 26.36 → +1.5 dB; adaptive −0.05 vs uniform (sine-patch zone, same periodic loss at scale). Loop transfers; adaptive neutral-to-positive.
+- Caveat: surrogate is still synthetic (no optics, no JPEG, no demosaic). Natural-set validation (vice_eval) needs external datasets + C++ build — not available on this box (no data dir, no g++/MSVC on PATH). Recorded as open, not claimed.
+
+## What survives to iter 4
+
+- Math core (kernels/forward/metrics/descriptors/color/degradation), battery (16 families incl. photo-surrogate), bench harness: keep.
+- Adaptive weight law (HYP-1 weak, now with photo-scale win): keep; next is natural-set validation when datasets/build available, or per-pixel bound routing for the texture loss.
+- Killed: LRC classes, alias gate, hpCoh, residual-coherence gate, clamp boundaries, global T-routing. Do not revive without new evidence.
+- Open: per-pixel clamp bounds for texture (mechanism known, fix open); multi-scale coherence; residual-domain gating done right.
 - C++/WASM port gate UNMET (requires >0.3 dB PSNR or >0.005 SSIM on ≥2 natural sets, residual ≤1e-5) — no port.

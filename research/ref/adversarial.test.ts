@@ -7,7 +7,7 @@ import { boxDownsample } from "./forward.ts";
 describe("battery", () => {
   test("15 families present, HR divisible by 2 and 4", () => {
     const fs = allFixtures();
-    expect(fs.length).toBe(15);
+    expect(fs.length).toBe(16);
     for (const f of fs) {
       expect(f.hr.w % 4).toBe(0);
       expect(f.hr.h % 4).toBe(0);

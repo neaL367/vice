@@ -1,11 +1,12 @@
 // Ticket 05 tests: descriptor geometry + adaptive law contracts.
 
 import { describe, expect, test } from "bun:test";
-import { fixtureGradient, fixtureRepeated, fixtureThinH, fixtureStep, lcg } from "./adversarial.ts";
+import { fixtureGradient, fixturePhotoSurrogate, fixtureRepeated, fixtureThinH, fixtureStep, lcg } from "./adversarial.ts";
 import { adaptiveWeights, describeFor, varianceClassify } from "./adaptive.ts";
 import { computeDescriptors } from "./descriptors.ts";
 import { boxDownsample } from "./forward.ts";
 import { reconstructIbp } from "./ibp.ts";
+import { upsample } from "./kernels.ts";
 import { psnr } from "./metrics.ts";
 
 describe("descriptors", () => {
@@ -124,5 +125,24 @@ describe("adaptive law", () => {
     const ad = reconstructIbp(lr2, 4, { iters: 4 }, adaptiveWeights(d2.desc, d2.cls, d2.sigma, 4, undefined, "lrc"));
     const va = reconstructIbp(lr2, 4, { iters: 4 }, adaptiveWeights(d2.desc, vr2, d2.sigma, 4, undefined, "variance"));
     expect(Math.abs(psnr(thinH.hr, ad.x) - psnr(thinH.hr, va.x))).toBeLessThan(0.1); // ...yet outcomes match
+  });
+  test("photo-surrogate 2x: loop beats best fixed by >1 dB, adaptive ≥ uniform", () => {
+    // Transfer test: law must hold at photo scale (128px mixed 1/f content),
+    // not just on 32px toys. Interior-scored (margin 4).
+    const f = fixturePhotoSurrogate();
+    const lr = boxDownsample(f.hr, 2);
+    const { desc, sigma, cls } = describeFor(lr);
+    const uni = reconstructIbp(lr, 2, { iters: 4 });
+    const ad = reconstructIbp(lr, 2, { iters: 4 }, adaptiveWeights(desc, cls, sigma, 2));
+    const lz = upsample(lr, 2, "lanczos3");
+    const crop = (img: { w: number; h: number; data: Float64Array }, m: number) => {
+      const data = new Float64Array((img.w - 2 * m) * (img.h - 2 * m));
+      for (let y = 0; y < img.h - 2 * m; y++)
+        for (let x = 0; x < img.w - 2 * m; x++) data[y * (img.w - 2 * m) + x] = img.data[(y + m) * img.w + x + m];
+      return { w: img.w - 2 * m, h: img.h - 2 * m, data };
+    };
+    const ref = crop(f.hr, 4);
+    expect(psnr(ref, crop(ad.x, 4)) - psnr(ref, crop(lz, 4))).toBeGreaterThan(1);
+    expect(psnr(ref, crop(ad.x, 4))).toBeGreaterThanOrEqual(psnr(ref, crop(uni.x, 4)));
   });
 });

@@ -164,6 +164,48 @@ export function fixtureMixed(): Fixture {
   };
 }
 
+const L = 128; // photo-scale dimension (divisible by 2 and 4)
+
+export function fixturePhotoSurrogate(): Fixture {
+  // Deterministic natural-image surrogate: 1/f broadband field (summed sines,
+  // amplitude ∝ 1/f, LCG phases) + step edge + gradient wedge + sine patch.
+  // Tests whether the adaptive law transfers beyond 32px toy sizes.
+  const phases: number[] = [];
+  const r2 = lcg(0xbeef);
+  for (let k = 0; k < 240; k++) phases.push(r2() * 2 * Math.PI);
+  const field = make(L, L, (x, y) => {
+    let v = 0;
+    for (let k = 0; k < 240; k++) {
+      const fx = 1 + (k % 16);
+      const fy = 1 + Math.floor(k / 16);
+      const amp = 1 / Math.hypot(fx, fy);
+      v += amp * Math.sin((2 * Math.PI * (fx * x + fy * y)) / L + phases[k]);
+    }
+    return v;
+  });
+  // Normalize to [0,255], then composite structure.
+  let mn = Infinity;
+  let mx = -Infinity;
+  for (const v of field.data) {
+    if (v < mn) mn = v;
+    if (v > mx) mx = v;
+  }
+  const data = new Float64Array(L * L);
+  for (let y = 0; y < L; y++)
+    for (let x = 0; x < L; x++) {
+      let v = ((field.data[y * L + x] - mn) / (mx - mn)) * 255;
+      if (x >= 84) v = v * 0.35 + 150; // bright step region right (edge at x=84)
+      if (y >= 96 && x < 64) v = v * 0.3 + 40 + 60 * Math.sin((2 * Math.PI * x) / 8); // sine patch
+      if (x < 32 && y < 32) v = (x / 31) * 255; // gradient wedge corner
+      data[y * L + x] = Math.max(0, Math.min(255, v));
+    }
+  return {
+    name: "photo-surrogate",
+    hr: { w: L, h: L, data },
+    property: "128px 1/f field + step + sine patch + gradient wedge: photo-scale mixed content. Law must hold here, not just on 32px toys.",
+  };
+}
+
 export function allFixtures(): Fixture[] {
   return [
     fixtureImpulse(),
@@ -181,5 +223,6 @@ export function allFixtures(): Fixture[] {
     fixtureNoise(),
     fixtureJpegBlocks(),
     fixtureMixed(),
+    fixturePhotoSurrogate(),
   ];
 }

@@ -21,6 +21,7 @@ Null-PSNR cells (checkerboard/nyquist): every method scores ≈ identikit gray �
 | white-noise | nearest | 11.99 | 11.71 | 11.74 | 11.74 | +0.03 | -0.25 |
 | jpeg-blocks | nearest | 29.94 | 26.14 | 26.32 | 26.32 | +0.18 | -3.62 |
 | mixed-frequency | nearest | 9.01 | 9 | 9.01 | 9.01 | +0.01 | +0 |
+| photo-surrogate | lanczos3 | 35.66 | 37.02 | 37.24 | 37.24 | +0.22 | +1.58 |
 
 ## Scale 4x — PSNR interior (dB; null = ∞)
 
@@ -41,6 +42,7 @@ Null-PSNR cells (checkerboard/nyquist): every method scores ≈ identikit gray �
 | white-noise | nearest | 10.91 | 10.84 | 10.86 | 10.86 | +0.02 | -0.05 |
 | jpeg-blocks | nearest | 28.26 | 25.3 | 25.53 | 25.53 | +0.23 | -2.73 |
 | mixed-frequency | nearest | 8.94 | 8.93 | 8.93 | 8.93 | +0 | -0.01 |
+| photo-surrogate | lanczos3 | 26.36 | 27.86 | 27.81 | 27.81 | -0.05 | +1.45 |
 
 ## Residual violations (DHx≈y failures, RMS levels)
 
@@ -176,3 +178,13 @@ Null-PSNR cells (checkerboard/nyquist): every method scores ≈ identikit gray �
 | mixed-frequency | 4x | mitchell | 9.77 |
 | mixed-frequency | 4x | lanczos2 | 6.25 |
 | mixed-frequency | 4x | lanczos3 | 5.36 |
+| photo-surrogate | 2x | bilinear | 5.72 |
+| photo-surrogate | 2x | bicubic | 2.62 |
+| photo-surrogate | 2x | mitchell | 4.7 |
+| photo-surrogate | 2x | lanczos2 | 2.69 |
+| photo-surrogate | 2x | lanczos3 | 1.9 |
+| photo-surrogate | 4x | bilinear | 10.23 |
+| photo-surrogate | 4x | bicubic | 6.78 |
+| photo-surrogate | 4x | mitchell | 9.84 |
+| photo-surrogate | 4x | lanczos2 | 6.69 |
+| photo-surrogate | 4x | lanczos3 | 6.09 |
