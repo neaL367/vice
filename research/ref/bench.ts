@@ -65,6 +65,8 @@ for (const f of allFixtures()) {
       { name: "ibp-lz2p", run: () => reconstructIbp(lr, s, { iters: 4, steerP: { field: steer, strength: 0, sharp: 2 } }).x },
       // Directional P (iter-8): steered correction; killed verdict, kept measured.
       { name: "ibp-dir", run: () => reconstructIbp(lr, s, { iters: 4, steerP: { field: steer, strength: 0.75, sharp: 2 } }).x },
+      // R_edge default on: ibp-uniform/lrc now include it; noreg isolates it.
+      { name: "ibp-noreg", run: () => reconstructIbp(lr, s, { iters: 4, reg: null }).x },
       // Aniso-x0 (iter-10): mild directional init (rAcross 2.25, curv-gated).
       { name: "ibp-aniso", run: () => reconstructIbp(lr, s, { iters: 4, x0: upsampleAniso(lr, s, anisoField, { rAlong: 3, rAcross: 2.25 }) }).x },
     ];

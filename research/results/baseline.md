@@ -8,7 +8,7 @@ Null-PSNR cells (checkerboard/nyquist): every method scores ≈ identikit gray �
 |---|---|---|---|---|---|---|---|---|---|
 | impulse | nearest | 28.85 | 28.85 | 28.85 | 28.85 | 28.85 | 28.85 | +0 | +0 |
 | checkerboard | nearest | 6.02 | 6.02 | 6.02 | 6.02 | 6.02 | 6.02 | +0 | +0 |
-| sine-sweep | nearest | 12.82 | 12.22 | 12.28 | 12.28 | 12.2 | 12.24 | +0.06 | +0.04 |
+| sine-sweep | nearest | 12.82 | 12.29 | 12.34 | 12.34 | 12.27 | 12.3 | +0.05 | +0.03 |
 | nyquist-stripes | nearest | 6.02 | 6.02 | 6.02 | 6.02 | 6.02 | 6.02 | +0 | +0 |
 | diagonal-line | nearest | 16.81 | 16.86 | 16.86 | 16.86 | 16.85 | 16.8 | +0 | -0.05 |
 | thin-h-line | nearest | 16.81 | 16.81 | 16.81 | 16.81 | 16.81 | 16.81 | +0 | +0 |
@@ -19,9 +19,9 @@ Null-PSNR cells (checkerboard/nyquist): every method scores ≈ identikit gray �
 | repeated-blocks | nearest | ∞ | 29.52 | 29.72 | 29.72 | 29.41 | 29.31 | +0.2 | -0.1 |
 | periodic-sine2d | lanczos3 | 29.91 | 28.38 | 28.02 | 28.02 | 28.45 | 28.45 | -0.36 | +0 |
 | white-noise | nearest | 11.99 | 11.71 | 11.74 | 11.74 | 11.69 | 11.69 | +0.03 | +0 |
-| jpeg-blocks | nearest | 29.94 | 26.14 | 26.32 | 26.32 | 26.05 | 26.03 | +0.18 | -0.02 |
-| mixed-frequency | nearest | 9.01 | 9 | 9.01 | 9.01 | 9 | 9 | +0.01 | +0 |
-| photo-surrogate | lanczos3 | 35.66 | 37.02 | 37.24 | 37.24 | 36.9 | 36.95 | +0.22 | +0.05 |
+| jpeg-blocks | nearest | 29.94 | 26.19 | 26.36 | 26.36 | 26.1 | 26.08 | +0.17 | -0.02 |
+| mixed-frequency | nearest | 9.01 | 9.01 | 9.01 | 9.01 | 9.01 | 9.01 | +0 | +0 |
+| photo-surrogate | lanczos3 | 35.66 | 37.23 | 37.44 | 37.44 | 37.12 | 37.16 | +0.21 | +0.04 |
 
 ## Scale 4x — PSNR interior (dB; null = ∞)
 
@@ -29,7 +29,7 @@ Null-PSNR cells (checkerboard/nyquist): every method scores ≈ identikit gray �
 |---|---|---|---|---|---|---|---|---|---|
 | impulse | nearest | 27.88 | 27.83 | 27.84 | 27.84 | 27.83 | 27.83 | +0.01 | +0 |
 | checkerboard | nearest | 6.02 | 6.02 | 6.02 | 6.02 | 6.02 | 6.02 | +0 | +0 |
-| sine-sweep | nearest | 10.58 | 10.04 | 10.12 | 10.12 | 10.02 | 10.04 | +0.08 | +0.02 |
+| sine-sweep | nearest | 10.58 | 10.08 | 10.16 | 10.16 | 10.06 | 10.08 | +0.08 | +0.02 |
 | nyquist-stripes | nearest | 6.02 | 6.02 | 6.02 | 6.02 | 6.02 | 6.02 | +0 | +0 |
 | diagonal-line | nearest | 15.05 | 15.1 | 15.1 | 15.1 | 15.1 | 15.08 | +0 | -0.02 |
 | thin-h-line | nearest | 15.05 | 15 | 15 | 15 | 15.01 | 15 | +0 | -0.01 |
@@ -41,8 +41,8 @@ Null-PSNR cells (checkerboard/nyquist): every method scores ≈ identikit gray �
 | periodic-sine2d | nearest | 15.33 | 15.58 | 15.53 | 15.53 | 15.61 | 15.61 | -0.05 | +0 |
 | white-noise | nearest | 10.91 | 10.84 | 10.86 | 10.86 | 10.83 | 10.84 | +0.02 | +0.01 |
 | jpeg-blocks | nearest | 28.26 | 25.3 | 25.53 | 25.53 | 25.22 | 25.16 | +0.23 | -0.06 |
-| mixed-frequency | nearest | 8.94 | 8.93 | 8.93 | 8.93 | 8.93 | 8.93 | +0 | +0 |
-| photo-surrogate | lanczos3 | 26.36 | 27.86 | 27.81 | 27.81 | 27.9 | 27.99 | -0.05 | +0.09 |
+| mixed-frequency | nearest | 8.94 | 8.94 | 8.94 | 8.94 | 8.93 | 8.94 | +0 | +0.01 |
+| photo-surrogate | lanczos3 | 26.36 | 27.88 | 27.81 | 27.81 | 27.92 | 28.01 | -0.07 | +0.09 |
 
 ## Residual violations (DHx≈y failures, RMS levels)
 

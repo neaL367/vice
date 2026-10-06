@@ -3,6 +3,7 @@
 // range overshoot (ringing proxy) + forward residual re-export.
 
 import type { GrayImage } from "./kernels.ts";
+import { laplacian } from "./regularization.ts";
 
 function requireSameSize(a: GrayImage, b: GrayImage): void {
   if (a.w !== b.w || a.h !== b.h) throw new Error(`size mismatch ${a.w}x${a.h} vs ${b.w}x${b.h}`);
@@ -112,4 +113,22 @@ export function stepOvershoot(img: GrayImage, edgeX: number, lo: number, hi: num
       if (dev > worst) worst = dev;
     }
   return worst;
+}
+
+/**
+ * High-frequency energy error: relative difference of Laplacian-energy
+ * between estimate and truth. Over-sharpening/alias amplification raises it;
+ * over-smoothing lowers it. 0 when HF content matches (not merely absent).
+ */
+export function hfEnergyError(est: GrayImage, truth: GrayImage): number {
+  const le = laplacian(est);
+  const lt = laplacian(truth);
+  let se = 0;
+  let st = 0;
+  for (let i = 0; i < le.length; i++) {
+    se += le[i] * le[i];
+    st += lt[i] * lt[i];
+  }
+  if (st === 0) return se === 0 ? 0 : Infinity;
+  return Math.abs(Math.sqrt(se) - Math.sqrt(st)) / Math.sqrt(st);
 }

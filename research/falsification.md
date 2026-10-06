@@ -99,7 +99,6 @@ Standing result: tight global clamp is the right policy (block/step/jpeg gains u
 - Locked: `photos.test.ts` bicubic-D test (lrc-proj ≥ lanczos3 per photo); `forward.test.ts` documents box/bicubic disagreement near edges (mismatch is real, just harmless here).
 
 ## Iter-11 findings: tapered Π KILLED (blurs blocks; seam is the price of sharpness)
-
 - User-visible trigger: zoomed result looks more pixelated than the (browser-blurred) input. Measured: IBP seam 1.32–1.41 vs lanczos 1.12–1.15 on Kodak crop; all seam appears in pass 1 (Π snapping), later passes add nothing.
 - Tapered exact projection (tent-weighted correction, means still exact): seam drops everywhere (35→8, 14→4–6) — but step-4x −4.5 dB, repeated-4x −10 dB, jpeg −2 dB. Smoothing the projection trades block sharpness for seam softness: strictly worse where exactness matters. Only periodic improves (+0.6).
 - Verdict: seam is the price of sharp block-exactness, not a tunable artifact. 2x can't taper anyway (tent is uniform). No code adopted; primitive kept + locked by test (exactness, s=2 equivalence, block-loss kill-switch).
@@ -113,8 +112,16 @@ Standing result: tight global clamp is the right policy (block/step/jpeg gains u
 - Verdict: WEAK-SURVIVE as manual option (`x0` passthrough in `reconstructIbp`, tested bit-exact); not default. Locked: gradient-4x win, surrogate-2x win, bounded-loss kill-switch (step-2x/repeated-4x within 1.2 dB).
 - Killed list: 14 entries (+ aggressive-aniso rAcross≤1.5 as default).
 
-## What survives to iter 12
+## Iter-12 findings: structured objective ADOPTED (R_edge default, R_freq manual)
 
-- Reference engine + battery (16) + photo + matrix + full-set harnesses + TV + aniso modules: keep. Portable result unchanged: guarded uniform loop (bilinear-P, tight clamp, uniform Π, lanczos3 init).
-- Manual options (tested, not default): adaptive weights, directional-P, aniso-x0, TV map.
-- Killed (15 entries): + tapered projection.
+- HF error sources, all measured in prior iters: S1 nullspace injection by P (residual→0 while HR error rises: gradient 49.2→44.9 dB); S2 truncation ringing from lanczos init (Gibbs ~5–9%, managed but not removed by clamp+Π); S3 aliased/noise HF re-injected at unit gain.
+- Objective now: x* = argmin ‖DHx−y‖² + R_freq + R_edge, solved by projected gradient inside the loop (same solver, no new machinery). R_freq = alias-weighted Laplacian energy; R_edge = edge-confidence-weighted exceedance beyond local LR range. Legitimate-HF preservation is structural: coherent edges get w≈0, in-range interiors get v-idle.
+- Sweep verdict: R_edge (eta2=0.05) safe everywhere — battery +0.0–0.2 (surrogate +0.21), photos +0.04 ×3, zero harm in 32 cells → ADOPTED as loop default (reg undefined). R_freq: periodic +2.4 dB but blocks −7 to −11 dB → MANUAL only (content-dependent, same story as every adaptive knob).
+- Kept honest: Π still guarantees range; eta steps stability-bounded (smooth moves <0.5 levels/pass, tested); Lᵀ≈L boundary approximation documented.
+- Port note: C++ core NOT updated (descriptors port required; reference-default changed, product follows behind a gate as always).
+
+## What survives to iter 13
+
+- Reference engine (default loop now includes R_edge) + battery (16) + harnesses + TV + aniso + reg modules: keep.
+- Manual options (tested, not default): R_freq, adaptive weights, directional-P, aniso-x0, TV map, tapered Π.
+- Killed (16 entries): + R_freq-as-default.
