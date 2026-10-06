@@ -4,6 +4,7 @@ core/build/
 web/.next/
 web/out/
 web/public/vice-worker.js
+web/public/slab-worker.js
 # NOTE: web/public/wasm/* (core.js/wasm, ~54 KB) IS committed: Vercel has no
 # emsdk, and the app needs it at runtime (TS fallback otherwise).
 # Deps
@@ -31,3 +32,4 @@ Vice_ Consistent Super-Resolution Upscaler, Implementation Guide.md
 *guide*.md
 *Guide*.md
 
+*.ppm

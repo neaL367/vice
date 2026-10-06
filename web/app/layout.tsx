@@ -1,16 +1,26 @@
 import type { Metadata } from "next";
+import { Faculty_Glyphic } from "next/font/google";
 import "./globals.css";
 
+const display = Faculty_Glyphic({
+  variable: "--font-glyphic",
+  subsets: ["latin"],
+  weight: "400",
+});
+
 export const metadata: Metadata = {
-  title: "Vice — Consistent Super-Resolution Upscaler",
-  description:
-    "Free private in-browser mathematical upscaler. Original pixels preserved exactly via box kernel inverse.",
+  title: "Vice",
+  description: "Browser-local deterministic image enlargement.",
 };
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   return (
-    <html lang="en" className="h-full antialiased">
-      <body className="min-h-full flex flex-col">{children}</body>
+    <html lang="en" className={display.variable}>
+      <body>{children}</body>
     </html>
   );
 }

@@ -1,164 +1,64 @@
 @import "tailwindcss";
 
-:root {
-  --background: #f6f7f5;
-  --foreground: #171a19;
-  --muted: #69716d;
-  --hairline: #e4e8e5;
-  --accent: #3159c8;
-  --error: #b94a36;
+@theme {
+  --font-display: "Faculty Glyphic", "Georgia", serif;
+  --font-ui: system-ui, -apple-system, "Segoe UI", sans-serif;
 
-  /* Calibration workspace layout */
-  --header-h: 52px;
-  --rail-l: 260px;
-  --rail-r: 300px;
-  --evidence-h: 36px;
-  --control-h: 32px;
+  --color-paper: #faf8f4;
+  --color-ink: #1c1917;
+  --color-ink-soft: #57534e;
+  --color-ink-faint: #a8a29e;
+  --color-stage: #141210;
+  --color-line: #e7e2d9;
+  --color-line-dark: #2a2724;
+  --color-accent: #9a3412;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --color-muted: var(--muted);
-  --color-hairline: var(--hairline);
-  --color-accent: var(--accent);
-  --color-error: var(--error);
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #101312;
-    --foreground: #e8ebe8;
-    --muted: #8b948f;
-    --hairline: #232825;
-    --accent: #7d9bf0;
-    --error: #d97a63;
-  }
+html,
+body {
+  height: 100%;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: var(--font-sans);
-  letter-spacing: 0.01em;
+  font-family: var(--font-ui);
+  background: #131110;
+  color: #e7e5e4;
+  -webkit-font-smoothing: antialiased;
 }
 
-/* Visible keyboard focus everywhere */
+/* Quiet transitions; off entirely under reduced motion. */
+@media (prefers-reduced-motion: no-preference) {
+  .vx-fade {
+    transition: opacity 160ms ease-out;
+  }
+  .vx-rise {
+    transition:
+      opacity 220ms ease-out,
+      transform 220ms ease-out;
+  }
+  .vx-rise[data-enter="false"] {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--color-accent);
   outline-offset: 2px;
 }
 
-/* Native range + disclosure controls follow the calibration palette */
-input[type="range"] {
-  accent-color: var(--accent);
-}
-summary::-webkit-details-marker {
-  display: none;
-}
-
-/* Minimalist Studio Scrollbars */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-::-webkit-scrollbar-thumb {
-  background: rgba(140, 140, 140, 0.25);
-  border-radius: 9999px;
-  transition: background-color 0.2s ease;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: rgba(140, 140, 140, 0.5);
-}
-* {
-  scrollbar-width: thin;
-  scrollbar-color: rgba(140, 140, 140, 0.25) transparent;
-}
-/* View Transitions */
-::view-transition {
-  pointer-events: none;
-}
-
-:root {
-  --duration-exit: 150ms;
-  --duration-enter: 210ms;
-  --duration-move: 400ms;
-}
-
-/* Morph animation for shared elements */
-::view-transition-group(.morph) {
-  animation-duration: 400ms;
-}
-::view-transition-image-pair(.morph) {
-  animation-name: via-blur;
-}
-@keyframes via-blur {
-  30% {
-    filter: blur(3px);
-  }
-}
-
-/* Suspense reveals & state transitions */
-::view-transition-old(.slide-down) {
-  animation:
-    var(--duration-exit) ease-out both fade reverse,
-    var(--duration-exit) ease-out both slide-y reverse;
-}
-::view-transition-new(.slide-up) {
-  animation:
-    var(--duration-enter) ease-in var(--duration-exit) both fade,
-    var(--duration-move) ease-in both slide-y;
-}
-
-@keyframes fade {
-  from {
-    filter: blur(3px);
-    opacity: 0;
-  }
-  to {
-    filter: blur(0);
-    opacity: 1;
-  }
-}
-
-@keyframes slide-y {
-  from {
-    transform: translateY(10px);
-  }
-  to {
-    transform: translateY(0);
-  }
-}
-
-/* Anchoring the studio header so it stays fixed during view transitions */
-::view-transition-group(site-header) {
-  animation: none;
-  z-index: 100;
-}
-::view-transition-old(site-header) {
-  display: none;
-}
-::view-transition-new(site-header) {
-  animation: none;
-}
-
-/* Respect reduced motion */
-@media (prefers-reduced-motion: reduce) {
-  ::view-transition-old(*),
-  ::view-transition-new(*),
-  ::view-transition-group(*) {
-    animation-duration: 0s !important;
-    animation-delay: 0s !important;
-  }
-  *,
-  ::before,
-  ::after {
-    animation-duration: 0.01ms !important;
-    transition-duration: 0.01ms !important;
-  }
+/* Checkerboard for transparency, subtle by design. */
+.vx-checker {
+  background-image:
+    linear-gradient(45deg, #d6d0c4 25%, transparent 25%),
+    linear-gradient(-45deg, #d6d0c4 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #d6d0c4 75%),
+    linear-gradient(-45deg, transparent 75%, #d6d0c4 75%);
+  background-size: 16px 16px;
+  background-position:
+    0 0,
+    0 8px,
+    8px -8px,
+    -8px 0;
+  background-color: #efeae0;
 }

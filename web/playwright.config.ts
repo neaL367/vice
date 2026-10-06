@@ -1,8 +1,17 @@
-import { defineConfig, devices } from "@playwright/test";
+import { defineConfig } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./e2e",
-  use: { baseURL: "http://localhost:3000" },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
-  webServer: { command: "bun run start -- -p 3000", port: 3000, reuseExistingServer: true },
+  timeout: 120000,
+  use: {
+    baseURL: "http://localhost:3102",
+    channel: "chrome",
+    launchOptions: { args: ["--no-sandbox"] },
+  },
+  webServer: {
+    command: "bun run start -- --port 3102",
+    port: 3102,
+    reuseExistingServer: true,
+    stdout: "pipe",
+  },
 });
