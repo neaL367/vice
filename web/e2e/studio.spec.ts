@@ -144,8 +144,7 @@ test("invalid file shows a human error, not a crash", async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
-test("portrait image fits, layers register, divider moves freely", async ({ page }) => {
-  const errors: string[] = [];
+test("portrait image fits, layers register, divider moves freely", async ({ page }) => {  const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e)));
   await page.goto("/");
   // kodim04.png is 512x768 portrait.
@@ -191,5 +190,54 @@ test("portrait image fits, layers register, divider moves freely", async ({ page
       expect(Math.abs(r.in[k] - r.out[k])).toBeLessThan(2);
     }
   }
+  expect(errors).toEqual([]);
+});
+test("divider grip drags while zoomed; pan stays clamped", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  await page.goto("/");
+  const photo = path.resolve(__dirname, "../../tools/eval/data/photos/kodim23.png");
+  await page.locator('input[type="file"]').first().setInputFiles(photo);
+  await page.getByRole("button", { name: "Upscale" }).click();
+  await expect(page.getByText("Ready", { exact: false })).toBeVisible({ timeout: 90000 });
+
+  const slider = page.getByLabel("Reveal comparison");
+  // Zoom in hard, then drag the divider grip: split must still follow.
+  await page.mouse.move(640, 400);
+  await page.mouse.wheel(0, -900);
+  await expect
+    .poll(async () => {
+      const c = await page.evaluate(() => {
+        const el = document.querySelectorAll("canvas")[0] as HTMLCanvasElement;
+        return el.getBoundingClientRect().width;
+      });
+      return c;
+    }, { timeout: 5000 })
+    .toBeGreaterThan(1200);
+  const grip = page.locator('[aria-hidden="true"] > div:has-text("⟷")').first();
+  const box = await grip.boundingBox();
+  if (!box) throw new Error("grip not found");
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x - 200, box.y + box.height / 2, { steps: 5 });
+  await page.mouse.up();
+  const v = Number(await slider.getAttribute("aria-valuenow"));
+  expect(v).toBeLessThan(50);
+
+  // Huge pan fling: image must remain partially visible (clamped).
+  await page.mouse.move(640, 400);
+  await page.mouse.down();
+  await page.mouse.move(2400, 1400, { steps: 8 });
+  await page.mouse.up();
+  const vis = await page.evaluate(() => {
+    const stage = document.querySelector('[role="slider"]')!.getBoundingClientRect();
+    const c = document.querySelectorAll("canvas")[0] as HTMLCanvasElement;
+    const r = c.getBoundingClientRect();
+    const ix = Math.max(0, Math.min(stage.right, r.right) - Math.max(stage.left, r.left));
+    const iy = Math.max(0, Math.min(stage.bottom, r.bottom) - Math.max(stage.top, r.top));
+    return { ix, iy };
+  });
+  expect(vis.ix).toBeGreaterThan(50);
+  expect(vis.iy).toBeGreaterThan(50);
   expect(errors).toEqual([]);
 });

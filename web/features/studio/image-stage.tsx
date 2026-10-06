@@ -6,6 +6,7 @@ import { ComparisonViewport } from "./image-viewport";
 import {
   calculateFit,
   calculateRect,
+  clampPan,
   dividerViewportX,
   fractionFromViewportX,
   hundredPercentZoom,
@@ -45,6 +46,8 @@ export function ImageStage({ input, result, working }: { input: StudioImage; res
 
   function onPointerDown(e: React.PointerEvent) {
     if (e.button !== 0 || working) return;
+    // Keyboard from here on: focus the surface on any interaction.
+    boxRef.current?.focus({ preventScroll: true });
     if (zoomed) {
       gesture.current = { mode: "pan", sx: e.clientX - pan.x, sy: e.clientY - pan.y };
     } else if (result) {
@@ -63,7 +66,9 @@ export function ImageStage({ input, result, working }: { input: StudioImage; res
       if (g.mode === "split") {
         const r = boxRef.current!.getBoundingClientRect();
         setFraction(fractionFromViewportX(rect, ev.clientX - r.left));
-      } else setPan({ x: ev.clientX - g.sx, y: ev.clientY - g.sy });
+      } else {
+        setPan(clampPan(fit, box.w, box.h, zoom, { x: ev.clientX - g.sx, y: ev.clientY - g.sy }));
+      }
     };
     const up = (ev: PointerEvent) => {
       const g = gesture.current;
@@ -89,7 +94,7 @@ export function ImageStage({ input, result, working }: { input: StudioImage; res
     setZoom((z) => {
       const z2 = Math.min(32, Math.max(1, z * Math.exp(-e.deltaY * 0.0015)));
       if (z2 !== z) {
-        setPan((p) => ({ x: cx - ((cx - p.x) * z2) / z, y: cy - ((cy - p.y) * z2) / z }));
+        setPan((p) => clampPan(fit, box.w, box.h, z2, { x: cx - ((cx - p.x) * z2) / z, y: cy - ((cy - p.y) * z2) / z }));
       }
       return z2;
     });
@@ -136,9 +141,39 @@ export function ImageStage({ input, result, working }: { input: StudioImage; res
     >
       <ComparisonViewport input={input} result={result} rect={rect} fraction={result ? fraction : 1} />
       {result && (
-        <div className="pointer-events-none absolute inset-y-0" style={{ left: `${dividerX}px` }} aria-hidden="true">
-          <div className="h-full w-px bg-white/90 shadow-[0_0_12px_rgba(0,0,0,0.6)]" />
-        </div>
+        <>
+          <div className="pointer-events-none absolute inset-y-0" style={{ left: `${dividerX}px` }} aria-hidden="true">
+            <div className="h-full w-px bg-white/90 shadow-[0_0_12px_rgba(0,0,0,0.6)]" />
+          </div>
+          {/* Divider grip: split-drag works at any zoom (image drag pans). */}
+          <div
+            className="absolute inset-y-0 flex w-8 -translate-x-1/2 cursor-ew-resize touch-none items-center justify-center"
+            style={{ left: `${dividerX}px` }}
+            onPointerDown={(e) => {
+              if (e.button !== 0 || working) return;
+              e.stopPropagation();
+              boxRef.current?.focus({ preventScroll: true });
+              gesture.current = { mode: "split", sx: e.clientX, sy: e.clientY };
+              setDragging(true);
+              const move = (ev: PointerEvent) => {
+                if (!gesture.current) return;
+                const r = boxRef.current!.getBoundingClientRect();
+                setFraction(fractionFromViewportX(rect, ev.clientX - r.left));
+              };
+              const up = () => {
+                gesture.current = null;
+                setDragging(false);
+                window.removeEventListener("pointermove", move);
+                window.removeEventListener("pointerup", up);
+              };
+              window.addEventListener("pointermove", move);
+              window.addEventListener("pointerup", up);
+            }}
+            aria-hidden="true"
+          >
+            <div className="rounded-full border border-white/40 bg-black/70 px-2 py-1 text-[11px] text-white">⟷</div>
+          </div>
+        </>
       )}
       {working && (
         <div className="absolute inset-0 flex items-center justify-center bg-black/40">
