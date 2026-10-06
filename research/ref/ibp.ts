@@ -6,6 +6,7 @@
 
 import { forwardResidual, projectBox, simulateForward } from "./forward.ts";
 import { upsample, upsampleSteered, type GrayImage, type KernelName, type SteerField } from "./kernels.ts";
+import { tvDenoiseMap } from "./tv.ts";
 
 export interface IbpOptions {
   iters?: number; // T ≤ 5 default 4 (matches VICE_SMOOTH_ITERS spirit)
@@ -20,6 +21,12 @@ export interface IbpOptions {
    * built from LR descriptors once (not per iteration: geometry is static).
    */
   steerP?: { field: SteerField; strength: number; sharp: number } | null;
+  /**
+   * Oscillation-gated TV (iter-9): per-HR-pixel λ map applied to (x + corr)
+   * BEFORE clamp+Π each pass (TV-before-Π order). λ=0 pixels bypass exactly.
+   * Lets texture zones take TV while isolated edges keep the pure loop.
+   */
+  tvMap?: { lambda: Float64Array; tvIters?: number } | null;
 }
 
 export interface IbpResult {
@@ -57,7 +64,7 @@ export function reconstructIbp(
   opts: IbpOptions = {},
   weights: Float64Array | null = null,
 ): IbpResult {
-  const { iters = 4, init = "lanczos3", project = true, clamp = true, gain = 1, blurSigma = 0, steerP = null } = opts;
+  const { iters = 4, init = "lanczos3", project = true, clamp = true, gain = 1, blurSigma = 0, steerP = null, tvMap = null } = opts;
   let lo = Infinity;
   let hi = -Infinity;
   for (const v of lr.data) {
@@ -71,9 +78,15 @@ export function reconstructIbp(
     const rdata = new Float64Array(pred.data.length);
     for (let i = 0; i < rdata.length; i++) rdata[i] = lr.data[i] - pred.data[i];
     const correction = upsampleResidual({ w: lr.w, h: lr.h, data: rdata }, scale, weights, gain, steerP);
+    let corrected: GrayImage = { w: x.w, h: x.h, data: (() => {
+      const nd = new Float64Array(x.data.length);
+      for (let i = 0; i < nd.length; i++) nd[i] = x.data[i] + correction.data[i];
+      return nd;
+    })() };
+    if (tvMap) corrected = tvDenoiseMap(corrected, tvMap.lambda, tvMap.tvIters ?? 30);
     const nd = new Float64Array(x.data.length);
     for (let i = 0; i < nd.length; i++) {
-      let v = x.data[i] + correction.data[i];
+      let v = corrected.data[i];
       if (clamp) v = v < lo ? lo : v > hi ? hi : v;
       nd[i] = v;
     }

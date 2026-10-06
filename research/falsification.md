@@ -69,6 +69,14 @@ Standing result: tight global clamp is the right policy (block/step/jpeg gains u
 - Method: minimal zero-dep PNG reader (`ref/png.ts`, filter-exact tests) + `ref/photos.ts` harness; data gitignored under `tools/eval/data/photos/` (Kodak classic set, research use). `photos.test.ts` locks lrc ≥ lanczos3 per photo, skips when data absent.
 - Caveats: luma-only (gamma-domain approx; linear path unit-tested, not end-to-end); 5 photos, not a full eval set; box-D only (bicubic-D mismatch untested on photos). Port gate: +0.25–0.32 approaches but does not meet the >0.3-on-2-full-sets bar — no port yet, but the case is now empirical, not speculative.
 
+## Iter-9 findings: TV-IBP shootout — different method, neither equivalent nor superior
+
+- Implemented Chambolle ROF (`ref/tv.ts`, contracts tested) + TV-IBP (TV before Π — measured better than TV-as-post-filter, which additionally breaks the residual).
+- Uniform λ=1: photo-surrogate +1.07 (36.26→37.33), jpeg +0.83 — but step −5.6 (47.62→42.03, ringing UP), periodic −0.7. Complementary win zones to the pure loop, not overlapping: NOT equivalent, NOT superior. Locked by test (both directions).
+- Osc-gated TV (λ=1 where osc, else 0): KILLED — repeated −3.7, surrogate −8.9, jpeg −1.5. TV staircasing destroys texture amplitude; the global-λ wins came from smoothing edges/ringing globally, not from texture denoising. Lesson: TV penalizes oscillation itself — wrong prior for texture, right one for isolated ringing (which clamp already handles better).
+- Kept: `tvMap` option as manual primitive (zeros-bypass bit-exact, tested). Not benched as contender, not adopted.
+- Killed list: 12 entries (+ uniform TV-IBP adoption, + osc-gated TV).
+
 ## Iter-8 findings: directional-P WEAK-SURVIVE, default OFF (no auto-policy)
 
 - Mechanism: lanczos2-footprint residual upsampler × orientation gate (`w=base·((1−a·coh)+a·coh·|cos φ|^p)`), renormalized (constants/block-means preserved). `strength=0` control isolates footprint from steering.
@@ -90,9 +98,10 @@ Standing result: tight global clamp is the right policy (block/step/jpeg gains u
 - lrc-proj top-or-tied in all 8 blocks, both domains. Linear-light gaps larger (2x box: +0.39 over lanczos3) — shadows weighted up, same ordering.
 - Locked: `photos.test.ts` bicubic-D test (lrc-proj ≥ lanczos3 per photo); `forward.test.ts` documents box/bicubic disagreement near edges (mismatch is real, just harmless here).
 
-## What survives to iter 9
+## What survives to iter 10
 
-- Reference engine + battery (16 families) + photo + matrix + full-set harnesses: keep. Best results: guarded loop beats fixed kernels on full Set5/Set14 (+0.5/+0.4 dB at 2x) and samples of BSD100/Urban100, both degradations.
-- Directional-P: documented manual option, default OFF. P-footprint recorded per-cell (`ibp-lz2p` in bench).
-- Next: same-harness C++ comparison of guarded-uniform-IBP vs shipped proj leg (needs core restored from git history — deliberate decision, not accident); adaptive law stays reference-only.
-- Killed (11 entries): + directional auto-steering (no safe policy; effect ±0.1–0.4 bidirectional).
+- Reference engine + battery (16 families) + photo + matrix + full-set harnesses + TV module: keep. Portable result unchanged: guarded uniform loop.
+- `tvMap` manual primitive (zeros-bypass exact); directional-P manual option. Neither adopted, both tested.
+- Next: anisotropic reconstruction kernels (last unexplored brief item with teeth); or writeup + retro if the arc is judged complete.
+- Killed (13 entries): prior 11 + uniform TV-IBP adoption + osc-gated TV.
+- C++/WASM port gate: LOOP-MET vs fixed kernels; ADAPTIVE-UNMET vs uniform; PORT DECISION PENDING same-harness vs shipped proj (needs core from history).
