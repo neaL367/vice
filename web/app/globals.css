@@ -21,8 +21,8 @@ body {
 
 body {
   font-family: var(--font-ui);
-  background: var(--color-paper);
-  color: var(--color-ink);
+  background: #131110;
+  color: #e7e5e4;
   -webkit-font-smoothing: antialiased;
 }
 
