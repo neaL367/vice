@@ -51,7 +51,7 @@ export function Workspace() {
     <div className="flex h-full min-h-0 flex-col">
       <header className="flex shrink-0 items-center gap-3 px-5 py-3">
         <h1 className="font-display text-[22px] tracking-tight text-stone-100">Vice</h1>
-        <p className="hidden font-mono text-[11px] text-stone-500 tabular-nums sm:block" role="status">
+        <p className="min-w-0 flex-1 truncate font-mono text-[11px] text-stone-500 tabular-nums" role="status">
           {status}
         </p>
         {job.kind !== "idle" && (
