@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { adaptiveWeights, describeFor } from "./adaptive.ts";
 import { boxDownsample } from "./forward.ts";
 import { reconstructIbp } from "./ibp.ts";
-import { upsample } from "./kernels.ts";
+import { downsampleKernel, upsample } from "./kernels.ts";
 import { psnr } from "./metrics.ts";
 import { decodePng } from "./png.ts";
 
@@ -27,6 +27,24 @@ describe.skipIf(!present)("kodak validation", () => {
         data[i] = 0.2126 * png.data[i * png.ch] + 0.7152 * png.data[i * png.ch + 1] + 0.0722 * png.data[i * png.ch + 2];
       const hr = { w: png.w, h: png.h, data };
       const lr = boxDownsample(hr, 2);
+      const { desc, sigma, cls } = describeFor(lr);
+      const ad = reconstructIbp(lr, 2, { iters: 4 }, adaptiveWeights(desc, cls, sigma, 2));
+      const lz = upsample(lr, 2, "lanczos3");
+      expect(psnr(hr, ad.x) - psnr(hr, lz)).toBeGreaterThan(-0.05);
+    }
+  });
+  test("bicubic-D mismatch: lrc-proj ≥ lanczos3 on every photo at 2x", () => {
+    // Forward-model violation: Π enforces box-consistency under bicubic LR.
+    // Must not collapse — projection acts as DC-bias remover either way.
+    const files = readdirSync(dir).filter((f) => f.endsWith(".png")).sort();
+    for (const file of files) {
+      const png = decodePng(new Uint8Array(readFileSync(join(dir, file))));
+      const n = png.w * png.h;
+      const data = new Float64Array(n);
+      for (let i = 0; i < n; i++)
+        data[i] = 0.2126 * png.data[i * png.ch] + 0.7152 * png.data[i * png.ch + 1] + 0.0722 * png.data[i * png.ch + 2];
+      const hr = { w: png.w, h: png.h, data };
+      const lr = downsampleKernel(hr, 2, "bicubic");
       const { desc, sigma, cls } = describeFor(lr);
       const ad = reconstructIbp(lr, 2, { iters: 4 }, adaptiveWeights(desc, cls, sigma, 2));
       const lz = upsample(lr, 2, "lanczos3");

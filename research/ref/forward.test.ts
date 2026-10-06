@@ -2,7 +2,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { boxDownsample, forwardResidual, projectBox, simulateForward } from "./forward.ts";
-import { constantImage, upsample } from "./kernels.ts";
+import { constantImage, downsampleKernel, upsample } from "./kernels.ts";
 
 describe("boxDownsample", () => {
   test("constant preserved; checker 2x2 averages to mid", () => {
@@ -40,5 +40,25 @@ describe("projectBox", () => {
     const hr = constantImage(8, 8, 50);
     const lr = simulateForward(hr, 2, { blurSigma: 0.8 });
     for (const v of lr.data) expect(Math.abs(v - 50)).toBeLessThan(1e-9);
+  });
+});
+
+describe("downsampleKernel (mismatch probe)", () => {
+  test("constant preserved; differs from box on steps (model mismatch is real)", () => {
+    const c = downsampleKernel(constantImage(8, 8, 200), 2, "bicubic");
+    expect(c.w).toBe(4);
+    for (const v of c.data) expect(Math.abs(v - 200)).toBeLessThan(1e-9);
+    // step edge fixture would differ; direct check on a step:
+    const data = new Float64Array(8 * 4);
+    for (let y = 0; y < 4; y++) for (let x = 0; x < 8; x++) data[y * 8 + x] = x < 4 ? 0 : 255;
+    const step = { w: 8, h: 4, data };
+    const box = boxDownsample(step, 2);
+    const bic = downsampleKernel(step, 2, "bicubic");
+    let diff = 0;
+    for (let i = 0; i < box.data.length; i++) diff = Math.max(diff, Math.abs(box.data[i] - bic.data[i]));
+    expect(diff).toBeGreaterThan(1); // models genuinely disagree near edges
+  });
+  test("throws on indivisible geometry", () => {
+    expect(() => downsampleKernel(constantImage(7, 8, 0), 2, "bicubic")).toThrow();
   });
 });

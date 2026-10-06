@@ -25,7 +25,7 @@ export function psnr(a: GrayImage, b: GrayImage, peak = 255): number {
 }
 
 /** Single-window SSIM over whole image (reference-lite; not a sliding map). */
-export function ssimLite(a: GrayImage, b: GrayImage): number {
+export function ssimLite(a: GrayImage, b: GrayImage, peak = 255): number {
   requireSameSize(a, b);
   const n = a.data.length;
   let ma = 0;
@@ -49,7 +49,7 @@ export function ssimLite(a: GrayImage, b: GrayImage): number {
   va /= n;
   vb /= n;
   cab /= n;
-  const L = 255;
+  const L = peak;
   const c1 = (0.01 * L) ** 2;
   const c2 = (0.03 * L) ** 2;
   return ((2 * ma * mb + c1) * (2 * cab + c2)) / ((ma * ma + mb * mb + c1) * (va + vb + c2));

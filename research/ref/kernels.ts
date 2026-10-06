@@ -135,6 +135,39 @@ export function upsample(src: GrayImage, scale: number, name: KernelName): GrayI
   return { w: src.w * scale, h: src.h * scale, data: full };
 }
 
+/**
+ * Kernel decimation D (forward-model mismatch probe): proper resampling with
+ * the kernel stretched by s in input pixels (MATLAB-imresize-style), NOT a
+ * box average. Bicubic-D is the standard "unknown real degradation" stand-in:
+ * our Π enforces box-consistency, which is the WRONG constraint under it.
+ */
+export function downsampleKernel(hr: GrayImage, s: number, name: KernelName): GrayImage {
+  if (!Number.isInteger(s) || s < 2 || s > 4) throw new Error(`unsupported scale ${s}`);
+  if (hr.w % s !== 0 || hr.h % s !== 0) throw new Error(`image ${hr.w}x${hr.h} not divisible by ${s}`);
+  const r = KERNEL_RADIUS[name];
+  const w = hr.w / s;
+  const h = hr.h / s;
+  const data = new Float64Array(w * h);
+  const at = (x: number, y: number) =>
+    hr.data[Math.min(hr.h - 1, Math.max(0, y)) * hr.w + Math.min(hr.w - 1, Math.max(0, x))];
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++) {
+      const cx = (x + 0.5) * s - 0.5;
+      const cy = (y + 0.5) * s - 0.5;
+      let acc = 0;
+      let wsum = 0;
+      for (let iy = Math.floor(cy - r * s); iy <= Math.ceil(cy + r * s); iy++)
+        for (let ix = Math.floor(cx - r * s); ix <= Math.ceil(cx + r * s); ix++) {
+          const wt = kernelWeight(name, (cx - ix) / s) * kernelWeight(name, (cy - iy) / s);
+          if (wt === 0) continue;
+          acc += at(ix, iy) * wt;
+          wsum += wt;
+        }
+      data[y * w + x] = wsum !== 0 ? acc / wsum : 0;
+    }
+  return { w, h, data };
+}
+
 export function constantImage(w: number, h: number, v: number): GrayImage {
   return { w, h, data: new Float64Array(w * h).fill(v) };
 }
