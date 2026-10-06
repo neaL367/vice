@@ -47,49 +47,6 @@ body {
   outline-offset: 2px;
 }
 
-/* View transitions (React <ViewTransition>, Chromium-first; inert elsewhere).
- * Enter is gentle and delayed; exit is fast. pointer-events pass through. */
-::view-transition {
-  pointer-events: none;
-}
-::view-transition-old(.vu-exit) {
-  animation: 150ms ease-out both vu-fade-out;
-}
-::view-transition-new(.vu-enter) {
-  animation:
-    210ms ease-in 150ms both vu-fade-in,
-    400ms ease-in both vu-rise-in;
-}
-@keyframes vu-fade-out {
-  to {
-    opacity: 0;
-  }
-}
-@keyframes vu-fade-in {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-@keyframes vu-rise-in {
-  from {
-    transform: translateY(10px);
-  }
-  to {
-    transform: translateY(0);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  ::view-transition-old(*),
-  ::view-transition-new(*),
-  ::view-transition-group(*) {
-    animation-duration: 0s !important;
-    animation-delay: 0s !important;
-  }
-}
-
 /* Checkerboard for transparency, subtle by design. */
 .vx-checker {
   background-image:
