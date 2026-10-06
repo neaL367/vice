@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import type { Job, StudioImage } from "./model";
 
 interface WorkerDone {
@@ -19,6 +19,9 @@ export function useStudioJob() {
   const [job, setJob] = useState<Job>({ kind: "idle" });
   const workerRef = useRef<Worker | null>(null);
   const idRef = useRef(0);
+  // ViewTransitions activate on Transitions (never plain setState): job
+  // arrivals commit inside startTransition so reveals can animate.
+  const [, startTransition] = useTransition();
 
   useEffect(() => {
     workerRef.current = new Worker(
@@ -28,7 +31,9 @@ export function useStudioJob() {
   }, []);
 
   function openImage(input: StudioImage, name: string) {
-    setJob({ kind: "ready", input, name });
+    startTransition(() => {
+      setJob({ kind: "ready", input, name });
+    });
   }
 
   function reset() {
@@ -63,21 +68,25 @@ export function useStudioJob() {
           { transfer: [copy.buffer] },
         );
       });
-      setJob({
-        kind: "done",
-        input,
-        name,
-        scale,
-        output: { data: done.data, w: done.w, h: done.h },
-        residual: done.residual,
-        ms: done.ms,
+      startTransition(() => {
+        setJob({
+          kind: "done",
+          input,
+          name,
+          scale,
+          output: { data: done.data, w: done.w, h: done.h },
+          residual: done.residual,
+          ms: done.ms,
+        });
       });
     } catch {
-      setJob({
-        kind: "error",
-        input,
-        name,
-        message: "We couldn't process this image.",
+      startTransition(() => {
+        setJob({
+          kind: "error",
+          input,
+          name,
+          message: "We couldn't process this image.",
+        });
       });
     }
   }
