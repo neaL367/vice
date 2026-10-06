@@ -1,8 +1,9 @@
 # Falsification Report — Iter 1+2 (reference TS, tickets 01–06 evidence)
 
 Date 2026-10-06 (iter 1), 2026-10-07 (iter 2: adaptive law + color/noise probes),
-2026-10-07 (iter 3: clamp-range mechanism + photo-scale transfer).
-All numbers from `research/results/baseline.json` (288 rows, interior-margin scoring). No natural images tested — synthetics only, per program rules.
+2026-10-07 (iter 3: clamp-range mechanism + photo-scale transfer),
+2026-10-07 (iter 5: Kodak natural-image validation).
+All numbers from `research/results/baseline.json` (288 rows, interior-margin scoring) + `research/results/photos.json` (60 rows, full-frame luma).
 
 ## Verdicts
 
@@ -61,10 +62,16 @@ Goal: keep step/jpeg/repeated clamp-snapping while freeing true peaks in oscilla
 
 Standing result: tight global clamp is the right policy (block/step/jpeg gains up to +23 dB outweigh one −1 dB texture loss). The loop does not beat fixed kernels on pure oscillatory texture — scoped limit, mechanism understood (clamp-range premise), no truth-free fix found in this iteration.
 
-## What survives to iter 4
+## Iter-5 findings: HYP-1 survives natural images (Kodak 5, luma, box-D)
 
-- Math core (kernels/forward/metrics/descriptors/color/degradation), battery (16 families incl. photo-surrogate), bench harness: keep.
-- Adaptive weight law (HYP-1 weak, now with photo-scale win): keep; next is natural-set validation when datasets/build available, or per-pixel bound routing for the texture loss.
-- Killed: LRC classes, alias gate, hpCoh, residual-coherence gate, clamp boundaries, global T-routing, per-pixel osc bounds, cut-ratio stop, HF-trajectory stop, kurtosis routing. Do not revive without new evidence.
-- Open: multi-scale coherence; residual-domain gating done right; natural-set validation when datasets/build exist.
-- C++/WASM port gate UNMET (requires >0.3 dB PSNR or >0.005 SSIM on ≥2 natural sets, residual ≤1e-5) — no port.
+- 2x: ibp-lrc beats best fixed on ALL 5 photos (+0.25 to +0.32 dB PSNR); SSIM up everywhere; gradErr down everywhere; ringing down 3–6x (kodim08 0.77→0.13). Residual exact. Adaptive ≥ uniform on all 5 (+0.01–0.02, small but never negative).
+- 4x: ibp-lrc beats best fixed on ALL 5 (+0.09 to +0.22 dB), same multi-metric pattern.
+- Method: minimal zero-dep PNG reader (`ref/png.ts`, filter-exact tests) + `ref/photos.ts` harness; data gitignored under `tools/eval/data/photos/` (Kodak classic set, research use). `photos.test.ts` locks lrc ≥ lanczos3 per photo, skips when data absent.
+- Caveats: luma-only (gamma-domain approx; linear path unit-tested, not end-to-end); 5 photos, not a full eval set; box-D only (bicubic-D mismatch untested on photos). Port gate: +0.25–0.32 approaches but does not meet the >0.3-on-2-full-sets bar — no port yet, but the case is now empirical, not speculative.
+
+## What survives to iter 6
+
+- Reference engine + battery (16 families) + photo harness: keep. Strongest result: consistent multi-metric wins on 5 natural photos with exact consistency.
+- Next options: (a) full-set eval (BSD100/Urban100 via vice_eval datasets + MSVC build) to test the port gate properly; (b) bicubic-D mismatch + linear-light end-to-end on photos; (c) C++ port of the adaptive loop behind the gate if (a) clears >0.3 dB.
+- Killed (unchanged, 10 entries): LRC classes, alias gate, hpCoh, residual-coherence gate, clamp boundaries, global T-routing, per-pixel osc bounds, cut-ratio stop, HF-trajectory stop, kurtosis routing.
+- C++/WASM port gate UNMET (requires >0.3 dB PSNR or >0.005 SSIM on ≥2 full natural sets, residual ≤1e-5) — no port.
