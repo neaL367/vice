@@ -21,7 +21,9 @@ export function useStudioJob() {
   const idRef = useRef(0);
 
   useEffect(() => {
-    workerRef.current = new Worker(new URL("../../workers/vice.worker.ts", import.meta.url));
+    workerRef.current = new Worker(
+      new URL("../../workers/vice.worker.ts", import.meta.url),
+    );
     return () => workerRef.current?.terminate();
   }, []);
 
@@ -36,7 +38,10 @@ export function useStudioJob() {
   async function upscale(scale: 2 | 3 | 4) {
     const cur = curRef.current;
     if (!cur || cur.kind === "working") return;
-    const input = cur.kind === "done" || cur.kind === "ready" || cur.kind === "error" ? cur.input : null;
+    const input =
+      cur.kind === "done" || cur.kind === "ready" || cur.kind === "error"
+        ? cur.input
+        : null;
     if (!input) return;
     const name = cur.kind === "idle" ? "" : cur.name;
     setJob({ kind: "working", input, name, scale });
@@ -53,7 +58,10 @@ export function useStudioJob() {
         };
         worker.addEventListener("message", onMsg);
         const copy = new Uint8ClampedArray(input.data);
-        worker.postMessage({ type: "run", id, pixels: copy, w: input.w, h: input.h, scale }, { transfer: [copy.buffer] });
+        worker.postMessage(
+          { type: "run", id, pixels: copy, w: input.w, h: input.h, scale },
+          { transfer: [copy.buffer] },
+        );
       });
       setJob({
         kind: "done",
@@ -65,7 +73,12 @@ export function useStudioJob() {
         ms: done.ms,
       });
     } catch {
-      setJob({ kind: "error", input, name, message: "We couldn't process this image." });
+      setJob({
+        kind: "error",
+        input,
+        name,
+        message: "We couldn't process this image.",
+      });
     }
   }
 
@@ -80,7 +93,9 @@ export function useStudioJob() {
   return { job, openImage, reset, upscale };
 }
 
-export async function decodeFile(f: File): Promise<{ image: StudioImage; name: string }> {
+export async function decodeFile(
+  f: File,
+): Promise<{ image: StudioImage; name: string }> {
   const bmp = await createImageBitmap(f);
   try {
     const cap = 2048;
@@ -95,7 +110,10 @@ export async function decodeFile(f: File): Promise<{ image: StudioImage; name: s
     // Exact copy: getImageData buffers may be pooled/oversized, and ImageData
     // requires length === 4wh exactly. A view over a pooled buffer throws.
     const data = new Uint8ClampedArray(img.data);
-    return { image: { data: data as Uint8ClampedArray<ArrayBuffer>, w, h }, name: f.name };
+    return {
+      image: { data: data as Uint8ClampedArray<ArrayBuffer>, w, h },
+      name: f.name,
+    };
   } finally {
     bmp.close();
   }

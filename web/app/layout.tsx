@@ -10,10 +10,15 @@ const display = Faculty_Glyphic({
 
 export const metadata: Metadata = {
   title: "Vice — Larger. Cleaner. Yours.",
-  description: "Browser-local deterministic image enlargement. No AI, no uploads.",
+  description:
+    "Browser-local deterministic image enlargement. No AI, no uploads.",
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   return (
     <html lang="en" className={display.variable}>
       <body>{children}</body>
