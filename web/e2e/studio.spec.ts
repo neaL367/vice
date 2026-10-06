@@ -286,3 +286,72 @@ test("zoom out returns to center; download is full-res output", async ({ page })
   expect(size).toBeGreaterThan(200000);
   expect(errors).toEqual([]);
 });
+test("click opens the native picker and the image displays", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  await page.goto("/");
+  const photo = path.resolve(__dirname, "../../tools/eval/data/photos/kodim23.png");
+  // Real click path (not setInputFiles): the OS dialog must open.
+  const [chooser] = await Promise.all([
+    page.waitForEvent("filechooser", { timeout: 10000 }),
+    page.getByRole("button", { name: "Drop an image or choose a file" }).click(),
+  ]);
+  await chooser.setFiles(photo);
+  // Uploaded image becomes visible at real size.
+  await expect
+    .poll(async () => {
+      const w = await page.evaluate(() => {
+        const c = document.querySelectorAll("canvas")[0] as HTMLCanvasElement | undefined;
+        return c ? c.getBoundingClientRect().width : 0;
+      });
+      return w;
+    }, { timeout: 15000 })
+    .toBeGreaterThan(100);
+  expect(errors).toEqual([]);
+});
+test("divider spans the image height; Center recovers it at heavy zoom", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  await page.goto("/");
+  const photo = path.resolve(__dirname, "../../tools/eval/data/photos/kodim23.png");
+  await page.locator('input[type="file"]').first().setInputFiles(photo);
+  await page.getByRole("button", { name: "Upscale" }).click();
+  await expect(page.getByText("Ready", { exact: false })).toBeVisible({ timeout: 90000 });
+
+  // Divider line covers the full image rect, not the viewport.
+  const geom = await page.evaluate(() => {
+    const line = document.querySelector('[data-testid="divider-line"]')!.getBoundingClientRect();
+    const c = document.querySelectorAll("canvas")[0] as HTMLCanvasElement;
+    const r = c.getBoundingClientRect();
+    return { line, img: { top: r.top, height: r.height } };
+  });
+  expect(Math.abs(geom.line.top - geom.img.top)).toBeLessThan(3);
+  expect(Math.abs(geom.line.height - geom.img.height)).toBeLessThan(3);
+
+  // Lose the divider: heavy zoom + fling, then keyboard away from center.
+  const slider = page.getByLabel("Reveal comparison");
+  await page.mouse.move(640, 400);
+  await page.mouse.wheel(0, -1200);
+  await page.mouse.move(640, 400);
+  await page.mouse.down();
+  await page.mouse.move(2400, 1400, { steps: 8 });
+  await page.mouse.up();
+  await slider.focus();
+  for (let i = 0; i < 10; i++) await slider.press("ArrowRight");
+  // One tap on Center: divider back to 50 with the image recentered.
+  await page.getByRole("button", { name: "Center comparison divider" }).click();
+  await expect
+    .poll(async () => Number(await slider.getAttribute("aria-valuenow")), { timeout: 5000 })
+    .toBe(50);
+  const vis = await page.evaluate(() => {
+    const stage = document.querySelector('[role="slider"]')!.getBoundingClientRect();
+    const line = document.querySelector('[data-testid="divider-line"]')!.getBoundingClientRect();
+    return {
+      inView: line.left >= stage.left && line.left <= stage.right,
+      span: line.height,
+    };
+  });
+  expect(vis.inView).toBe(true);
+  expect(vis.span).toBeGreaterThan(100);
+  expect(errors).toEqual([]);
+});

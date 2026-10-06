@@ -112,6 +112,7 @@ function ActiveWorkspace({
     zoomBy,
     zoomToHundred,
     setSplit,
+    centerComparison,
   } = useView(input, result, working);
 
   return (
@@ -198,6 +199,13 @@ function ActiveWorkspace({
             aria-label="Fit to view"
           >
             Fit
+          </button>
+          <button
+            className="rounded-full px-2.5 py-1 hover:bg-white/10"
+            onClick={centerComparison}
+            aria-label="Center comparison divider"
+          >
+            Center
           </button>
           <button
             className="rounded-full px-2.5 py-1 hover:bg-white/10"
