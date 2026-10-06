@@ -199,10 +199,10 @@ export function useView(
   }
 
   function centerComparison() {
-    // One-tap recovery at any zoom: centered divider on a centered image.
-    // Zoom is preserved; pan resets so the divider cannot hide off-screen.
-    setSplit(0.5);
-    setPan({ x: 0, y: 0 });
+    // Center the divider in the CURRENT view: combine with the present
+    // pan/zoom instead of resetting to the image center. The view never
+    // jumps; the divider lands mid-screen, always findable, no dragging.
+    setSplit(fractionFromViewportX(rect, box.w / 2));
   }
 
   return {
