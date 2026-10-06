@@ -5,6 +5,7 @@ import type { NextConfig } from "next";
 // WASM core, one instance per worker: no COOP/COEP needed.
 const nextConfig: NextConfig = {
   cacheComponents: true,
+  partialPrefetching: true,
 };
 
 export default nextConfig;
