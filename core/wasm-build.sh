@@ -10,6 +10,8 @@ emcc -O3 -std=c++20 \
   -I "$ROOT/core/include" \
   "$ROOT/core/src/kernels.cpp" \
   "$ROOT/core/src/forward.cpp" \
+  "$ROOT/core/src/descriptors.cpp" \
+  "$ROOT/core/src/regularization.cpp" \
   "$ROOT/core/src/ibp.cpp" \
   "$ROOT/core/src/color.cpp" \
   "$ROOT/core/src/api.cpp" \

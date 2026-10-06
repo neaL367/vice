@@ -6,6 +6,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_library(vice STATIC
   src/kernels.cpp
   src/forward.cpp
+  src/descriptors.cpp
+  src/regularization.cpp
   src/ibp.cpp
   src/color.cpp
   src/api.cpp

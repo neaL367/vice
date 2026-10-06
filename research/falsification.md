@@ -118,7 +118,10 @@ Standing result: tight global clamp is the right policy (block/step/jpeg gains u
 - Objective now: x* = argmin ‖DHx−y‖² + R_freq + R_edge, solved by projected gradient inside the loop (same solver, no new machinery). R_freq = alias-weighted Laplacian energy; R_edge = edge-confidence-weighted exceedance beyond local LR range. Legitimate-HF preservation is structural: coherent edges get w≈0, in-range interiors get v-idle.
 - Sweep verdict: R_edge (eta2=0.05) safe everywhere — battery +0.0–0.2 (surrogate +0.21), photos +0.04 ×3, zero harm in 32 cells → ADOPTED as loop default (reg undefined). R_freq: periodic +2.4 dB but blocks −7 to −11 dB → MANUAL only (content-dependent, same story as every adaptive knob).
 - Kept honest: Π still guarantees range; eta steps stability-bounded (smooth moves <0.5 levels/pass, tested); Lᵀ≈L boundary approximation documented.
-- Port note: C++ core NOT updated (descriptors port required; reference-default changed, product follows behind a gate as always).
+- Port note: C++ core now implements R_edge default (descriptors subset +
+  Laplacian ported; eta1=0/eta2=0.05). Native ALL PASS zero warnings; WASM
+  rebuilt (30.7 KB) strict smoke PASS; TS↔C++ cross-validation holds
+  (max 2 levels, 59 dB — the exact-sum envelope). R_freq stays reference-only.
 
 ## What survives to iter 13
 
