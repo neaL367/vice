@@ -10,6 +10,7 @@ import { adaptiveWeights, describeFor, varianceClassify } from "./adaptive.ts";
 import { boxDownsample, forwardResidual } from "./forward.ts";
 import { reconstructIbp } from "./ibp.ts";
 import { upsample, type GrayImage, type KernelName } from "./kernels.ts";
+import { computeDescriptors } from "./descriptors.ts";
 import { gradientError, psnr, ringing, ssimLite } from "./metrics.ts";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "results");
@@ -48,11 +49,18 @@ for (const f of allFixtures()) {
     const { desc, sigma, cls } = describeFor(lr);
     const wLrc = adaptiveWeights(desc, cls, sigma, s, undefined, "lrc");
     const wVar = adaptiveWeights(desc, varianceClassify(desc), sigma, s, undefined, "variance");
+    const d = computeDescriptors(lr);
+    const steer = { w: lr.w, h: lr.h, dirX: d.dirX, dirY: d.dirY, coh: d.coh };
     const methods: { name: string; run: () => { w: number; h: number; data: Float64Array } }[] = [
       ...KERNELS.map((k) => ({ name: k, run: () => upsample(lr, s, k) })),
       { name: "ibp-uniform", run: () => reconstructIbp(lr, s, { iters: 4 }).x },
       { name: "ibp-lrc", run: () => reconstructIbp(lr, s, { iters: 4 }, wLrc).x },
       { name: "ibp-var", run: () => reconstructIbp(lr, s, { iters: 4 }, wVar).x },
+      // P-kernel ablation: lanczos2-P isotropic (strength 0) isolates the
+      // back-projector footprint from the bilinear default.
+      { name: "ibp-lz2p", run: () => reconstructIbp(lr, s, { iters: 4, steerP: { field: steer, strength: 0, sharp: 2 } }).x },
+      // Directional P (iter-8): steered correction; killed verdict, kept measured.
+      { name: "ibp-dir", run: () => reconstructIbp(lr, s, { iters: 4, steerP: { field: steer, strength: 0.75, sharp: 2 } }).x },
     ];
     for (const m of methods) {
       const t0 = performance.now();
@@ -82,20 +90,22 @@ writeFileSync(join(root, "baseline.json"), JSON.stringify({ rows }, null, 1));
 let md = `# Baseline benchmark (reference TS, box-D, guarded IBP T=4, interior margin ${MARGIN}px)\n\n`;
 md += `Null-PSNR cells (checkerboard/nyquist): every method scores ≈ identikit gray — expected, nullspace total.\n\n`;
 for (const s of SCALES) {
-  md += `## Scale ${s}x — PSNR interior (dB; null = ∞)\n\n| fixture | best fixed | dB | ibp-uniform | ibp-lrc | ibp-var | lrc Δ vs uniform | lrc Δ vs best-fixed |\n|---|---|---|---|---|---|---|---|\n`;
+  md += `## Scale ${s}x — PSNR interior (dB; null = ∞)\n\n| fixture | best fixed | dB | ibp-uniform | ibp-lrc | ibp-var | ibp-lz2p | ibp-dir | lrc Δ uni | dir Δ lz2p |\n|---|---|---|---|---|---|---|---|---|---|\n`;
   const fx = [...new Set(rows.map((r) => r.fixture))];
   for (const f of fx) {
     const fixed = rows.filter((r) => r.fixture === f && r.scale === s && !r.method.startsWith("ibp-"));
     const uni = rows.find((r) => r.fixture === f && r.scale === s && r.method === "ibp-uniform")!;
     const lrc = rows.find((r) => r.fixture === f && r.scale === s && r.method === "ibp-lrc")!;
     const vr = rows.find((r) => r.fixture === f && r.scale === s && r.method === "ibp-var")!;
+    const lz2 = rows.find((r) => r.fixture === f && r.scale === s && r.method === "ibp-lz2p")!;
+    const dir = rows.find((r) => r.fixture === f && r.scale === s && r.method === "ibp-dir")!;
     const best = fixed.reduce((a, b) => ((a.psnr ?? Infinity) >= (b.psnr ?? Infinity) ? a : b));
     const fmt = (v: number | null) => (v === null ? "∞" : String(v));
     const d = (a: number | null, b: number | null) => {
       const x = (a ?? Infinity) - (b ?? Infinity);
       return !Number.isFinite(x) ? "−∞/exact" : `${x >= 0 ? "+" : ""}${Math.round(x * 100) / 100}`;
     };
-    md += `| ${f} | ${best.method} | ${fmt(best.psnr)} | ${fmt(uni.psnr)} | ${fmt(lrc.psnr)} | ${fmt(vr.psnr)} | ${d(lrc.psnr, uni.psnr)} | ${d(lrc.psnr, best.psnr)} |\n`;
+    md += `| ${f} | ${best.method} | ${fmt(best.psnr)} | ${fmt(uni.psnr)} | ${fmt(lrc.psnr)} | ${fmt(vr.psnr)} | ${fmt(lz2.psnr)} | ${fmt(dir.psnr)} | ${d(lrc.psnr, uni.psnr)} | ${d(dir.psnr, lz2.psnr)} |\n`;
   }
   md += `\n`;
 }

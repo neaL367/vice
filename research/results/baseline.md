@@ -4,45 +4,45 @@ Null-PSNR cells (checkerboard/nyquist): every method scores ≈ identikit gray �
 
 ## Scale 2x — PSNR interior (dB; null = ∞)
 
-| fixture | best fixed | dB | ibp-uniform | ibp-lrc | ibp-var | lrc Δ vs uniform | lrc Δ vs best-fixed |
-|---|---|---|---|---|---|---|---|
-| impulse | nearest | 28.85 | 28.85 | 28.85 | 28.85 | +0 | +0 |
-| checkerboard | nearest | 6.02 | 6.02 | 6.02 | 6.02 | +0 | +0 |
-| sine-sweep | nearest | 12.82 | 12.22 | 12.28 | 12.28 | +0.06 | -0.54 |
-| nyquist-stripes | nearest | 6.02 | 6.02 | 6.02 | 6.02 | +0 | +0 |
-| diagonal-line | nearest | 16.81 | 16.86 | 16.86 | 16.86 | +0 | +0.05 |
-| thin-h-line | nearest | 16.81 | 16.81 | 16.81 | 16.81 | +0 | +0 |
-| thin-v-line | nearest | 16.81 | 16.81 | 16.81 | 16.81 | +0 | +0 |
-| thin-diag-line | nearest | 18.06 | 18.1 | 18.11 | 18.11 | +0.01 | +0.05 |
-| step-edge | nearest | ∞ | 46.37 | 46.47 | 46.47 | +0.1 | −∞/exact |
-| gradient-ramp | bilinear | 326.45 | 57.07 | 57.28 | 57.28 | +0.21 | -269.17 |
-| repeated-blocks | nearest | ∞ | 29.52 | 29.72 | 29.72 | +0.2 | −∞/exact |
-| periodic-sine2d | lanczos3 | 29.91 | 28.38 | 28.02 | 28.02 | -0.36 | -1.89 |
-| white-noise | nearest | 11.99 | 11.71 | 11.74 | 11.74 | +0.03 | -0.25 |
-| jpeg-blocks | nearest | 29.94 | 26.14 | 26.32 | 26.32 | +0.18 | -3.62 |
-| mixed-frequency | nearest | 9.01 | 9 | 9.01 | 9.01 | +0.01 | +0 |
-| photo-surrogate | lanczos3 | 35.66 | 37.02 | 37.24 | 37.24 | +0.22 | +1.58 |
+| fixture | best fixed | dB | ibp-uniform | ibp-lrc | ibp-var | ibp-lz2p | ibp-dir | lrc Δ uni | dir Δ lz2p |
+|---|---|---|---|---|---|---|---|---|---|
+| impulse | nearest | 28.85 | 28.85 | 28.85 | 28.85 | 28.85 | 28.85 | +0 | +0 |
+| checkerboard | nearest | 6.02 | 6.02 | 6.02 | 6.02 | 6.02 | 6.02 | +0 | +0 |
+| sine-sweep | nearest | 12.82 | 12.22 | 12.28 | 12.28 | 12.2 | 12.24 | +0.06 | +0.04 |
+| nyquist-stripes | nearest | 6.02 | 6.02 | 6.02 | 6.02 | 6.02 | 6.02 | +0 | +0 |
+| diagonal-line | nearest | 16.81 | 16.86 | 16.86 | 16.86 | 16.85 | 16.8 | +0 | -0.05 |
+| thin-h-line | nearest | 16.81 | 16.81 | 16.81 | 16.81 | 16.81 | 16.81 | +0 | +0 |
+| thin-v-line | nearest | 16.81 | 16.81 | 16.81 | 16.81 | 16.81 | 16.81 | +0 | +0 |
+| thin-diag-line | nearest | 18.06 | 18.1 | 18.11 | 18.11 | 18.1 | 18.1 | +0.01 | +0 |
+| step-edge | nearest | ∞ | 46.37 | 46.47 | 46.47 | 46.68 | 47.05 | +0.1 | +0.37 |
+| gradient-ramp | bilinear | 326.45 | 57.07 | 57.28 | 57.28 | 56.95 | 57.12 | +0.21 | +0.17 |
+| repeated-blocks | nearest | ∞ | 29.52 | 29.72 | 29.72 | 29.41 | 29.31 | +0.2 | -0.1 |
+| periodic-sine2d | lanczos3 | 29.91 | 28.38 | 28.02 | 28.02 | 28.45 | 28.45 | -0.36 | +0 |
+| white-noise | nearest | 11.99 | 11.71 | 11.74 | 11.74 | 11.69 | 11.69 | +0.03 | +0 |
+| jpeg-blocks | nearest | 29.94 | 26.14 | 26.32 | 26.32 | 26.05 | 26.03 | +0.18 | -0.02 |
+| mixed-frequency | nearest | 9.01 | 9 | 9.01 | 9.01 | 9 | 9 | +0.01 | +0 |
+| photo-surrogate | lanczos3 | 35.66 | 37.02 | 37.24 | 37.24 | 36.9 | 36.95 | +0.22 | +0.05 |
 
 ## Scale 4x — PSNR interior (dB; null = ∞)
 
-| fixture | best fixed | dB | ibp-uniform | ibp-lrc | ibp-var | lrc Δ vs uniform | lrc Δ vs best-fixed |
-|---|---|---|---|---|---|---|---|
-| impulse | nearest | 27.88 | 27.83 | 27.84 | 27.84 | +0.01 | -0.04 |
-| checkerboard | nearest | 6.02 | 6.02 | 6.02 | 6.02 | +0 | +0 |
-| sine-sweep | nearest | 10.58 | 10.04 | 10.12 | 10.12 | +0.08 | -0.46 |
-| nyquist-stripes | nearest | 6.02 | 6.02 | 6.02 | 6.02 | +0 | +0 |
-| diagonal-line | nearest | 15.05 | 15.1 | 15.1 | 15.1 | +0 | +0.05 |
-| thin-h-line | nearest | 15.05 | 15 | 15 | 15 | +0 | -0.05 |
-| thin-v-line | nearest | 15.05 | 15 | 15 | 15 | +0 | -0.05 |
-| thin-diag-line | nearest | 17.39 | 17.4 | 17.4 | 17.4 | +0 | +0.01 |
-| step-edge | nearest | ∞ | 29.44 | 29.44 | 29.44 | +0 | −∞/exact |
-| gradient-ramp | bilinear | 325.61 | 43.2 | 44.17 | 44.17 | +0.97 | -281.44 |
-| repeated-blocks | nearest | ∞ | 31.99 | 34.24 | 34.24 | +2.25 | −∞/exact |
-| periodic-sine2d | nearest | 15.33 | 15.58 | 15.53 | 15.53 | -0.05 | +0.2 |
-| white-noise | nearest | 10.91 | 10.84 | 10.86 | 10.86 | +0.02 | -0.05 |
-| jpeg-blocks | nearest | 28.26 | 25.3 | 25.53 | 25.53 | +0.23 | -2.73 |
-| mixed-frequency | nearest | 8.94 | 8.93 | 8.93 | 8.93 | +0 | -0.01 |
-| photo-surrogate | lanczos3 | 26.36 | 27.86 | 27.81 | 27.81 | -0.05 | +1.45 |
+| fixture | best fixed | dB | ibp-uniform | ibp-lrc | ibp-var | ibp-lz2p | ibp-dir | lrc Δ uni | dir Δ lz2p |
+|---|---|---|---|---|---|---|---|---|---|
+| impulse | nearest | 27.88 | 27.83 | 27.84 | 27.84 | 27.83 | 27.83 | +0.01 | +0 |
+| checkerboard | nearest | 6.02 | 6.02 | 6.02 | 6.02 | 6.02 | 6.02 | +0 | +0 |
+| sine-sweep | nearest | 10.58 | 10.04 | 10.12 | 10.12 | 10.02 | 10.04 | +0.08 | +0.02 |
+| nyquist-stripes | nearest | 6.02 | 6.02 | 6.02 | 6.02 | 6.02 | 6.02 | +0 | +0 |
+| diagonal-line | nearest | 15.05 | 15.1 | 15.1 | 15.1 | 15.1 | 15.08 | +0 | -0.02 |
+| thin-h-line | nearest | 15.05 | 15 | 15 | 15 | 15.01 | 15 | +0 | -0.01 |
+| thin-v-line | nearest | 15.05 | 15 | 15 | 15 | 15.01 | 15.01 | +0 | +0 |
+| thin-diag-line | nearest | 17.39 | 17.4 | 17.4 | 17.4 | 17.39 | 17.39 | +0 | +0 |
+| step-edge | nearest | ∞ | 29.44 | 29.44 | 29.44 | 29.52 | 29.66 | +0 | +0.14 |
+| gradient-ramp | bilinear | 325.61 | 43.2 | 44.17 | 44.17 | 42.98 | 43.35 | +0.97 | +0.37 |
+| repeated-blocks | nearest | ∞ | 31.99 | 34.24 | 34.24 | 31.03 | 31.02 | +2.25 | -0.01 |
+| periodic-sine2d | nearest | 15.33 | 15.58 | 15.53 | 15.53 | 15.61 | 15.61 | -0.05 | +0 |
+| white-noise | nearest | 10.91 | 10.84 | 10.86 | 10.86 | 10.83 | 10.84 | +0.02 | +0.01 |
+| jpeg-blocks | nearest | 28.26 | 25.3 | 25.53 | 25.53 | 25.22 | 25.16 | +0.23 | -0.06 |
+| mixed-frequency | nearest | 8.94 | 8.93 | 8.93 | 8.93 | 8.93 | 8.93 | +0 | +0 |
+| photo-surrogate | lanczos3 | 26.36 | 27.86 | 27.81 | 27.81 | 27.9 | 27.99 | -0.05 | +0.09 |
 
 ## Residual violations (DHx≈y failures, RMS levels)
 

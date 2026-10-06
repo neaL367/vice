@@ -5,7 +5,7 @@
 // W = per-HR-pixel weight map (null in unweighted mode; ticket 05 supplies it).
 
 import { forwardResidual, projectBox, simulateForward } from "./forward.ts";
-import { upsample, type GrayImage, type KernelName } from "./kernels.ts";
+import { upsample, upsampleSteered, type GrayImage, type KernelName, type SteerField } from "./kernels.ts";
 
 export interface IbpOptions {
   iters?: number; // T ≤ 5 default 4 (matches VICE_SMOOTH_ITERS spirit)
@@ -14,6 +14,12 @@ export interface IbpOptions {
   clamp?: boolean; // overshoot clamp to global [minLR,maxLR] each pass
   gain?: number; // back-projection step (1.0 default; convergence needs ≤ ~1)
   blurSigma?: number; // H model inside DH (0 = box only)
+  /**
+   * Directional P (iter-8): steer residual upsampling by observation geometry.
+   * strength=0 reproduces isotropic lanczos2 P (ablation control). Field is
+   * built from LR descriptors once (not per iteration: geometry is static).
+   */
+  steerP?: { field: SteerField; strength: number; sharp: number } | null;
 }
 
 export interface IbpResult {
@@ -21,8 +27,16 @@ export interface IbpResult {
   residuals: number[]; // residual after x₀ then after each pass
 }
 
-function upsampleResidual(lr: GrayImage, scale: number, weights: Float64Array | null, gain: number): GrayImage {
-  const up = upsample(lr, scale, "bilinear");
+function upsampleResidual(
+  lr: GrayImage,
+  scale: number,
+  weights: Float64Array | null,
+  gain: number,
+  steerP: { field: SteerField; strength: number; sharp: number } | null,
+): GrayImage {
+  const up = steerP
+    ? upsampleSteered(lr, scale, steerP.field, { strength: steerP.strength, sharp: steerP.sharp })
+    : upsample(lr, scale, "bilinear");
   if (weights) {
     if (weights.length !== up.data.length) throw new Error("weight map size mismatch");
     const out = new Float64Array(up.data.length);
@@ -43,7 +57,7 @@ export function reconstructIbp(
   opts: IbpOptions = {},
   weights: Float64Array | null = null,
 ): IbpResult {
-  const { iters = 4, init = "lanczos3", project = true, clamp = true, gain = 1, blurSigma = 0 } = opts;
+  const { iters = 4, init = "lanczos3", project = true, clamp = true, gain = 1, blurSigma = 0, steerP = null } = opts;
   let lo = Infinity;
   let hi = -Infinity;
   for (const v of lr.data) {
@@ -56,7 +70,7 @@ export function reconstructIbp(
     const pred = simulateForward(x, scale, { blurSigma });
     const rdata = new Float64Array(pred.data.length);
     for (let i = 0; i < rdata.length; i++) rdata[i] = lr.data[i] - pred.data[i];
-    const correction = upsampleResidual({ w: lr.w, h: lr.h, data: rdata }, scale, weights, gain);
+    const correction = upsampleResidual({ w: lr.w, h: lr.h, data: rdata }, scale, weights, gain, steerP);
     const nd = new Float64Array(x.data.length);
     for (let i = 0; i < nd.length; i++) {
       let v = x.data[i] + correction.data[i];

@@ -69,6 +69,14 @@ Standing result: tight global clamp is the right policy (block/step/jpeg gains u
 - Method: minimal zero-dep PNG reader (`ref/png.ts`, filter-exact tests) + `ref/photos.ts` harness; data gitignored under `tools/eval/data/photos/` (Kodak classic set, research use). `photos.test.ts` locks lrc ≥ lanczos3 per photo, skips when data absent.
 - Caveats: luma-only (gamma-domain approx; linear path unit-tested, not end-to-end); 5 photos, not a full eval set; box-D only (bicubic-D mismatch untested on photos). Port gate: +0.25–0.32 approaches but does not meet the >0.3-on-2-full-sets bar — no port yet, but the case is now empirical, not speculative.
 
+## Iter-8 findings: directional-P WEAK-SURVIVE, default OFF (no auto-policy)
+
+- Mechanism: lanczos2-footprint residual upsampler × orientation gate (`w=base·((1−a·coh)+a·coh·|cos φ|^p)`), renormalized (constants/block-means preserved). `strength=0` control isolates footprint from steering.
+- Steering effect (dir vs lz2p control, interior): step +0.37/+0.14, gradient-4x +0.37, photo-surrogate +0.05/+0.09, diagonal gradErr −0.23 (2x, with −0.05 PSNR cost); losses: repeated −0.10, jpeg-4x −0.06, diagonal PSNR −0.05. Urban100-10 ungated: +0.09 PSNR and −0.11 gradErr (diagonal-rich content, both metrics agree).
+- osc-gated steering (steer only non-oscillatory) neutralizes BOTH directions (losses and wins → ≡iso): no safe auto-policy exists in the descriptor set. Same content-dependence as every other knob in this program.
+- Verdict: effect real but small (±0.1–0.4) and bidirectional; default OFF (bilinear-P reference unchanged); `steerP` stays as documented manual option. Not ported, not gated.
+- Side finding (locked in bench as `ibp-lz2p`): P-footprint matters more than steering — lanczos2-P vs bilinear-P: periodic +0.4, gradient-4x +0.36, repeated-4x −1.2, step +0.3. No universally best P; recorded per-cell.
+
 ## Iter-7 findings: full sets — loop clears gate vs fixed kernels, adaptive does not (vs uniform)
 
 - Build+data: MSVC 14.44 cmake build green, `vice_tests` ALL PASS, `vice_eval` shipped bar reproduced exactly (matches README table). Datasets: Set5/Set14/BSD100/Urban100 from HF mirrors, gitignored.
@@ -82,9 +90,9 @@ Standing result: tight global clamp is the right policy (block/step/jpeg gains u
 - lrc-proj top-or-tied in all 8 blocks, both domains. Linear-light gaps larger (2x box: +0.39 over lanczos3) — shadows weighted up, same ordering.
 - Locked: `photos.test.ts` bicubic-D test (lrc-proj ≥ lanczos3 per photo); `forward.test.ts` documents box/bicubic disagreement near edges (mismatch is real, just harmless here).
 
-## What survives to iter 8
+## What survives to iter 9
 
 - Reference engine + battery (16 families) + photo + matrix + full-set harnesses: keep. Best results: guarded loop beats fixed kernels on full Set5/Set14 (+0.5/+0.4 dB at 2x) and samples of BSD100/Urban100, both degradations.
-- Next: same-harness C++ comparison of guarded-uniform-IBP vs shipped proj leg (the real port decision); adaptive law stays reference-only unless it beats uniform somewhere natural.
-- Killed (unchanged, 10 entries): LRC classes, alias gate, hpCoh, residual-coherence gate, clamp boundaries, global T-routing, per-pixel osc bounds, cut-ratio stop, HF-trajectory stop, kurtosis routing.
-- C++/WASM port gate: LOOP-MET vs fixed kernels; ADAPTIVE-UNMET vs uniform; PORT DECISION PENDING same-harness vs shipped proj.
+- Directional-P: documented manual option, default OFF. P-footprint recorded per-cell (`ibp-lz2p` in bench).
+- Next: same-harness C++ comparison of guarded-uniform-IBP vs shipped proj leg (needs core restored from git history — deliberate decision, not accident); adaptive law stays reference-only.
+- Killed (11 entries): + directional auto-steering (no safe policy; effect ±0.1–0.4 bidirectional).

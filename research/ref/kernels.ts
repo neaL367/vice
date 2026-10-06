@@ -171,3 +171,76 @@ export function downsampleKernel(hr: GrayImage, s: number, name: KernelName): Gr
 export function constantImage(w: number, h: number, v: number): GrayImage {
   return { w, h, data: new Float64Array(w * h).fill(v) };
 }
+
+export interface SteerField {
+  w: number; // LR grid dims (matches src)
+  h: number;
+  dirX: Float64Array; // unit gradient direction per LR pixel
+  dirY: Float64Array;
+  coh: Float64Array; // structure-tensor coherence in [0,1]
+}
+
+export interface SteerParams {
+  strength: number; // 0 = isotropic lanczos2; 1 = full steering
+  sharp: number; // |cos|^sharp along-tangent selectivity
+}
+
+/**
+ * Directional residual upsampler (iter-8): lanczos2 footprint reshaped by
+ * edge orientation. Tap weight = base · ((1−a·coh) + a·coh·|cos φ|^p), where
+ * φ is the angle between tap offset and edge tangent (gradient ⊥). Along-edge
+ * taps keep full weight; across-edge taps are suppressed where coherent.
+ * Renormalized per HR pixel → preserves constants and block means like any
+ * normalized kernel. coh=0 reproduces lanczos2 exactly.
+ */
+export function upsampleSteered(
+  src: GrayImage,
+  scale: number,
+  field: SteerField,
+  params: SteerParams,
+): GrayImage {
+  if (!Number.isInteger(scale) || scale < 2 || scale > 4) throw new Error(`unsupported scale ${scale}`);
+  if (field.w !== src.w || field.h !== src.h) throw new Error("steer field size mismatch");
+  const R = 2;
+  const ow = src.w * scale;
+  const oh = src.h * scale;
+  const out = new Float64Array(ow * oh);
+  const at = (x: number, y: number) => src.data[Math.min(src.h - 1, Math.max(0, y)) * src.w + Math.min(src.w - 1, Math.max(0, x))];
+  for (let oy = 0; oy < oh; oy++) {
+    for (let ox = 0; ox < ow; ox++) {
+      const cx = (ox + 0.5) / scale - 0.5;
+      const cy = (oy + 0.5) / scale - 0.5;
+      // Orientation at nearest LR pixel (residual fields vary slowly vs taps).
+      const nx = Math.min(src.w - 1, Math.max(0, Math.round(cx)));
+      const ny = Math.min(src.h - 1, Math.max(0, Math.round(cy)));
+      const ni = ny * src.w + nx;
+      const gx = field.dirX[ni];
+      const gy = field.dirY[ni];
+      const coh = Math.min(1, Math.max(0, field.coh[ni]));
+      // Edge tangent = gradient rotated 90°.
+      const tx = -gy;
+      const ty = gx;
+      let acc = 0;
+      let wsum = 0;
+      for (let iy = Math.floor(cy - R); iy <= Math.ceil(cy + R); iy++) {
+        for (let ix = Math.floor(cx - R); ix <= Math.ceil(cx + R); ix++) {
+          const dx = cx - ix;
+          const dy = cy - iy;
+          const base = kernelWeight("lanczos2", dx) * kernelWeight("lanczos2", dy);
+          if (base === 0) continue;
+          let gate = 1;
+          const len = Math.hypot(dx, dy);
+          if (len > 1e-9 && coh > 0) {
+            const cos = Math.abs((dx * tx + dy * ty) / len); // tangent unit length
+            gate = 1 - params.strength * coh + params.strength * coh * Math.pow(cos, params.sharp);
+          }
+          const w = base * gate;
+          acc += at(ix, iy) * w;
+          wsum += w;
+        }
+      }
+      out[oy * ow + ox] = wsum !== 0 ? acc / wsum : 0;
+    }
+  }
+  return { w: ow, h: oh, data: out };
+}
