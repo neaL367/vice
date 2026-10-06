@@ -49,7 +49,12 @@ export function Workspace() {
   if (job.kind === "idle") {
     return (
       <div className="flex min-h-0 flex-1 flex-col px-5 pt-4">
+        <div className="flex shrink-0 items-baseline gap-3">
+          <h1 className="font-display text-[22px] tracking-tight text-stone-100">Vice</h1>
+          <p className="text-[13px] text-stone-500">Larger. Cleaner. Yours.</p>
+        </div>
         <Dropzone onImage={openImage} />
+        <p className="shrink-0 py-3 text-center text-[11px] text-stone-600">On-device · No uploads</p>
       </div>
     );
   }
