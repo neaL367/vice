@@ -113,7 +113,10 @@ export function Dropzone({
         ref={fileRef}
         type="file"
         accept="image/*"
-        className="hidden"
+        // Visually hidden but RENDERED: programmatic .click() on display:none
+        // inputs is flaky (dialog sometimes never opens). sr-only keeps it
+        // in layout so the browser honors the user gesture.
+        className="sr-only"
         onChange={(e) => {
           void take(e.target.files?.[0] ?? undefined);
           e.target.value = "";

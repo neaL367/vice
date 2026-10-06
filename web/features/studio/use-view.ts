@@ -43,6 +43,7 @@ interface ViewInternal extends ViewApi {
   onKeyDown: (e: React.KeyboardEvent) => void;
   onDoubleClick: () => void;
   setSplit: (f: number) => void;
+  centerComparison: () => void;
 }
 
 export function useView(
@@ -197,6 +198,13 @@ export function useView(
     setFraction(Math.min(0.95, Math.max(0.05, f)));
   }
 
+  function centerComparison() {
+    // One-tap recovery at any zoom: centered divider on a centered image.
+    // Zoom is preserved; pan resets so the divider cannot hide off-screen.
+    setSplit(0.5);
+    setPan({ x: 0, y: 0 });
+  }
+
   return {
     attachBox,
     measure,
@@ -216,5 +224,6 @@ export function useView(
     zoomBy,
     zoomToHundred,
     setSplit,
+    centerComparison,
   };
 }

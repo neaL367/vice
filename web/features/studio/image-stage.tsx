@@ -81,17 +81,19 @@ export function ImageStage({
       {result && (
         <>
           <div
-            className="pointer-events-none absolute inset-y-0"
-            style={{ left: `${dividerX}px` }}
+            className="pointer-events-none absolute"
+            style={{ left: `${dividerX}px`, top: `${rect.y}px`, height: `${rect.h}px` }}
             aria-hidden="true"
+            data-testid="divider-line"
           >
             <div className="h-full w-px bg-white/90 shadow-[0_0_12px_rgba(0,0,0,0.6)]" />
           </div>
           <div
-            className="absolute inset-y-0 flex w-8 -translate-x-1/2 cursor-ew-resize touch-none items-center justify-center"
-            style={{ left: `${dividerX}px` }}
+            className="absolute flex w-8 -translate-x-1/2 cursor-ew-resize touch-none items-center justify-center"
+            style={{ left: `${dividerX}px`, top: `${rect.y}px`, height: `${rect.h}px` }}
             onPointerDown={onGripDown}
             aria-hidden="true"
+            data-testid="divider-grip"
           >
             <div className="rounded-full border border-white/40 bg-black/70 px-2 py-1 text-[11px] text-white">
               ⟷

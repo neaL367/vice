@@ -69,7 +69,7 @@ export function Controls({
         <input
           type="file"
           accept="image/*"
-          className="hidden"
+          className="sr-only"
           onChange={(e) => {
             onNewImage(e.target.files?.[0] ?? undefined);
             e.target.value = "";
