@@ -11,7 +11,7 @@ export interface IbpOptions {
   iters?: number; // T ≤ 5 default 4 (matches VICE_SMOOTH_ITERS spirit)
   init?: KernelName; // x₀ kernel
   project?: boolean; // exact box Π each pass (range guarantee)
-  clamp?: boolean; // overshoot clamp to [min(y),max(y)] each pass
+  clamp?: boolean; // overshoot clamp to global [minLR,maxLR] each pass
   gain?: number; // back-projection step (1.0 default; convergence needs ≤ ~1)
   blurSigma?: number; // H model inside DH (0 = box only)
 }

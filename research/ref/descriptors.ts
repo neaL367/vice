@@ -31,6 +31,16 @@ export interface DescMap {
    * (support ≪ edge). Second-order discriminator where amplitude fails.
    */
   edgeSup: Float64Array;
+  /**
+   * Oscillation score: zero-crossings of (d − mean7) along center row/col of
+   * a 7x7 window, min(1, cross/3). Sustained oscillation (sine, blocks,
+   * noise) ≈1; isolated transitions (step) ≈0.1–0.3.
+   * Retained as REPORTED field: per-pixel bound routing on osc was tried and
+   * killed iter-4 (loosening regresses jpeg −0.8 and repeated catastrophically;
+   * snapping needs tight bounds exactly where osc is high). Do not route on it
+   * without new evidence.
+   */
+  osc: Float64Array;
 }
 
 function gradAt(d: Float64Array, w: number, h: number, x: number, y: number): [number, number] {
@@ -54,6 +64,7 @@ export function computeDescriptors(lr: GrayImage): DescMap {
   const alias = new Float64Array(n);
   const curv = new Float64Array(n);
   const edgeSup = new Float64Array(n);
+  const osc = new Float64Array(n);
   const gx = new Float64Array(n);
   const gy = new Float64Array(n);
   for (let y = 0; y < h; y++)
@@ -122,7 +133,44 @@ export function computeDescriptors(lr: GrayImage): DescMap {
         }
       edgeSup[y * w + x] = s / 9;
     }
-  return { w, h, gnorm, dirX, dirY, coh, edge, vnorm, hf, alias, curv, edgeSup };
+  // Oscillation score over 7x7 (mirror edges): sign changes of (d − mean7)
+  // along the center row and column; dead zone ±0.5 levels kills flat noise.
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++) {
+      let m = 0;
+      for (let dy = -3; dy <= 3; dy++)
+        for (let dx = -3; dx <= 3; dx++) {
+          const ix = x + dx < 0 ? -(x + dx) : x + dx >= w ? 2 * w - 2 - (x + dx) : x + dx;
+          const iy = y + dy < 0 ? -(y + dy) : y + dy >= h ? 2 * h - 2 - (y + dy) : y + dy;
+          m += d[Math.min(h - 1, Math.max(0, iy)) * w + Math.min(w - 1, Math.max(0, ix))];
+        }
+      m /= 49;
+      const sgn = (v: number) => (v > 0.5 ? 1 : v < -0.5 ? -1 : 0);
+      let cross = 0;
+      let prev = 0;
+      let started = false;
+      for (let dx = -3; dx <= 3; dx++) {
+        const ix = x + dx < 0 ? -(x + dx) : x + dx >= w ? 2 * w - 2 - (x + dx) : x + dx;
+        const v = sgn(d[y * w + Math.min(w - 1, Math.max(0, ix))] - m);
+        if (v !== 0) {
+          if (started && v !== prev) cross++;
+          prev = v;
+          started = true;
+        }
+      }
+      started = false;
+      for (let dy = -3; dy <= 3; dy++) {
+        const iy = y + dy < 0 ? -(y + dy) : y + dy >= h ? 2 * h - 2 - (y + dy) : y + dy;
+        const v = sgn(d[Math.min(h - 1, Math.max(0, iy)) * w + x] - m);
+        if (v !== 0) {
+          if (started && v !== prev) cross++;
+          prev = v;
+          started = true;
+        }
+      }
+      osc[y * w + x] = Math.min(1, cross / 3);
+    }
+  return { w, h, gnorm, dirX, dirY, coh, edge, vnorm, hf, alias, curv, edgeSup, osc };
 }
 
 /** Bilinear sample of a scalar LR field at HR pixel (hx,hy), scale s. */

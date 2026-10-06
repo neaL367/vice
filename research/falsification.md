@@ -45,15 +45,26 @@ All numbers from `research/results/baseline.json` (288 rows, interior-margin sco
 - Periodic texture remains a loss zone vs best fixed (lanczos3 29.91 interior vs loop ~28). Scoped, not solved.
 
 ### Photo-scale transfer (photo-surrogate, 128px 1/f + step + sine + wedge)
-
 - 2x: loop 37.24 (adaptive) vs lanczos3 35.66 → **+1.58 dB**, best gradErr (1.77), zero ringing, residual 1e-14. HYP-1 wins on mixed photo-scale content, not just toys. Locked by test.
 - 4x: loop 27.86 vs lanczos3 26.36 → +1.5 dB; adaptive −0.05 vs uniform (sine-patch zone, same periodic loss at scale). Loop transfers; adaptive neutral-to-positive.
 - Caveat: surrogate is still synthetic (no optics, no JPEG, no demosaic). Natural-set validation (vice_eval) needs external datasets + C++ build — not available on this box (no data dir, no g++/MSVC on PATH). Recorded as open, not claimed.
+
+## Iter-4 findings: per-pixel clamp bounds TRIED AND KILLED
+
+Goal: keep step/jpeg/repeated clamp-snapping while freeing true peaks in oscillatory texture. Four discriminators attempted, all dead:
+
+1. **osc-gated bound loosening** (allow where 7x7 crossing score = 1): periodic decline fixed (26.06 frozen) and step climb kept (47.62) — but jpeg regresses −0.8 (21→26.5 becomes 25.67) and repeated-blocks collapses (global 30.6 → ~19: loosening kills the block-snapping that tight clamp provides). Asymmetric payoff (+1 periodic vs −11 repeated): keep tight globally. Reverted from `ibp.ts`; `osc` retained as reported field only.
+2. **Global T-routing** (T=1 vs 4 by texture score): jpeg (needs T=4) overlaps periodic (needs T=1) on meanAlias/meanEdge/meanCoh at both scales. No global separator exists. Dead.
+3. **Cut-energy ratio rule** (stop when cut(t)/cut(t−1) stalls): periodic 0.35/0.35/0.48/0.54 vs step 0.38/0.25/0.25/0.25 — damage done while ratio still reads healthy (0.35 at iter 2). Dead.
+4. **HF-trajectory stop rule** (halt when mean|Laplacian| rises): rises accompany BOTH good churn (repeated 82→154 with PSNR 21.9→30.8; jpeg 36→52 with PSNR rising) and bad churn (periodic 47→62 with PSNR falling). Edge-sharpening toward truth and harmonic distortion are locally identical. Dead.
+5. **Gradient-kurtosis routing**: saturates at cap on all fixtures (means ≈10 everywhere). Dead on arrival; idea untested beyond probe.
+
+Standing result: tight global clamp is the right policy (block/step/jpeg gains up to +23 dB outweigh one −1 dB texture loss). The loop does not beat fixed kernels on pure oscillatory texture — scoped limit, mechanism understood (clamp-range premise), no truth-free fix found in this iteration.
 
 ## What survives to iter 4
 
 - Math core (kernels/forward/metrics/descriptors/color/degradation), battery (16 families incl. photo-surrogate), bench harness: keep.
 - Adaptive weight law (HYP-1 weak, now with photo-scale win): keep; next is natural-set validation when datasets/build available, or per-pixel bound routing for the texture loss.
-- Killed: LRC classes, alias gate, hpCoh, residual-coherence gate, clamp boundaries, global T-routing. Do not revive without new evidence.
-- Open: per-pixel clamp bounds for texture (mechanism known, fix open); multi-scale coherence; residual-domain gating done right.
+- Killed: LRC classes, alias gate, hpCoh, residual-coherence gate, clamp boundaries, global T-routing, per-pixel osc bounds, cut-ratio stop, HF-trajectory stop, kurtosis routing. Do not revive without new evidence.
+- Open: multi-scale coherence; residual-domain gating done right; natural-set validation when datasets/build exist.
 - C++/WASM port gate UNMET (requires >0.3 dB PSNR or >0.005 SSIM on ≥2 natural sets, residual ≤1e-5) — no port.
