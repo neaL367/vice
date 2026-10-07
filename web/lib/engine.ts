@@ -9,6 +9,18 @@ export interface UpscaleResult {
   ms: number;
 }
 
+// Memory ceiling: peak transient is dominated by float64 HR planes
+// (W²·s²·8B per channel plus upsample/descriptor temps ≈ ×3) plus I/O.
+// Refuse with guidance instead of OOMing the worker tab. Calibrated
+// conservatively: 768MB cap. Note for the 8× ship: 2048² input at 8×
+// needs ~6.4GB — 8× will require its own lower input cap (~512px).
+const PEAK_CAP_BYTES = 768 * 1024 * 1024;
+
+export function estimatePeakBytes(w: number, h: number, scale: number): number {
+  const hr = w * scale * (h * scale);
+  return hr * 8 * 3 + hr * 4 * 2 + w * h * 4 * 2;
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Core = any;
 let core: Core | null = null;
@@ -34,6 +46,11 @@ export async function upscaleImage(
   scale: 2 | 3 | 4,
 ): Promise<UpscaleResult> {
   const c = await load();
+  const peak = estimatePeakBytes(w, h, scale);
+  if (peak > PEAK_CAP_BYTES)
+    throw new Error(
+      `Too large for this device at ${scale}× (≈${Math.round(peak / 1048576)}MB working set). Try ${scale > 2 ? "2×" : "a smaller image"}.`,
+    );
   const t0 = performance.now();
   const pin = c._malloc(input.length);
   c.HEAPU8.set(input, pin);

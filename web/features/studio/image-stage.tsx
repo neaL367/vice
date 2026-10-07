@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import type { StudioImage } from "./model";
 import { ComparisonViewport } from "./image-viewport";
 import { fractionFromViewportX } from "./geometry";
@@ -12,6 +13,7 @@ export function ImageStage({
   input,
   result,
   working,
+  startedAt,
   attachBox,
   measure,
   rect,
@@ -28,6 +30,7 @@ export function ImageStage({
   input: StudioImage;
   result: StudioImage | null;
   working: boolean;
+  startedAt: number | null;
   attachBox: (el: HTMLDivElement | null) => void;
   measure: () => DOMRect | null;
   rect: Rect;
@@ -102,10 +105,25 @@ export function ImageStage({
         </>
       )}
       {working && (
-        <div className="absolute inset-0 flex items-center justify-center bg-black/40">
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/40">
           <p className="font-display text-3xl text-white">Making it larger…</p>
+          {startedAt !== null && <Elapsed since={startedAt} />}
         </div>
       )}
     </div>
+  );
+}
+
+// Self-ticking elapsed readout; local state keeps canvas redraws untouched.
+function Elapsed({ since }: { since: number }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 500);
+    return () => clearInterval(t);
+  }, []);
+  return (
+    <p className="font-mono text-[12px] text-white/60 tabular-nums">
+      {((now - since) / 1000).toFixed(0)}s
+    </p>
   );
 }

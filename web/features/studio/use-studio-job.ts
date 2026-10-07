@@ -49,7 +49,7 @@ export function useStudioJob() {
         : null;
     if (!input) return;
     const name = cur.kind === "idle" ? "" : cur.name;
-    setJob({ kind: "working", input, name, scale });
+    setJob({ kind: "working", input, name, scale, startedAt: Date.now() });
     const id = ++idRef.current;
     const worker = workerRef.current!;
     try {

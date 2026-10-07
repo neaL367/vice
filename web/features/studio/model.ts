@@ -9,7 +9,7 @@ export interface StudioImage {
 export type Job =
   | { kind: "idle" }
   | { kind: "ready"; input: StudioImage; name: string }
-  | { kind: "working"; input: StudioImage; name: string; scale: 2 | 3 | 4 }
+  | { kind: "working"; input: StudioImage; name: string; scale: 2 | 3 | 4; startedAt: number }
   | {
       kind: "done";
       input: StudioImage;

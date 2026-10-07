@@ -122,6 +122,7 @@ function ActiveWorkspace({
           input={input}
           result={result}
           working={working}
+          startedAt={job.kind === "working" ? job.startedAt : null}
           attachBox={attachBox}
           measure={measure}
           rect={rect}
