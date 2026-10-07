@@ -9,8 +9,10 @@ import { decodeFile } from "./use-studio-job";
 // Images over 2048px are fitted down before processing; stated, not hidden.
 export function Dropzone({
   onImage,
+  onBurst,
 }: {
   onImage: (img: StudioImage, name: string) => void;
+  onBurst: (fs: File[]) => void;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const depth = useRef(0);
@@ -71,7 +73,9 @@ export function Dropzone({
         e.preventDefault();
         depth.current = 0;
         setOver(false);
-        void take(e.dataTransfer.files?.[0]);
+        const fs = [...(e.dataTransfer.files ?? [])].filter((f) => f.type.startsWith("image/"));
+        if (fs.length > 1) onBurst(fs);
+        else void take(fs[0]);
       }}
       tabIndex={0}
       role="button"
@@ -143,13 +147,16 @@ export function Dropzone({
         ref={fileRef}
         type="file"
         accept="image/*"
+        multiple
         // Visually hidden but RENDERED: programmatic .click() on display:none
         // inputs is flaky (dialog sometimes never opens). sr-only keeps it
         // in layout so the browser honors the user gesture.
         className="sr-only"
         onChange={(e) => {
-          void take(e.target.files?.[0] ?? undefined);
+          const fs = [...(e.target.files ?? [])];
           e.target.value = "";
+          if (fs.length > 1) onBurst(fs);
+          else void take(fs[0]);
         }}
       />
     </div>

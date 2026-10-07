@@ -15,7 +15,7 @@ import { fitsEightX } from "../../lib/engine";
 //   relative container (the app viewport area), never to image content;
 // - the dock sits below in normal flow and can never cover the image.
 export function Workspace() {
-  const { job, openImage, upscale } = useStudioJob();
+  const { job, openImage, openBurst, upscale } = useStudioJob();
   const [scale, setScale] = useState<Scale>(2);
 
   async function take(f: File | undefined) {
@@ -23,6 +23,23 @@ export function Workspace() {
     try {
       const { image, name } = await decodeFile(f);
       openImage(image, name);
+    } catch {
+      // Dropzone surfaces its own errors; the dock picker stays silent-safe.
+    }
+  }
+
+  // Multi-file drop/pick opens a burst (frame 0 = reference). Burst fusion
+  // stops at 4×, so an armed 8× falls back to 2× on entry.
+  async function takeBurst(fs: File[]) {
+    const imgs = fs.filter((f) => f.type.startsWith("image/")).slice(0, 8);
+    if (imgs.length < 2) {
+      await take(imgs[0]);
+      return;
+    }
+    try {
+      const decoded = await Promise.all(imgs.map((f) => decodeFile(f)));
+      if (scale === 8) setScale(2);
+      openBurst(decoded);
     } catch {
       // Dropzone surfaces its own errors; the dock picker stays silent-safe.
     }
@@ -50,7 +67,7 @@ export function Workspace() {
   if (job.kind === "idle") {
     return (
       <div className="flex min-h-0 flex-1 flex-col">
-        <Dropzone onImage={openImage} />
+        <Dropzone onImage={openImage} onBurst={takeBurst} />
       </div>
     );
   }
@@ -64,14 +81,20 @@ export function Workspace() {
     );
   }
   // Keyed per image so view state (zoom/pan/split) resets on new uploads.
+  // Burst uploads re-key on frame count so switching single↔burst resets too.
+  // (Past the idle early-return above, job is never idle here.)
+  const frameCount = job.frames?.length ?? 1;
   return (
     <ActiveWorkspace
-      key={`${job.name}-${input.w}x${input.h}`}
+      key={`${job.name}-${input.w}x${input.h}-${frameCount}`}
       input={input}
       job={job}
       scale={scale}
       setScale={setScale}
-      take={take}
+      onPickFiles={(fs) => {
+        if (fs.length > 1) void takeBurst(fs);
+        else void take(fs[0]);
+      }}
       download={download}
       upscale={upscale}
     />
@@ -83,7 +106,7 @@ function ActiveWorkspace({
   job,
   scale,
   setScale,
-  take,
+  onPickFiles,
   download,
   upscale,
 }: {
@@ -91,7 +114,7 @@ function ActiveWorkspace({
   job: Exclude<ReturnType<typeof useStudioJob>["job"], { kind: "idle" }>;
   scale: Scale;
   setScale: (s: Scale) => void;
-  take: (f: File | undefined) => void;
+  onPickFiles: (fs: File[]) => void;
   download: (out: StudioImage, name: string, s: number) => void;
   upscale: (s: Scale) => Promise<void>;
 }) {
@@ -144,6 +167,7 @@ function ActiveWorkspace({
             >
               Ready · {job.output.w}×{job.output.h} · {job.scale}× ·{" "}
               {(job.ms / 1000).toFixed(1)}s
+              {job.frames && job.frames.length > 1 ? ` · fused ${job.frames.length}` : ""}
             </div>
           )}
           {result && (
@@ -206,6 +230,7 @@ function ActiveWorkspace({
           working={working}
           startedAt={job.kind === "working" ? job.startedAt : null}
           progress={job.kind === "working" ? job.progress : null}
+          framesN={job.frames?.length ?? 1}
           attachBox={attachBox}
           measure={measure}
           rect={rect}
@@ -242,7 +267,7 @@ function ActiveWorkspace({
           onDownload={() => {
             if (job.kind === "done") download(job.output, job.name, job.scale);
           }}
-          onNewImage={(f) => void take(f)}
+          onPickFiles={onPickFiles}
         />
       </div>
     </div>

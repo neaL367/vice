@@ -10,18 +10,19 @@ export interface StudioImage {
 
 export type Job =
   | { kind: "idle" }
-  | { kind: "ready"; input: StudioImage; name: string }
-  | { kind: "working"; input: StudioImage; name: string; scale: Scale; startedAt: number; progress: { done: number; total: number } | null }
+  | { kind: "ready"; input: StudioImage; name: string; frames: StudioImage[] | null }
+  | { kind: "working"; input: StudioImage; name: string; frames: StudioImage[] | null; scale: Scale; startedAt: number; progress: { done: number; total: number } | null }
   | {
       kind: "done";
       input: StudioImage;
       name: string;
+      frames: StudioImage[] | null;
       scale: Scale;
       output: StudioImage;
       residual: number;
       ms: number;
     }
-  | { kind: "error"; input: StudioImage | null; name: string; message: string };
+  | { kind: "error"; input: StudioImage | null; name: string; frames: StudioImage[] | null; message: string };
 
 export function hasAlpha(img: StudioImage): boolean {
   for (let i = 3; i < img.data.length; i += 64 * 4) {

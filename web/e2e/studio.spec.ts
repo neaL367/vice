@@ -535,3 +535,79 @@ test("divider hint shows until first drag", async ({ page }) => {
   await expect(hint).toBeHidden();
   expect(errors).toEqual([]);
 });
+
+// Burst: five subpixel-shifted frames dropped together fuse jointly.
+test("burst fuses multiple frames", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  await page.goto("/");
+  await expect(page.getByText("Upscale your image")).toBeVisible();
+
+  // 64×64 base: half black / half white with a gray block (2D structure so
+  // registration has something to grip), bilinear-shifted per frame.
+  const W = 64;
+  const H = 64;
+  const base = new Float64Array(W * H);
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++)
+      base[y * W + x] = x < 32 ? 0 : 255;
+  for (let y = 16; y < 48; y++) for (let x = 16; x < 48; x++) base[y * W + x] = 128;
+  const shifted = (dx: number, dy: number) => {
+    const row = W * 3;
+    const px = Buffer.alloc(row * H);
+    for (let y = 0; y < H; y++)
+      for (let x = 0; x < W; x++) {
+        const sx = Math.min(W - 1, Math.max(0, x - dx));
+        const sy = Math.min(H - 1, Math.max(0, y - dy));
+        const x0 = Math.floor(sx);
+        const y0 = Math.floor(sy);
+        const fx = sx - x0;
+        const fy = sy - y0;
+        const v = (xx: number, yy: number) => base[yy * W + xx];
+        const val = Math.round(
+          v(x0, y0) * (1 - fx) * (1 - fy) +
+            v(Math.min(W - 1, x0 + 1), y0) * fx * (1 - fy) +
+            v(x0, Math.min(H - 1, y0 + 1)) * (1 - fx) * fy +
+            v(Math.min(W - 1, x0 + 1), Math.min(H - 1, y0 + 1)) * fx * fy,
+        );
+        const o = (H - 1 - y) * row + x * 3;
+        px[o] = val;
+        px[o + 1] = val;
+        px[o + 2] = val;
+      }
+    const head = Buffer.alloc(54);
+    head.write("BM", 0);
+    head.writeUInt32LE(54 + px.length, 2);
+    head.writeUInt32LE(54, 10);
+    head.writeUInt32LE(40, 14);
+    head.writeInt32LE(W, 18);
+    head.writeInt32LE(H, 22);
+    head.writeUInt16LE(1, 26);
+    head.writeUInt16LE(24, 28);
+    return Buffer.concat([head, px]);
+  };
+  const files = [
+    [0, 0],
+    [0.5, 0],
+    [0, 0.5],
+    [0.5, 0.5],
+    [0.25, 0.75],
+  ].map(([dx, dy], i) => ({
+    name: `burst${i}.bmp`,
+    mimeType: "image/bmp",
+    buffer: shifted(dx, dy),
+  }));
+  await page.locator('input[type="file"]').first().setInputFiles(files);
+
+  await page.getByRole("button", { name: "Upscale" }).click();
+  await expect(page.getByText("Fusing 5 frames", { exact: false })).toBeVisible({ timeout: 15000 });
+  await expect(page.getByText("Ready", { exact: false })).toBeVisible({ timeout: 120000 });
+  await expect(page.getByText("fused 5", { exact: false })).toBeVisible();
+  const dims = await page.evaluate(() => {
+    const cs = [...document.querySelectorAll("canvas")];
+    const c = cs[cs.length - 1] as HTMLCanvasElement;
+    return { w: c.width, h: c.height };
+  });
+  expect(dims).toEqual({ w: 128, h: 128 });
+  expect(errors).toEqual([]);
+});

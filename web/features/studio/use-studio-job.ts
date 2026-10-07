@@ -32,7 +32,23 @@ export function useStudioJob() {
 
   function openImage(input: StudioImage, name: string) {
     startTransition(() => {
-      setJob({ kind: "ready", input, name });
+      setJob({ kind: "ready", input, name, frames: null });
+    });
+  }
+
+  // Burst open: frame 0 is display/reference; all frames must share dims.
+  function openBurst(images: { image: StudioImage; name: string }[]) {
+    const first = images[0];
+    for (const { image } of images)
+      if (image.w !== first.image.w || image.h !== first.image.h)
+        throw new Error("Burst frames must share dimensions.");
+    startTransition(() => {
+      setJob({
+        kind: "ready",
+        input: first.image,
+        name: first.name,
+        frames: images.map((x) => x.image),
+      });
     });
   }
 
@@ -49,7 +65,11 @@ export function useStudioJob() {
         : null;
     if (!input) return;
     const name = cur.kind === "idle" ? "" : cur.name;
-    setJob({ kind: "working", input, name, scale, startedAt: Date.now(), progress: null });
+    const frames =
+      (cur.kind === "done" || cur.kind === "ready" || cur.kind === "error") && cur.frames
+        ? cur.frames
+        : null;
+    setJob({ kind: "working", input, name, frames, scale, startedAt: Date.now(), progress: null });
     const id = ++idRef.current;
     const worker = workerRef.current!;
     try {
@@ -69,17 +89,26 @@ export function useStudioJob() {
           else resolve(m as WorkerDone);
         };
         worker.addEventListener("message", onMsg);
-        const copy = new Uint8ClampedArray(input.data);
-        worker.postMessage(
-          { type: "run", id, pixels: copy, w: input.w, h: input.h, scale },
-          { transfer: [copy.buffer] },
-        );
+        if (frames && frames.length > 1) {
+          const copies = frames.map((f) => new Uint8ClampedArray(f.data));
+          worker.postMessage(
+            { type: "burst", id, frames: copies, w: input.w, h: input.h, scale },
+            { transfer: copies.map((c) => c.buffer) },
+          );
+        } else {
+          const copy = new Uint8ClampedArray(input.data);
+          worker.postMessage(
+            { type: "run", id, pixels: copy, w: input.w, h: input.h, scale },
+            { transfer: [copy.buffer] },
+          );
+        }
       });
       startTransition(() => {
         setJob({
           kind: "done",
           input,
           name,
+          frames,
           scale,
           output: { data: done.data, w: done.w, h: done.h },
           residual: done.residual,
@@ -92,6 +121,7 @@ export function useStudioJob() {
           kind: "error",
           input,
           name,
+          frames,
           message: "We couldn't process this image.",
         });
       });
@@ -106,7 +136,7 @@ export function useStudioJob() {
     curRef.current = job;
   }, [job]);
 
-  return { job, openImage, reset, upscale };
+  return { job, openImage, openBurst, reset, upscale };
 }
 
 export async function decodeFile(

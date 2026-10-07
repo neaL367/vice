@@ -25,6 +25,11 @@ export function fitsEightX(w: number, h: number): boolean {
   return Math.max(w, h) <= EIGHT_X_MAX_SIDE;
 }
 
+// Burst inputs are fused jointly; five 1024px frames peak ≈170MB —
+// comfortably inside the generic ceiling. Larger bursts refuse with guidance.
+export const BURST_MAX_SIDE = 1024;
+export const BURST_MAX_FRAMES = 8;
+
 export function estimatePeakBytes(w: number, h: number, scale: number): number {
   const hr = w * scale * (h * scale);
   return hr * 8 * 3 + hr * 4 * 2 + w * h * 4 * 2;
@@ -190,6 +195,55 @@ export async function upscaleImage(
   );
   const residual: number = c._vice_last_residual();
   c._free(pin);
+  c._free(pout);
+  return { data: bytes, w: ow, h: oh, residual, ms: performance.now() - t0 };
+}
+
+/**
+ * Burst fusion: n same-size RGBA frames through vice_upscale_burst with
+ * NULL shifts (registration + gating in-core). Frame 0 is the reference.
+ * Synchronous in-core — progress stays indeterminate (elapsed timer shows).
+ */
+export async function upscaleBurst(
+  inputs: Uint8ClampedArray[],
+  w: number,
+  h: number,
+  scale: Scale,
+): Promise<UpscaleResult> {
+  const c = await load();
+  if (inputs.length < 2) throw new Error("Burst needs at least two frames.");
+  if (inputs.length > BURST_MAX_FRAMES)
+    throw new Error(`Burst takes at most ${BURST_MAX_FRAMES} frames (got ${inputs.length}).`);
+  if (scale === 8) throw new Error("Burst stops at 4× — 8× fuses more than this device should attempt.");
+  if (Math.max(w, h) > BURST_MAX_SIDE)
+    throw new Error(
+      `Burst frames larger than ${BURST_MAX_SIDE}px on the long side are refused (got ${Math.max(w, h)}px).`,
+    );
+  const t0 = performance.now();
+  const pins: number[] = [];
+  for (const f of inputs) {
+    if (f.length !== w * h * 4) throw new Error("Burst frames must share dimensions.");
+    const p = c._malloc(f.length);
+    c.HEAPU8.set(f, p);
+    pins.push(p);
+  }
+  const ptab = c._malloc(pins.length * 4);
+  const view = new DataView(c.HEAPU8.buffer, ptab, pins.length * 4);
+  pins.forEach((p, i) => view.setUint32(i * 4, p, true));
+  const ow = w * scale;
+  const oh = h * scale;
+  const pout = c._malloc(ow * oh * 4);
+  const rc: number = c._vice_upscale_burst(ptab, pins.length, w, h, 4, scale, pout, 0);
+  c._free(ptab);
+  for (const p of pins) c._free(p);
+  if (rc !== 0) {
+    c._free(pout);
+    throw new Error(`vice_upscale_burst failed: ${rc}`);
+  }
+  const bytes = new Uint8ClampedArray(
+    c.HEAPU8.slice(pout, pout + ow * oh * 4).buffer as ArrayBuffer,
+  );
+  const residual: number = c._vice_last_residual();
   c._free(pout);
   return { data: bytes, w: ow, h: oh, residual, ms: performance.now() - t0 };
 }

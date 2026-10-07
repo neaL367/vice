@@ -15,7 +15,7 @@ export function Controls({
   canDownload,
   onUpscale,
   onDownload,
-  onNewImage,
+  onPickFiles,
 }: {
   scale: Scale;
   setScale: (s: Scale) => void;
@@ -27,7 +27,7 @@ export function Controls({
   canDownload: boolean;
   onUpscale: () => void;
   onDownload: () => void;
-  onNewImage: (f: File | undefined) => void;
+  onPickFiles: (fs: File[]) => void;
 }) {
   return (
     <div className="flex max-w-[calc(100vw-2rem)] flex-wrap items-center justify-center gap-x-4 gap-y-2 rounded-2xl bg-[#171412]/90 py-2 pr-2 pl-4 shadow-[0_16px_48px_rgba(0,0,0,0.55)] ring-1 ring-white/10 backdrop-blur-md">
@@ -81,9 +81,10 @@ export function Controls({
         <input
           type="file"
           accept="image/*"
+          multiple
           className="sr-only"
           onChange={(e) => {
-            onNewImage(e.target.files?.[0] ?? undefined);
+            onPickFiles([...(e.target.files ?? [])]);
             e.target.value = "";
           }}
         />

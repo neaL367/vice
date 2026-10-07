@@ -15,6 +15,7 @@ export function ImageStage({
   working,
   startedAt,
   progress,
+  framesN,
   attachBox,
   measure,
   rect,
@@ -33,6 +34,7 @@ export function ImageStage({
   working: boolean;
   startedAt: number | null;
   progress: { done: number; total: number } | null;
+  framesN: number;
   attachBox: (el: HTMLDivElement | null) => void;
   measure: () => DOMRect | null;
   rect: Rect;
@@ -108,7 +110,9 @@ export function ImageStage({
       )}
       {working && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/40">
-          <p className="font-display text-3xl text-white">Making it larger…</p>
+          <p className="font-display text-3xl text-white">
+            {framesN > 1 ? `Fusing ${framesN} frames…` : "Making it larger…"}
+          </p>
           {progress ? (
             <p className="font-mono text-[12px] text-white/70 tabular-nums">
               {Math.round((progress.done / progress.total) * 100)}%
