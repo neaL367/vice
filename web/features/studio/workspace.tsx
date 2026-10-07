@@ -171,7 +171,7 @@ function ActiveWorkspace({
             </div>
           )}
           {result && (
-            <span className="text-[11px] tracking-widest text-white/40 uppercase">
+            <span className="hidden text-[11px] tracking-widest text-white/40 uppercase sm:block">
               Original | Enhanced
             </span>
           )}

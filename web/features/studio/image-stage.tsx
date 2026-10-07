@@ -96,7 +96,7 @@ export function ImageStage({
             <div className="h-full w-px bg-white/90 shadow-[0_0_12px_rgba(0,0,0,0.6)]" />
           </div>
           <div
-            className="absolute flex w-8 -translate-x-1/2 cursor-ew-resize touch-none items-center justify-center"
+            className="absolute flex w-11 -translate-x-1/2 cursor-ew-resize touch-none items-center justify-center"
             style={{ left: `${dividerX}px`, top: `${rect.y}px`, height: `${rect.h}px` }}
             onPointerDown={onGripDown}
             aria-hidden="true"

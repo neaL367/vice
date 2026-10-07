@@ -104,15 +104,19 @@ export function Dropzone({
             ? "Decoding pixels…"
             : "Drop an image anywhere"}
       </p>
-      {/* The whole flow in one glance: drop → enlarge → compare. */}
-      <ol className="flex items-center gap-2 text-[12px] text-stone-500" aria-label="How it works">
+      {/* The whole flow in one glance: drop → enlarge → compare.
+          Vertical stack on narrow screens (no cramped wrap); row on sm+. */}
+      <ol
+        className="flex flex-col items-center gap-1.5 text-[13px] text-stone-500 sm:flex-row sm:items-center sm:gap-2 sm:text-[12px]"
+        aria-label="How it works"
+      >
         <li>
           <span className="mr-1.5 inline-flex h-5 w-5 items-center justify-center rounded-full bg-white/5 font-mono text-[11px] text-stone-300">
             1
           </span>
           Drop an image
         </li>
-        <li aria-hidden="true" className="text-stone-700">
+        <li aria-hidden="true" className="hidden text-stone-700 sm:block">
           →
         </li>
         <li>
@@ -121,7 +125,7 @@ export function Dropzone({
           </span>
           Pick 2×–8×
         </li>
-        <li aria-hidden="true" className="text-stone-700">
+        <li aria-hidden="true" className="hidden text-stone-700 sm:block">
           →
         </li>
         <li>

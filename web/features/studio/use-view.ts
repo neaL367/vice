@@ -163,6 +163,8 @@ export function useView(
     if (!result) return;
     if (e.key === "ArrowLeft") setSplit(fraction - 0.04);
     else if (e.key === "ArrowRight") setSplit(fraction + 0.04);
+    else if (e.key === "Home") setSplit(0);
+    else if (e.key === "End") setSplit(1);
     else if (e.key === "0" || e.key === "Escape") resetView();
     else if (e.key === "+" || e.key === "=") zoomBy(1.25);
     else if (e.key === "-") zoomBy(1 / 1.25);
