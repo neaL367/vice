@@ -14,20 +14,28 @@ interface WorkerDone {
 }
 
 // Owns the worker and the job lifecycle. Pixels live here; everything else
-// receives slices. No global store, no context.
+// receives slices. No global store, no context. Plain functions throughout —
+// the React Compiler stabilizes references; curRef avoids stale closures
+// without extra deps. Worker setup/cleanup is StrictMode-safe (terminate).
 export function useStudioJob() {
   const [job, setJob] = useState<Job>({ kind: "idle" });
   const workerRef = useRef<Worker | null>(null);
   const idRef = useRef(0);
+  const mountedRef = useRef(true);
   // Job arrivals commit inside startTransition so heavy commits stay
   // interruptible; kept even without <ViewTransition> consumers.
   const [, startTransition] = useTransition();
 
   useEffect(() => {
+    mountedRef.current = true;
     workerRef.current = new Worker(
       new URL("../../workers/vice.worker.ts", import.meta.url),
     );
-    return () => workerRef.current?.terminate();
+    return () => {
+      mountedRef.current = false;
+      workerRef.current?.terminate();
+      workerRef.current = null;
+    };
   }, []);
 
   function openImage(input: StudioImage, name: string) {
@@ -104,6 +112,7 @@ export function useStudioJob() {
         }
       });
       startTransition(() => {
+        if (!mountedRef.current) return;
         setJob({
           kind: "done",
           input,
@@ -117,6 +126,7 @@ export function useStudioJob() {
       });
     } catch {
       startTransition(() => {
+        if (!mountedRef.current) return;
         setJob({
           kind: "error",
           input,

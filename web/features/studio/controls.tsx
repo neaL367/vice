@@ -2,8 +2,8 @@
 
 import type { Scale } from "./model";
 
-// One bottom dock: brand · scale · dims · upscale · download · new image.
-// Single pill, hairline sections, no stacked bars.
+// One bottom dock: scale · dims · upscale · download · new image.
+// Dark card, hairline border, single primary action.
 export function Controls({
   scale,
   setScale,
@@ -30,65 +30,82 @@ export function Controls({
   onPickFiles: (fs: File[]) => void;
 }) {
   return (
-    <div className="flex max-w-[calc(100vw-2rem)] flex-wrap items-center justify-center gap-x-4 gap-y-2 rounded-2xl bg-[#171412]/90 py-2 pr-2 pl-4 shadow-[0_16px_48px_rgba(0,0,0,0.55)] ring-1 ring-white/10 backdrop-blur-md">
-      <span className="font-display text-[17px] tracking-tight text-stone-100">Vice</span>
-      <div className="h-6 w-px bg-white/10" aria-hidden="true" />
-      <div className="flex gap-0.5 rounded-full bg-white/5 p-0.5" role="group" aria-label="Scale">
-        {([2, 3, 4, 8] as const).map((s) => {
-          const disabled = s === 8 && !canUse8;
-          return (
-            <button
-              key={s}
-              onClick={() => setScale(s)}
-              disabled={disabled}
-              title={disabled ? "8× needs an input ≤512px on the long side" : undefined}
-              aria-pressed={scale === s}
-              className={`min-h-[34px] rounded-full px-3.5 text-[14px] transition-all disabled:opacity-30 ${
-                scale === s ? "bg-stone-100 font-medium text-stone-900 shadow" : "text-stone-400 hover:text-stone-100"
-              }`}
-            >
-              {s}×
-            </button>
-          );
-        })}
-      </div>
-      <p className="hidden text-[13px] text-stone-500 tabular-nums md:block">
-        {inDims} <span className="text-stone-700">→</span> {outDims}
-      </p>
-      {!canUse8 && (
-        <p className="text-[12px] text-stone-500">8× needs an input ≤512px on the long side</p>
-      )}
-      <div className="h-6 w-px bg-white/10" aria-hidden="true" />
-      <button
-        onClick={onUpscale}
-        disabled={!canRun || working}
-        className="min-h-[36px] rounded-xl bg-[#c2410c] px-6 text-[14px] font-medium text-white transition-all hover:bg-[#d14e14] active:scale-[0.98] disabled:opacity-40"
-      >
-        {working ? "Processing…" : "Upscale"}
-      </button>
-      {canDownload && (
-        <button
-          onClick={onDownload}
-          aria-label="Download result"
-          title="Download PNG"
-          className="flex min-h-[36px] min-w-[36px] items-center justify-center rounded-xl border border-white/15 text-[16px] text-stone-200 transition-colors hover:bg-white/10"
+    <div className="flex w-full max-w-[720px] flex-col gap-2 rounded-2xl border border-[#2a2724] bg-[#171512] px-3 py-2.5 shadow-[0_24px_64px_-24px_rgba(0,0,0,0.8)] sm:px-4">
+      <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-2">
+        <div
+          className="flex gap-0.5 rounded-full bg-black/40 p-1 ring-1 ring-white/[0.06] ring-inset"
+          role="group"
+          aria-label="Scale"
         >
-          ↓
-        </button>
+          {([2, 3, 4, 8] as const).map((s) => {
+            const disabled = s === 8 && !canUse8;
+            const active = scale === s;
+            return (
+              <button
+                key={s}
+                onClick={() => setScale(s)}
+                disabled={disabled}
+                title={disabled ? "8× needs an input ≤512px on the long side" : undefined}
+                aria-pressed={scale === s}
+                className={`vx-pop min-h-[32px] min-w-[46px] rounded-full px-3 text-[13.5px] disabled:opacity-30 ${
+                  active
+                    ? "bg-[#f5f4f0] font-medium text-[#0e0d0c] shadow-sm"
+                    : "text-[#a8a29e] hover:bg-white/[0.06] hover:text-[#f5f4f0]"
+                }`}
+              >
+                {s}×
+              </button>
+            );
+          })}
+        </div>
+
+        <p className="hidden items-center gap-1.5 font-mono text-[12px] text-[#a8a29e] tabular-nums sm:flex">
+          <span>{inDims}</span>
+          <span aria-hidden="true" className="text-[#3a3632]">→</span>
+          <span className="font-medium text-[#f5f4f0]">{outDims}</span>
+        </p>
+
+        <div className="mx-1 hidden h-6 w-px bg-[#2a2724] sm:block" aria-hidden="true" />
+
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={onUpscale}
+            disabled={!canRun || working}
+            className="vx-pop inline-flex min-h-[36px] items-center gap-2 rounded-full bg-[#f5f4f0] px-5 text-[13.5px] font-medium text-[#0e0d0c] hover:bg-white active:scale-[0.98] disabled:opacity-40"
+          >
+            {working && <span className="vx-spinner !h-3.5 !w-3.5 !border-2 !border-black/20 !border-t-black" aria-hidden="true" />}
+            {working ? "Processing…" : "Upscale"}
+          </button>
+          {canDownload && (
+            <button
+              onClick={onDownload}
+              aria-label="Download result"
+              title="Download PNG"
+              className="vx-pop flex min-h-[36px] min-w-[36px] items-center justify-center rounded-full border border-[#2a2724] px-2 text-[15px] text-[#f5f4f0] hover:bg-white/[0.06]"
+            >
+              ↓
+            </button>
+          )}
+          <label className="vx-pop cursor-pointer rounded-full px-3 py-2 text-[13px] font-medium text-[#a8a29e] hover:bg-white/[0.06] hover:text-[#f5f4f0]">
+            New
+            <input
+              type="file"
+              accept="image/*"
+              multiple
+              className="sr-only"
+              onChange={(e) => {
+                onPickFiles([...(e.target.files ?? [])]);
+                e.target.value = "";
+              }}
+            />
+          </label>
+        </div>
+      </div>
+      {!canUse8 && (
+        <p className="text-center text-[11.5px] text-[#6f6c66]">
+          8× needs an input ≤512px on the long side — pick 4× or a smaller image
+        </p>
       )}
-      <label className="cursor-pointer rounded-xl px-3 py-1.5 text-[13px] text-stone-400 transition-colors hover:bg-white/5 hover:text-stone-200">
-        New
-        <input
-          type="file"
-          accept="image/*"
-          multiple
-          className="sr-only"
-          onChange={(e) => {
-            onPickFiles([...(e.target.files ?? [])]);
-            e.target.value = "";
-          }}
-        />
-      </label>
     </div>
   );
 }

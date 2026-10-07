@@ -1,11 +1,11 @@
 import type { Metadata } from "next";
-import { Faculty_Glyphic } from "next/font/google";
+import { Inter } from "next/font/google";
 import "./globals.css";
 
-const display = Faculty_Glyphic({
-  variable: "--font-glyphic",
+const sans = Inter({
+  variable: "--font-sans",
   subsets: ["latin"],
-  weight: "400",
+  display: "swap",
 });
 
 // ensureStatic navigation: every page in this app is browser-local and fully
@@ -13,8 +13,8 @@ const display = Faculty_Glyphic({
 export const ensureStatic = "navigation";
 
 export const metadata: Metadata = {
-  title: "Vice",
-  description: "Browser-local deterministic image enlargement.",
+  title: "Vice — Image Upscaler",
+  description: "Enlarge images on-device. No uploads, no AI — clean math, drag to compare.",
 };
 
 export default function RootLayout({
@@ -23,8 +23,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className={display.variable}>
-      <body>{children}</body>
+    <html lang="en" className={sans.variable}>
+      <body className="antialiased">{children}</body>
     </html>
   );
 }

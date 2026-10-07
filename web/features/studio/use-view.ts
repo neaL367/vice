@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { StudioImage } from "./model";
 import {
   calculateFit,
@@ -46,6 +46,14 @@ interface ViewInternal extends ViewApi {
   centerComparison: () => void;
 }
 
+function reducedMotion(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  );
+}
+
 export function useView(
   input: StudioImage,
   result: StudioImage | null,
@@ -62,6 +70,17 @@ export function useView(
     sx: number;
     sy: number;
   } | null>(null);
+
+  // Smooth-zoom targets: wheel/button updates land here, a rAF loop eases
+  // the rendered zoom/pan toward them (critically-damped-ish lerp). Rapid
+  // wheel ticks compound on the TARGET so trackpads glide instead of jump.
+  const targetRef = useRef({ z: 1, x: 0, y: 0 });
+  const curRef = useRef({ z: 1, x: 0, y: 0 });
+  const rafRef = useRef(0);
+  const workingRef = useRef(working);
+  useEffect(() => {
+    workingRef.current = working;
+  }, [working]);
 
   // Callback ref: attaches + measures without ever exposing the ref object.
   const attachBox = useCallback((el: HTMLDivElement | null) => {
@@ -83,6 +102,63 @@ export function useView(
   const fit = calculateFit(box.w, box.h, input.w, input.h);
   const rect = calculateRect(fit, box.w, box.h, zoom, pan);
   const zoomed = zoom > 1;
+
+  // Latest geometry for the rAF loop (avoids stale closures).
+  const geomRef = useRef({ fit, bw: box.w, bh: box.h });
+  useEffect(() => {
+    geomRef.current = { fit, bw: box.w, bh: box.h };
+  }, [fit, box.w, box.h]);
+
+  function stopAnim() {
+    if (rafRef.current) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = 0;
+    }
+  }
+
+  useEffect(() => stopAnim, []);
+
+  function step() {
+    rafRef.current = 0;
+    if (workingRef.current) return;
+    const t = targetRef.current;
+    const c = curRef.current;
+    const k = 0.24;
+    const nz = Math.abs(t.z - c.z) < 0.002 ? t.z : c.z + (t.z - c.z) * k;
+    const nx = Math.abs(t.x - c.x) < 0.1 ? t.x : c.x + (t.x - c.x) * k;
+    const ny = Math.abs(t.y - c.y) < 0.1 ? t.y : c.y + (t.y - c.y) * k;
+    const g = geomRef.current;
+    const clamped = clampPan(g.fit, g.bw, g.bh, nz, { x: nx, y: ny });
+    const fz = nz === 1 ? 1 : nz;
+    const fx = nz === 1 ? 0 : clamped.x;
+    const fy = nz === 1 ? 0 : clamped.y;
+    curRef.current = { z: fz, x: fx, y: fy };
+    setZoom(fz);
+    setPan({ x: fx, y: fy });
+    if (fz !== t.z || fx !== t.x || fy !== t.y) {
+      rafRef.current = requestAnimationFrame(step);
+    }
+  }
+
+  function smoothTo(z: number, x: number, y: number) {
+    targetRef.current = { z, x, y };
+    if (reducedMotion()) {
+      stopAnim();
+      curRef.current = { z, x, y };
+      setZoom(z);
+      setPan({ x, y });
+      return;
+    }
+    if (!rafRef.current) rafRef.current = requestAnimationFrame(step);
+  }
+
+  function snapTo(z: number, x: number, y: number) {
+    stopAnim();
+    targetRef.current = { z, x, y };
+    curRef.current = { z, x, y };
+    setZoom(z);
+    setPan({ x, y });
+  }
 
   function fractionAt(clientX: number) {
     const r = boxRef.current!.getBoundingClientRect();
@@ -116,12 +192,15 @@ export function useView(
         const r = boxRef.current!.getBoundingClientRect();
         setSplit(fractionFromViewportX(rect, ev.clientX - r.left));
       } else {
-        setPan(
-          clampPan(fit, box.w, box.h, zoom, {
-            x: ev.clientX - g.sx,
-            y: ev.clientY - g.sy,
-          }),
-        );
+        // Panning tracks the pointer 1:1 — cancel any zoom glide first.
+        stopAnim();
+        const next = clampPan(geomRef.current.fit, geomRef.current.bw, geomRef.current.bh, curRef.current.z, {
+          x: ev.clientX - g.sx,
+          y: ev.clientY - g.sy,
+        });
+        targetRef.current = { z: curRef.current.z, x: next.x, y: next.y };
+        curRef.current = { z: curRef.current.z, x: next.x, y: next.y };
+        setPan(next);
       }
     };
     const up = (ev: PointerEvent) => {
@@ -140,23 +219,29 @@ export function useView(
 
   function onWheel(e: React.WheelEvent) {
     if (working) return;
+    // Normalize: line-mode deltas (Firefox) and huge touchpad flings would
+    // otherwise jump. Clamp each tick so motion compounds smoothly.
+    let dy = e.deltaY;
+    if (e.deltaMode === 1) dy *= 16;
+    else if (e.deltaMode === 2) dy *= 400;
+    dy = Math.max(-100, Math.min(100, dy));
+    if (dy === 0) return;
     const r = boxRef.current!.getBoundingClientRect();
     const cx = e.clientX - (r.left + r.width / 2);
     const cy = e.clientY - (r.top + r.height / 2);
-    setZoom((z) => {
-      const z2 = Math.min(32, Math.max(1, z * Math.exp(-e.deltaY * 0.0015)));
-      if (z2 !== z) {
-        if (z2 === 1) setPan({ x: 0, y: 0 });
-        else
-          setPan((p) =>
-            clampPan(fit, box.w, box.h, z2, {
-              x: cx - ((cx - p.x) * z2) / z,
-              y: cy - ((cy - p.y) * z2) / z,
-            }),
-          );
-      }
-      return z2;
+    const t = targetRef.current;
+    const z2 = Math.min(32, Math.max(1, t.z * Math.exp(-dy * 0.0015)));
+    if (z2 === t.z) return;
+    if (z2 === 1) {
+      smoothTo(1, 0, 0);
+      return;
+    }
+    const g = geomRef.current;
+    const next = clampPan(g.fit, g.bw, g.bh, z2, {
+      x: cx - ((cx - t.x) * z2) / t.z,
+      y: cy - ((cy - t.y) * z2) / t.z,
     });
+    smoothTo(z2, next.x, next.y);
   }
 
   function onKeyDown(e: React.KeyboardEvent) {
@@ -173,24 +258,34 @@ export function useView(
   }
 
   function resetView() {
-    setZoom(1);
-    setPan({ x: 0, y: 0 });
     setFraction(0.5);
+    if (reducedMotion()) snapTo(1, 0, 0);
+    else smoothTo(1, 0, 0);
   }
 
   function zoomBy(factor: number) {
-    setZoom((z) => {
-      const z2 = Math.min(32, Math.max(1, z * factor));
-      if (z2 === 1) setPan({ x: 0, y: 0 });
-      else if (z2 !== z)
-        setPan((p) => ({ x: (p.x * z2) / z, y: (p.y * z2) / z }));
-      return z2;
+    const t = targetRef.current;
+    const z2 = Math.min(32, Math.max(1, t.z * factor));
+    if (z2 === t.z) return;
+    if (z2 === 1) {
+      if (reducedMotion()) snapTo(1, 0, 0);
+      else smoothTo(1, 0, 0);
+      return;
+    }
+    // Button zoom anchors at the viewport center: scale pan proportionally.
+    const g = geomRef.current;
+    const next = clampPan(g.fit, g.bw, g.bh, z2, {
+      x: (t.x * z2) / t.z,
+      y: (t.y * z2) / t.z,
     });
+    if (reducedMotion()) snapTo(z2, next.x, next.y);
+    else smoothTo(z2, next.x, next.y);
   }
 
   function zoomToHundred() {
-    setPan({ x: 0, y: 0 });
-    setZoom(hundredPercentZoom(fit, input.w));
+    const hz = hundredPercentZoom(geomRef.current.fit, input.w);
+    if (reducedMotion()) snapTo(hz, 0, 0);
+    else smoothTo(hz, 0, 0);
   }
 
   function setSplit(f: number) {

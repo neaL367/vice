@@ -22,6 +22,10 @@ export function ComparisonViewport({
 }) {
   const inRef = useRef<HTMLCanvasElement>(null);
   const outRef = useRef<HTMLCanvasElement>(null);
+  // Kept manual: hasAlpha scans pixels and ComparisonViewport re-renders every
+  // animation frame during smooth zoom — the compiler can't know this is
+  // render-frequency-sensitive, so stabilize explicitly per the "expensive +
+  // frequent render" rule.
   const alpha = useMemo(() => hasAlpha(input), [input]);
 
   useEffect(() => {
