@@ -18,8 +18,8 @@ const ccall = (name, ret, args, vals) => {
 };
 
 const abi = ccall("vice_abi_version", "number", [], []);
-if (abi !== 1) throw new Error("ABI mismatch: " + abi);
-console.log("abi=1 ok");
+if (abi !== 2) throw new Error("ABI mismatch: " + abi);
+console.log("abi=2 ok");
 
 // 8x8 RGBA step (left black, right white), 2x.
 const W = 8, H = 8, S = 2;
@@ -56,4 +56,38 @@ for (let by = 0; by < H; by++)
 console.log("block sums exact ok");
 free(pin);
 free(pout);
+
+// Progressive-8x through the new export: 4x4 RGB step → 32x32.
+{
+  const W8 = 4, H8 = 4, S8 = 8;
+  const in8 = new Uint8Array(W8 * H8 * 3);
+  for (let y = 0; y < H8; y++)
+    for (let x = 0; x < W8; x++) {
+      const v = x < 2 ? 0 : 255;
+      in8.set([v, v, v], (y * W8 + x) * 3);
+    }
+  const p8 = malloc(in8.length);
+  HEAPU8.set(in8, p8);
+  const o8len = W8 * S8 * H8 * S8 * 3;
+  const q8 = malloc(o8len);
+  const rc8 = ccall("vice_upscale_progressive", "number", [], [p8, W8, H8, 3, S8, q8]);
+  if (rc8 !== 0) throw new Error("progressive failed: " + rc8);
+  const out8 = HEAPU8.slice(q8, q8 + o8len);
+  const r8 = core._vice_last_residual();
+  console.log("progressive residual=" + r8);
+  if (!(r8 < 1e-5)) throw new Error("progressive residual gate failed");
+  for (let by = 0; by < H8; by++)
+    for (let bx = 0; bx < W8; bx++) {
+      const src = in8[(by * W8 + bx) * 3];
+      for (let c = 0; c < 3; c++) {
+        let sum = 0;
+        for (let dy = 0; dy < S8; dy++)
+          for (let dx = 0; dx < S8; dx++) sum += out8[((by * S8 + dy) * W8 * S8 + bx * S8 + dx) * 3 + c];
+        if (sum !== S8 * S8 * src) throw new Error(`8x block sum violation at ${bx},${by} ch${c}`);
+      }
+    }
+  console.log("progressive 8x block sums exact ok");
+  free(p8);
+  free(q8);
+}
 console.log("WASM SMOKE PASS");

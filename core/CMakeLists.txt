@@ -9,6 +9,7 @@ add_library(vice STATIC
   src/descriptors.cpp
   src/regularization.cpp
   src/ibp.cpp
+  src/progressive.cpp
   src/color.cpp
   src/api.cpp
 )

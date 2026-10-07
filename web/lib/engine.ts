@@ -22,7 +22,7 @@ async function load(): Promise<Core> {
   };
   const c = await mod.default();
   const abi: number = c._vice_abi_version();
-  if (abi !== 1) throw new Error(`WASM ABI mismatch: got ${abi}, want 1`);
+  if (abi !== 2) throw new Error(`WASM ABI mismatch: got ${abi}, want 2`);
   core = c;
   return c;
 }

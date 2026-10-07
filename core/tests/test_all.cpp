@@ -8,6 +8,7 @@
 #include "../src/forward.h"
 #include "../src/ibp.h"
 #include "../src/kernels.h"
+#include "../src/progressive.h"
 #include "../src/regularization.h"
 
 static int failures = 0;
@@ -24,7 +25,7 @@ static double psnr(const std::vector<double>& a, const std::vector<double>& b) {
 }
 
 int main() {
-  CHECK(vice_abi_version() == 1u);
+  CHECK(vice_abi_version() == 2u);
 
   // Constants preserved by every kernel.
   for (auto k : {vice::Kernel::Nearest, vice::Kernel::Bilinear, vice::Kernel::Bicubic,
@@ -115,6 +116,43 @@ int main() {
     CHECK(vice_last_residual() < 1e-5);
     CHECK(vice_upscale(nullptr, 8, 8, 4, 2, out.data()) == -1);
     CHECK(vice_upscale(in.data(), 8, 8, 4, 5, out.data()) == -1);
+  }
+
+  // Progressive contracts (mirrors progressive.test.ts): every stage residual
+  // vs ORIGINAL y stays ~0; deterministic; constants preserved; x0 honored.
+  {
+    std::vector<double> hr(64 * 64, 0.0);  // 64x64 step at x=32
+    for (int y = 0; y < 64; y++) for (int x = 0; x < 64; x++) hr[(size_t)y * 64 + x] = x < 32 ? 0.0 : 255.0;
+    auto y = vice::box_downsample(hr, 64, 64, 8);
+    auto a = vice::reconstruct_progressive(y, 8, 8, 8, 4);
+    auto b = vice::reconstruct_progressive(y, 8, 8, 8, 4);
+    CHECK(a.stages.size() == 3);
+    CHECK(a.stages[0].scale == 2 && a.stages[1].scale == 4 && a.stages[2].scale == 8);
+    for (const auto& st : a.stages) CHECK(st.residual_vs_y < 1e-5);
+    CHECK(a.final == b.final);
+    CHECK(a.final.size() == 64 * 64);
+    std::vector<double> c(100, 77.0);
+    auto pc = vice::reconstruct_progressive(c, 10, 10, 8, 2);
+    double worst = 0.0;
+    for (double v : pc.final) worst = std::max(worst, std::fabs(v - 77.0));
+    CHECK(worst < 1e-6);
+    // x0 passthrough respected: explicit init is the starting point.
+    std::vector<double> lr4(16, 50.0);
+    std::vector<double> init(64, 50.0);
+    auto r0 = vice::reconstruct_ibp(lr4, 4, 4, 2, 0, &init);
+    CHECK(r0.x == init);
+  }
+
+  // Progressive API smoke: 8x8 RGB 8x, byte-exact final block sums.
+  {
+    std::vector<unsigned char> in(8 * 8 * 3, 100);
+    std::vector<unsigned char> out(64 * 64 * 3, 0);
+    CHECK(vice_upscale_progressive(in.data(), 8, 8, 3, 8, out.data()) == 0);
+    CHECK(vice_last_residual() < 1e-5);
+    long sum = 0;
+    for (unsigned char v : out) sum += v;
+    CHECK(sum == 64L * 64 * 3 * 100);
+    CHECK(vice_upscale_progressive(in.data(), 8, 8, 3, 5, out.data()) == -1);
   }
 
   std::printf(failures == 0 ? "ALL PASS\n" : "FAILURES=%d\n", failures);

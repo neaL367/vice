@@ -8,8 +8,10 @@ struct IbpResult {
   std::vector<double> residuals;
 };
 
-// Guarded IBP: lanczos3 x0, T passes of x ← Π(clamp(x + BilinearUp(y − DHx))).
+// Guarded IBP: lanczos3 x0 (or explicit x0 when provided — used by staged
+// progressive reconstruction), T passes of x ← Π(clamp(x + BilinearUp(y − DHx))).
 // Returns exact-range-space estimate (residual ~1e-12 in float64).
-IbpResult reconstruct_ibp(const std::vector<double>& lr, int lw, int lh, int s, int iters);
+IbpResult reconstruct_ibp(const std::vector<double>& lr, int lw, int lh, int s, int iters,
+                           const std::vector<double>* x0 = nullptr);
 
 }  // namespace vice

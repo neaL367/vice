@@ -56,7 +56,11 @@ int main(int argc, char** argv) {
   if (!read_ppm(argv[1], in, w, h)) { std::fprintf(stderr, "bad input\n"); return 1; }
   int s = atoi(argv[2]);
   std::vector<unsigned char> out((size_t)w * s * h * s * 3);
-  if (vice_upscale(in.data(), w, h, 3, s, out.data()) != 0) { std::fprintf(stderr, "bad args\n"); return 1; }
+  // Scale 8 routes through hierarchical progressive staging (float64
+  // intermediates, exact-sum quantization at final scale); 2/3/4 unchanged.
+  int rc = (s == 8) ? vice_upscale_progressive(in.data(), w, h, 3, s, out.data())
+                    : vice_upscale(in.data(), w, h, 3, s, out.data());
+  if (rc != 0) { std::fprintf(stderr, "bad args\n"); return 1; }
   if (!write_ppm(argv[3], out, w * s, h * s)) { std::fprintf(stderr, "bad output\n"); return 1; }
   std::fprintf(stderr, "residual=%.3e\n", vice_last_residual());
   return 0;
