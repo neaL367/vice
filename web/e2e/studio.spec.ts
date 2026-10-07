@@ -458,7 +458,61 @@ test("works offline after first load", async ({ page, context }) => {
   expect(errors).toEqual([]);
 });
 
-// Coachmark: first result invites the drag, then gets out of the way.
+// Tiling: a 1600px input exceeds the whole-image memory budget, so the
+// engine splits it into halo tiles with per-tile progress — same pixels out.
+test("large input upscales through tiles", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  await page.goto("/");
+  await expect(page.getByText("Upscale your image")).toBeVisible();
+
+  const W = 1600;
+  const H = 1600;
+  const row = W * 3;
+  const px = Buffer.alloc(row * H);
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++) {
+      const v = x < W / 2 ? 0 : 255;
+      const o = (H - 1 - y) * row + x * 3;
+      px[o] = v;
+      px[o + 1] = v;
+      px[o + 2] = v;
+    }
+  const head = Buffer.alloc(54);
+  head.write("BM", 0);
+  head.writeUInt32LE(54 + px.length, 2);
+  head.writeUInt32LE(54, 10);
+  head.writeUInt32LE(40, 14);
+  head.writeInt32LE(W, 18);
+  head.writeInt32LE(H, 22);
+  head.writeUInt16LE(1, 26);
+  head.writeUInt16LE(24, 28);
+  await page.locator('input[type="file"]').first().setInputFiles({
+    name: "large.bmp",
+    mimeType: "image/bmp",
+    buffer: Buffer.concat([head, px]),
+  });
+
+  await page.getByRole("button", { name: "Upscale" }).click();
+  await expect(page.getByText("Ready", { exact: false })).toBeVisible({ timeout: 180000 });
+  const dims = await page.evaluate(() => {
+    const cs = [...document.querySelectorAll("canvas")];
+    const c = cs[cs.length - 1] as HTMLCanvasElement;
+    return { w: c.width, h: c.height };
+  });
+  expect(dims).toEqual({ w: 3200, h: 3200 });
+  // Step survives tiling: dark left, bright right, no blank seams.
+  const spread = await page.evaluate(() => {
+    const cs = [...document.querySelectorAll("canvas")];
+    const c = cs[cs.length - 1] as HTMLCanvasElement;
+    const d = c.getContext("2d")!.getImageData(0, 0, c.width, c.height).data;
+    const at = (x: number, y: number) => d[(y * c.width + x) * 4];
+    return { left: at(100, 100), right: at(3100, 100), mid: at(1600, 1600) };
+  });
+  expect(spread.left).toBeLessThan(64);
+  expect(spread.right).toBeGreaterThan(191);
+  expect(errors).toEqual([]);
+});
 test("divider hint shows until first drag", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e)));

@@ -205,6 +205,7 @@ function ActiveWorkspace({
           result={result}
           working={working}
           startedAt={job.kind === "working" ? job.startedAt : null}
+          progress={job.kind === "working" ? job.progress : null}
           attachBox={attachBox}
           measure={measure}
           rect={rect}

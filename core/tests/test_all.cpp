@@ -25,7 +25,7 @@ static double psnr(const std::vector<double>& a, const std::vector<double>& b) {
 }
 
 int main() {
-  CHECK(vice_abi_version() == 2u);
+  CHECK(vice_abi_version() == 3u);
 
   // Constants preserved by every kernel.
   for (auto k : {vice::Kernel::Nearest, vice::Kernel::Bilinear, vice::Kernel::Bicubic,
@@ -169,6 +169,39 @@ int main() {
     CHECK(p.stages.size() == 2);
     CHECK(p.stages[0].scale == 2 && p.stages[1].scale == 4);
     for (const auto& st : p.stages) CHECK(st.residual_vs_y < 1e-5);
+  }
+
+  // Ranged entry: global clamp range reproduces whole-image bytes on tiles.
+  // 16x16 step split into overlapping 10x10 tiles (halo 2): valid regions
+  // must match vice_upscale byte-for-byte.
+  {
+    std::vector<double> lr(256, 0.0);
+    for (int y = 0; y < 16; y++) for (int x = 0; x < 16; x++) lr[(size_t)y * 16 + x] = x < 8 ? 0.0 : 255.0;
+    auto whole = vice::reconstruct_ibp(lr, 16, 16, 2, 4);
+    double range[2] = {0.0, 255.0};
+    // Tile A: x 0..11, valid 0..7 (halo 8..11). Tile B: x 4..15, valid 8..15
+    // (halo 4..7). Halo 4 covers lanczos3 support (3) plus margin.
+    for (int t = 0; t < 2; t++) {
+      int x0 = t == 0 ? 0 : 4;
+      std::vector<double> tlr(12 * 16);
+      for (int y = 0; y < 16; y++) for (int x = 0; x < 12; x++) tlr[(size_t)y * 12 + x] = lr[(size_t)y * 16 + x + x0];
+      auto tr = vice::reconstruct_ibp(tlr, 12, 16, 2, 4, nullptr, range);
+      int vx0 = t == 0 ? 0 : 8, vx1 = t == 0 ? 8 : 16;
+      for (int y = 0; y < 32; y++)
+        for (int x = vx0 * 2; x < vx1 * 2; x++) {
+          double a = whole.x[(size_t)y * 32 + x];
+          double b = tr.x[(size_t)y * 24 + (x - vx0 * 2 + (t == 0 ? 0 : 8))];
+          CHECK(std::fabs(a - b) < 1e-9);
+        }
+    }
+    // API-level: ranged 2x on constants matches direct.
+    std::vector<unsigned char> in(8 * 8 * 1, 100);
+    std::vector<unsigned char> o1(16 * 16, 0), o2(16 * 16, 0);
+    double rg[2] = {100.0, 100.0};
+    CHECK(vice_upscale(in.data(), 8, 8, 1, 2, o1.data()) == 0);
+    CHECK(vice_upscale_ranged(in.data(), 8, 8, 1, 2, o2.data(), rg) == 0);
+    CHECK(o1 == o2);
+    CHECK(vice_upscale_ranged(in.data(), 8, 8, 1, 2, o2.data(), nullptr) == -1);
   }
 
   std::printf(failures == 0 ? "ALL PASS\n" : "FAILURES=%d\n", failures);

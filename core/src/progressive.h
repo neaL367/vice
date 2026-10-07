@@ -19,6 +19,7 @@ struct ProgressiveResult {
 // prior stage output is init only (lanczos3 2x upsample). Mirrors
 // research/ref/progressive.ts reconstructProgressive.
 ProgressiveResult reconstruct_progressive(const std::vector<double>& y, int lw, int lh,
-                                          int target_scale, int iters);
+                                          int target_scale, int iters,
+                                          const double* clamp_lo_hi = nullptr);
 
 }  // namespace vice

@@ -16,7 +16,9 @@ self.onmessage = async (ev: MessageEvent<RunMsg>) => {
   const msg = ev.data;
   if (msg.type !== "run") return;
   try {
-    const r = await upscaleImage(msg.pixels, msg.w, msg.h, msg.scale);
+    const r = await upscaleImage(msg.pixels, msg.w, msg.h, msg.scale, (done, total) =>
+      self.postMessage({ type: "progress", id: msg.id, done, total }),
+    );
     self.postMessage(
       { type: "done", id: msg.id, data: r.data, w: r.w, h: r.h, residual: r.residual, ms: r.ms },
       { transfer: [r.data.buffer] },

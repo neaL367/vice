@@ -8,12 +8,16 @@
 namespace vice {
 
 IbpResult reconstruct_ibp(const std::vector<double>& lr, int lw, int lh, int s, int iters,
-                           const std::vector<double>* x0) {
+                           const std::vector<double>* x0, const double* clamp_lo_hi) {
   double lo = std::numeric_limits<double>::infinity();
   double hi = -std::numeric_limits<double>::infinity();
   for (double v : lr) {
     lo = std::min(lo, v);
     hi = std::max(hi, v);
+  }
+  if (clamp_lo_hi) {
+    lo = clamp_lo_hi[0];
+    hi = clamp_lo_hi[1];
   }
   std::vector<double> x =
       (x0 && x0->size() == (size_t)lw * s * (size_t)lh * s) ? *x0 : upsample(lr, lw, lh, s, Kernel::Lanczos3);

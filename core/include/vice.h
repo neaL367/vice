@@ -14,7 +14,7 @@ extern "C" {
  * thread at a time (workers use separate threads, never shared calls).
  */
 
-#define VICE_ABI_VERSION 2u
+#define VICE_ABI_VERSION 3u
 #define VICE_ITERS 4
 
 unsigned vice_abi_version(void);
@@ -24,6 +24,13 @@ unsigned vice_abi_version(void);
  * -1 on bad arguments. Output is rounded to bytes (product path).
  * Scale 4 runs hierarchical 2→4 staging internally (Stage-4 adoption). */
 int vice_upscale(const unsigned char* in, int w, int h, int ch, int scale, unsigned char* out);
+
+/* Tiled-reconstruction entry: same contract as vice_upscale (scales 2, 3, 4)
+ * except the per-channel clamp range is caller-supplied (2×ch doubles:
+ * lo,hi per channel) instead of tile-local — keeps tiled runs consistent
+ * with whole-image runs. Used by the web worker for large inputs. */
+int vice_upscale_ranged(const unsigned char* in, int w, int h, int ch, int scale,
+                        unsigned char* out, const double* clamp_lo_hi);
 
 /* Hierarchical progressive upscale by scale (2, 4, 8): float64 staging
  * through 2x steps, every stage projecting against the input; integer-exact

@@ -55,6 +55,41 @@ void quantize_exact(const double* blk, int s, double target, unsigned char* out)
 
 unsigned vice_abi_version(void) { return VICE_ABI_VERSION; }
 
+namespace {
+// One channel: staged 2→4 at scale 4, single-stage otherwise; exact-sum
+// quantization at the final scale. Optional clamp override keeps tiled runs
+// consistent with whole-image runs (tiles pass the global channel range).
+// Returns the worst stage residual.
+double upscale_channel(const std::vector<double>& lr, int w, int h, int scale,
+                       unsigned char* out, int ow, int ch, int c, const double* clamp_lo_hi) {
+  double worst = 0.0;
+  std::vector<double> blk(static_cast<size_t>(scale) * scale);
+  std::vector<unsigned char> qblk(static_cast<size_t>(scale) * scale);
+  std::vector<double> x;
+  if (scale == 4) {
+    auto p = vice::reconstruct_progressive(lr, w, h, 4, VICE_ITERS, clamp_lo_hi);
+    for (const auto& st : p.stages) worst = std::max(worst, st.residual_vs_y);
+    x = std::move(p.final);
+  } else {
+    auto r = vice::reconstruct_ibp(lr, w, h, scale, VICE_ITERS, nullptr, clamp_lo_hi);
+    worst = r.residuals.back();
+    x = std::move(r.x);
+  }
+  for (int by = 0; by < h; by++)
+    for (int bx = 0; bx < w; bx++) {
+      for (int dy = 0; dy < scale; dy++)
+        for (int dx = 0; dx < scale; dx++)
+          blk[(size_t)dy * scale + dx] = x[(size_t)(by * scale + dy) * ow + bx * scale + dx];
+      quantize_exact(blk.data(), scale, (double)(scale * scale) * lr[(size_t)by * w + bx], qblk.data());
+      for (int dy = 0; dy < scale; dy++)
+        for (int dx = 0; dx < scale; dx++)
+          out[(size_t)((by * scale + dy) * ow + bx * scale + dx) * ch + c] =
+              qblk[(size_t)dy * scale + dx];
+    }
+  return worst;
+}
+}  // namespace
+
 int vice_upscale(const unsigned char* in, int w, int h, int ch, int scale, unsigned char* out) {
   if (!in || !out || w <= 0 || h <= 0 || (ch != 1 && ch != 3 && ch != 4) ||
       (scale != 2 && scale != 3 && scale != 4))
@@ -62,34 +97,32 @@ int vice_upscale(const unsigned char* in, int w, int h, int ch, int scale, unsig
   const int ow = w * scale;
   double worst = 0.0;
   std::vector<double> lr(static_cast<size_t>(w) * h);
-  std::vector<double> blk(static_cast<size_t>(scale) * scale);
-  std::vector<unsigned char> qblk(static_cast<size_t>(scale) * scale);
   for (int c = 0; c < ch; c++) {
     for (int i = 0; i < w * h; i++) lr[(size_t)i] = in[(size_t)i * ch + c];
     // Scale 4 uses hierarchical 2→4 staging (Stage-4 adoption: +0.07 dB mean,
     // no reversals); 2/3 stay single-stage. Intermediates are float64;
     // exact-sum quantization applies once at the final scale below.
-    std::vector<double> x;
-    if (scale == 4) {
-      auto p = vice::reconstruct_progressive(lr, w, h, 4, VICE_ITERS);
-      for (const auto& st : p.stages) worst = std::max(worst, st.residual_vs_y);
-      x = std::move(p.final);
-    } else {
-      auto r = vice::reconstruct_ibp(lr, w, h, scale, VICE_ITERS);
-      if (r.residuals.back() > worst) worst = r.residuals.back();
-      x = std::move(r.x);
-    }
-    for (int by = 0; by < h; by++)
-      for (int bx = 0; bx < w; bx++) {
-        for (int dy = 0; dy < scale; dy++)
-          for (int dx = 0; dx < scale; dx++)
-            blk[(size_t)dy * scale + dx] = x[(size_t)(by * scale + dy) * ow + bx * scale + dx];
-        quantize_exact(blk.data(), scale, (double)(scale * scale) * lr[(size_t)by * w + bx], qblk.data());
-        for (int dy = 0; dy < scale; dy++)
-          for (int dx = 0; dx < scale; dx++)
-            out[(size_t)((by * scale + dy) * ow + bx * scale + dx) * ch + c] =
-                qblk[(size_t)dy * scale + dx];
-      }
+    worst = std::max(worst, upscale_channel(lr, w, h, scale, out, ow, ch, c, nullptr));
+  }
+  g_last_residual = worst;
+  return 0;
+}
+
+// Tiled-reconstruction entry: identical to vice_upscale per channel except
+// the clamp range is caller-supplied (global channel range) instead of
+// tile-local. Scales 2, 3, 4 (4 staged, matching vice_upscale).
+int vice_upscale_ranged(const unsigned char* in, int w, int h, int ch, int scale,
+                        unsigned char* out, const double* clamp_lo_hi) {
+  if (!in || !out || !clamp_lo_hi || w <= 0 || h <= 0 || (ch != 1 && ch != 3 && ch != 4) ||
+      (scale != 2 && scale != 3 && scale != 4))
+    return -1;
+  const int ow = w * scale;
+  double worst = 0.0;
+  std::vector<double> lr(static_cast<size_t>(w) * h);
+  for (int c = 0; c < ch; c++) {
+    for (int i = 0; i < w * h; i++) lr[(size_t)i] = in[(size_t)i * ch + c];
+    const double range[2] = {clamp_lo_hi[(size_t)c * 2], clamp_lo_hi[(size_t)c * 2 + 1]};
+    worst = std::max(worst, upscale_channel(lr, w, h, scale, out, ow, ch, c, range));
   }
   g_last_residual = worst;
   return 0;

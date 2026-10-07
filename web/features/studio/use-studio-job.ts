@@ -49,7 +49,7 @@ export function useStudioJob() {
         : null;
     if (!input) return;
     const name = cur.kind === "idle" ? "" : cur.name;
-    setJob({ kind: "working", input, name, scale, startedAt: Date.now() });
+    setJob({ kind: "working", input, name, scale, startedAt: Date.now(), progress: null });
     const id = ++idRef.current;
     const worker = workerRef.current!;
     try {
@@ -57,6 +57,13 @@ export function useStudioJob() {
         const onMsg = (ev: MessageEvent) => {
           const m = ev.data;
           if (m.id !== id) return;
+          if (m.type === "progress") {
+            // Progress paints outside the transition (urgent, lightweight).
+            setJob((j) =>
+              j.kind === "working" ? { ...j, progress: { done: m.done, total: m.total } } : j,
+            );
+            return;
+          }
           worker.removeEventListener("message", onMsg);
           if (m.type === "error") reject(new Error(m.message));
           else resolve(m as WorkerDone);

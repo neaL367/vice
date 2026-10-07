@@ -11,7 +11,7 @@ export interface StudioImage {
 export type Job =
   | { kind: "idle" }
   | { kind: "ready"; input: StudioImage; name: string }
-  | { kind: "working"; input: StudioImage; name: string; scale: Scale; startedAt: number }
+  | { kind: "working"; input: StudioImage; name: string; scale: Scale; startedAt: number; progress: { done: number; total: number } | null }
   | {
       kind: "done";
       input: StudioImage;

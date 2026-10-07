@@ -7,7 +7,8 @@
 namespace vice {
 
 ProgressiveResult reconstruct_progressive(const std::vector<double>& y, int lw, int lh,
-                                          int target_scale, int iters) {
+                                          int target_scale, int iters,
+                                          const double* clamp_lo_hi) {
   if (target_scale != 2 && target_scale != 4 && target_scale != 8)
     throw std::invalid_argument("target_scale must be 2, 4, or 8");
   ProgressiveResult out;
@@ -16,10 +17,10 @@ ProgressiveResult reconstruct_progressive(const std::vector<double>& y, int lw, 
   for (int s = 2;; s *= 2) {
     IbpResult r;
     if (!have_prior) {
-      r = reconstruct_ibp(y, lw, lh, s, iters);
+      r = reconstruct_ibp(y, lw, lh, s, iters, nullptr, clamp_lo_hi);
     } else {
       auto init = upsample(prior, lw * (s / 2), lh * (s / 2), 2, Kernel::Lanczos3);
-      r = reconstruct_ibp(y, lw, lh, s, iters, &init);
+      r = reconstruct_ibp(y, lw, lh, s, iters, &init, clamp_lo_hi);
     }
     StageReport st;
     st.scale = s;
