@@ -1,6 +1,7 @@
 #include "vice.h"
 #include <cmath>
 #include <vector>
+#include "burst.h"
 #include "ibp.h"
 #include "progressive.h"
 
@@ -151,6 +152,46 @@ int vice_upscale_progressive(const unsigned char* in, int w, int h, int ch, int 
           for (int dx = 0; dx < scale; dx++)
             blk[(size_t)dy * scale + dx] = p.final[(size_t)(by * scale + dy) * ow + bx * scale + dx];
         quantize_exact(blk.data(), scale, (double)(scale * scale) * lr[(size_t)by * w + bx], qblk.data());
+        for (int dy = 0; dy < scale; dy++)
+          for (int dx = 0; dx < scale; dx++)
+            out[(size_t)((by * scale + dy) * ow + bx * scale + dx) * ch + c] =
+                qblk[(size_t)dy * scale + dx];
+      }
+  }
+  g_last_residual = worst;
+  return 0;
+}
+
+int vice_upscale_burst(const unsigned char* const* in, int n, int w, int h, int ch, int scale,
+                       unsigned char* out, const double* shifts_or_null) {
+  if (!in || !out || n < 1 || w <= 0 || h <= 0 || (ch != 1 && ch != 3 && ch != 4) ||
+      (scale != 2 && scale != 4))
+    return -1;
+  for (int k = 0; k < n; k++)
+    if (!in[k]) return -1;
+  const int ow = w * scale;
+  double worst = 0.0;
+  std::vector<double> blk(static_cast<size_t>(scale) * scale);
+  std::vector<unsigned char> qblk(static_cast<size_t>(scale) * scale);
+  std::vector<std::pair<double, double>> oracle;
+  if (shifts_or_null)
+    for (int k = 0; k < n; k++) oracle.emplace_back(shifts_or_null[(size_t)k * 2], shifts_or_null[(size_t)k * 2 + 1]);
+  // Reference frame drives quantization targets (block sums match frame 0).
+  std::vector<double> lr0(static_cast<size_t>(w) * h);
+  for (int c = 0; c < ch; c++) {
+    std::vector<std::vector<double>> frames((size_t)n, std::vector<double>((size_t)w * h));
+    for (int k = 0; k < n; k++)
+      for (int i = 0; i < w * h; i++) frames[(size_t)k][(size_t)i] = in[k][(size_t)i * ch + c];
+    for (int i = 0; i < w * h; i++) lr0[(size_t)i] = in[0][(size_t)i * ch + c];
+    auto b = vice::reconstruct_burst(frames, w, h, scale, VICE_ITERS,
+                                     shifts_or_null ? &oracle : nullptr, 0.05);
+    worst = std::max(worst, b.residual_vs_ref);
+    for (int by = 0; by < h; by++)
+      for (int bx = 0; bx < w; bx++) {
+        for (int dy = 0; dy < scale; dy++)
+          for (int dx = 0; dx < scale; dx++)
+            blk[(size_t)dy * scale + dx] = b.x[(size_t)(by * scale + dy) * ow + bx * scale + dx];
+        quantize_exact(blk.data(), scale, (double)(scale * scale) * lr0[(size_t)by * w + bx], qblk.data());
         for (int dy = 0; dy < scale; dy++)
           for (int dx = 0; dx < scale; dx++)
             out[(size_t)((by * scale + dy) * ow + bx * scale + dx) * ch + c] =

@@ -144,7 +144,7 @@ async function load(): Promise<Core> {
   };
   const c = await mod.default();
   const abi: number = c._vice_abi_version();
-  if (abi !== 3) throw new Error(`WASM ABI mismatch: got ${abi}, want 3`);
+  if (abi !== 4) throw new Error(`WASM ABI mismatch: got ${abi}, want 4`);
   core = c;
   return c;
 }

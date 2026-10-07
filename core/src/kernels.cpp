@@ -97,4 +97,25 @@ std::vector<double> upsample(const std::vector<double>& src, int w, int h, int s
   return out;
 }
 
+std::vector<double> shift_image(const std::vector<double>& src, int w, int h, double dx, double dy) {
+  std::vector<double> out(static_cast<size_t>(w) * h, 0.0);
+  for (int y = 0; y < h; y++) {
+    for (int x = 0; x < w; x++) {
+      const double sx = std::min((double)w - 1.0, std::max(0.0, (double)x - dx));
+      const double sy = std::min((double)h - 1.0, std::max(0.0, (double)y - dy));
+      const int x0 = (int)std::floor(sx);
+      const int y0 = (int)std::floor(sy);
+      const double fx = sx - x0;
+      const double fy = sy - y0;
+      const int x1 = std::min(w - 1, x0 + 1);
+      const int y1 = std::min(h - 1, y0 + 1);
+      out[(size_t)y * w + x] = src[(size_t)y0 * w + x0] * (1 - fx) * (1 - fy) +
+                               src[(size_t)y0 * w + x1] * fx * (1 - fy) +
+                               src[(size_t)y1 * w + x0] * (1 - fx) * fy +
+                               src[(size_t)y1 * w + x1] * fx * fy;
+    }
+  }
+  return out;
+}
+
 }  // namespace vice

@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <vector>
 #include "vice.h"
+#include "../src/burst.h"
 #include "../src/descriptors.h"
 #include "../src/forward.h"
 #include "../src/ibp.h"
@@ -25,7 +26,7 @@ static double psnr(const std::vector<double>& a, const std::vector<double>& b) {
 }
 
 int main() {
-  CHECK(vice_abi_version() == 3u);
+  CHECK(vice_abi_version() == 4u);
 
   // Constants preserved by every kernel.
   for (auto k : {vice::Kernel::Nearest, vice::Kernel::Bilinear, vice::Kernel::Bicubic,
@@ -202,6 +203,66 @@ int main() {
     CHECK(vice_upscale_ranged(in.data(), 8, 8, 1, 2, o2.data(), rg) == 0);
     CHECK(o1 == o2);
     CHECK(vice_upscale_ranged(in.data(), 8, 8, 1, 2, o2.data(), nullptr) == -1);
+  }
+
+  // Burst contracts: shift exactness, registration on pseudo-texture,
+  // joint residual gate + determinism, periodic fallback, API smoke.
+  {
+    // shift_image contracts: zero shift is identity (bit-exact), integer
+    // shift permutes exactly. Correlated pseudo-texture (sine gratings +
+    // step) underlies the lossy-operation probes below. (White noise is
+    // unregistrable by design — no cross-scale structure.)
+    std::vector<double> img(64 * 64);
+    for (int y = 0; y < 64; y++) for (int x = 0; x < 64; x++) img[(size_t)y * 64 + x] = (x * 7 + y * 13) % 251;
+    CHECK(vice::shift_image(img, 64, 64, 0.0, 0.0) == img);
+    auto ish = vice::shift_image(img, 64, 64, 1.0, 0.0);
+    bool permute_ok = true;
+    for (int y = 0; y < 64 && permute_ok; y++)
+      for (int x = 1; x < 64 && permute_ok; x++)
+        if (ish[(size_t)y * 64 + x] != img[(size_t)y * 64 + x - 1]) permute_ok = false;
+    CHECK(permute_ok);
+    std::vector<double> tex(32 * 32);
+    for (int y = 0; y < 32; y++)
+      for (int x = 0; x < 32; x++)
+        tex[(size_t)y * 32 + x] =
+            100.0 + 50.0 * std::sin(2.0 * 3.141592653589793 * x / 16.0) +
+            30.0 * std::sin(2.0 * 3.141592653589793 * x / 7.0 + 1.0) +
+            40.0 * std::sin(2.0 * 3.141592653589793 * y / 24.0) + (x < 16 ? 0.0 : 30.0);
+    // Registration with known 0.5px shift, recovered exactly. Confidence is
+    // asserted nonnegative here; its calibration (keep natural, drop
+    // ambiguous) lives in the TS bench where battery fixtures exercise it.
+    // (White noise can show spuriously sharp random basins, so no ordering
+    // contract — the fusion-level aliasing trap, not the margin, owns that.)
+    auto moved = vice::shift_image(tex, 32, 32, 0.5, 0.0);
+    auto e = vice::estimate_shift(tex, moved, 32, 32);
+    CHECK(std::fabs(e.dx - 0.5) < 1e-9 && std::fabs(e.dy) < 1e-9);
+    CHECK(e.confidence >= 0.0);
+    // Joint burst on a step edge: residual gate + deterministic.
+    std::vector<double> hr(64 * 64, 0.0);
+    for (int y = 0; y < 64; y++) for (int x = 0; x < 64; x++) hr[(size_t)y * 64 + x] = x < 32 ? 0.0 : 255.0;
+    auto lr0 = vice::box_downsample(hr, 64, 64, 2);
+    auto lr1 = vice::box_downsample(vice::shift_image(hr, 64, 64, 1.0, 0.0), 64, 64, 2);
+    auto b1 = vice::reconstruct_burst({lr0, lr1}, 32, 32, 2, 4, nullptr, 0.05);
+    auto b2 = vice::reconstruct_burst({lr0, lr1}, 32, 32, 2, 4, nullptr, 0.05);
+    CHECK(b1.x == b2.x);
+    CHECK(b1.residual_vs_ref < 1e-5);
+    // Periodic stripes: ambiguous → fallback to reference alone.
+    std::vector<double> per(64 * 64);
+    for (int y = 0; y < 64; y++) for (int x = 0; x < 64; x++) per[(size_t)y * 64 + x] = ((x >> 2) & 1) ? 0.0 : 255.0;
+    auto p0 = vice::box_downsample(per, 64, 64, 2);
+    auto p1 = vice::box_downsample(vice::shift_image(per, 64, 64, 1.0, 0.0), 64, 64, 2);
+    auto bp = vice::reconstruct_burst({p0, p1}, 32, 32, 2, 4, nullptr, 0.05);
+    CHECK(bp.kept == std::vector<int>({0}));
+    // API smoke: 2-frame burst bytes + oracle shifts path.
+    std::vector<unsigned char> in0(8 * 8, 100), in1(8 * 8, 100);
+    const unsigned char* ins[2] = {in0.data(), in1.data()};
+    std::vector<unsigned char> bout(16 * 16, 0);
+    CHECK(vice_upscale_burst(ins, 2, 8, 8, 1, 2, bout.data(), nullptr) == 0);
+    CHECK(vice_last_residual() < 1e-5);
+    double osh[4] = {0.0, 0.0, 0.5, 0.0};
+    CHECK(vice_upscale_burst(ins, 2, 8, 8, 1, 2, bout.data(), osh) == 0);
+    CHECK(vice_upscale_burst(ins, 0, 8, 8, 1, 2, bout.data(), nullptr) == -1);
+    CHECK(vice_upscale_burst(ins, 2, 8, 8, 1, 5, bout.data(), nullptr) == -1);
   }
 
   std::printf(failures == 0 ? "ALL PASS\n" : "FAILURES=%d\n", failures);

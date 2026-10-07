@@ -10,6 +10,7 @@ add_library(vice STATIC
   src/regularization.cpp
   src/ibp.cpp
   src/progressive.cpp
+  src/burst.cpp
   src/color.cpp
   src/api.cpp
 )
@@ -26,3 +27,6 @@ target_link_libraries(vice_tests PRIVATE vice)
 
 add_executable(vice_upscale apps/vice_upscale.cpp)
 target_link_libraries(vice_upscale PRIVATE vice)
+
+add_executable(vice_burst apps/vice_burst.cpp)
+target_link_libraries(vice_burst PRIVATE vice)

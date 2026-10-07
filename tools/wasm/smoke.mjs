@@ -18,8 +18,8 @@ const ccall = (name, ret, args, vals) => {
 };
 
 const abi = ccall("vice_abi_version", "number", [], []);
-if (abi !== 3) throw new Error("ABI mismatch: " + abi);
-console.log("abi=3 ok");
+if (abi !== 4) throw new Error("ABI mismatch: " + abi);
+console.log("abi=4 ok");
 
 // 8x8 RGBA step (left black, right white), 2x.
 const W = 8, H = 8, S = 2;
@@ -123,5 +123,46 @@ free(pout);
   console.log("staged 4x block sums exact ok");
   free(p4);
   free(q4);
+}
+
+// Burst: two identical 4x4 frames through the real export (pointer table in
+// heap, NULL shifts = estimate internally). Identical frames fuse exactly.
+{
+  const Wb = 4, Hb = 4, Sb = 2;
+  if (typeof core._vice_upscale_burst !== "function") throw new Error("missing export _vice_upscale_burst");
+  const f0 = new Uint8Array(Wb * Hb * 3);
+  for (let y = 0; y < Hb; y++)
+    for (let x = 0; x < Wb; x++) {
+      const v = x < 2 ? 0 : 255;
+      f0.set([v, v, v], (y * Wb + x) * 3);
+    }
+  const p0 = malloc(f0.length);
+  HEAPU8.set(f0, p0);
+  const p1 = malloc(f0.length);
+  HEAPU8.set(f0, p1);
+  const ptab = malloc(8);
+  new DataView(HEAPU8.buffer, ptab, 8).setUint32(0, p0, true);
+  new DataView(HEAPU8.buffer, ptab, 8).setUint32(4, p1, true);
+  const qo = malloc(Wb * Sb * Hb * Sb * 3);
+  const rcb = core._vice_upscale_burst(ptab, 2, Wb, Hb, 3, Sb, qo, 0);
+  if (rcb !== 0) throw new Error("burst failed: " + rcb);
+  const ob = HEAPU8.slice(qo, qo + Wb * Sb * Hb * Sb * 3);
+  const rb = core._vice_last_residual();
+  console.log("burst residual=" + rb);
+  if (!(rb < 1e-5)) throw new Error("burst residual gate failed");
+  // Single-frame reference for agreement.
+  const qs = malloc(Wb * Sb * Hb * Sb * 3);
+  if (core._vice_upscale(p0, Wb, Hb, 3, Sb, qs) !== 0) throw new Error("single failed");
+  const os = HEAPU8.slice(qs, qs + Wb * Sb * Hb * Sb * 3);
+  let worst = 0;
+  for (let i = 0; i < ob.length; i++) worst = Math.max(worst, Math.abs(ob[i] - os[i]));
+  console.log("burst-vs-single max byte diff: " + worst);
+  if (worst > 0) throw new Error("identical-frame burst must reproduce single-frame bytes");
+  free(p0);
+  free(p1);
+  free(ptab);
+  free(qo);
+  free(qs);
+  console.log("burst identical-frame agreement ok");
 }
 console.log("WASM SMOKE PASS");

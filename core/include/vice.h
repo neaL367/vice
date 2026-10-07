@@ -14,7 +14,7 @@ extern "C" {
  * thread at a time (workers use separate threads, never shared calls).
  */
 
-#define VICE_ABI_VERSION 3u
+#define VICE_ABI_VERSION 4u
 #define VICE_ITERS 4
 
 unsigned vice_abi_version(void);
@@ -31,6 +31,14 @@ int vice_upscale(const unsigned char* in, int w, int h, int ch, int scale, unsig
  * with whole-image runs. Used by the web worker for large inputs. */
 int vice_upscale_ranged(const unsigned char* in, int w, int h, int ch, int scale,
                         unsigned char* out, const double* clamp_lo_hi);
+
+/* Burst fusion (Stage 5): n frames (all w×h×ch) with subpixel displacements
+ * reconstruct jointly at scale (2 or 4). shifts is 2×n LR-pixel doubles or
+ * NULL to estimate + gate internally (confidence, aliasing trap, prediction
+ * gate; <2 kept falls back to single-frame on frame 0). Frame 0 is the
+ * reference for projection and quantization. Same return contract. */
+int vice_upscale_burst(const unsigned char* const* in, int n, int w, int h, int ch, int scale,
+                       unsigned char* out, const double* shifts_or_null);
 
 /* Hierarchical progressive upscale by scale (2, 4, 8): float64 staging
  * through 2x steps, every stage projecting against the input; integer-exact
