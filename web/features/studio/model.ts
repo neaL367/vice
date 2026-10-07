@@ -1,5 +1,7 @@
 // Shared studio model: one job lifecycle, pixels cross once per transition.
 
+export type Scale = 2 | 3 | 4 | 8;
+
 export interface StudioImage {
   data: Uint8ClampedArray<ArrayBuffer>;
   w: number;
@@ -9,12 +11,12 @@ export interface StudioImage {
 export type Job =
   | { kind: "idle" }
   | { kind: "ready"; input: StudioImage; name: string }
-  | { kind: "working"; input: StudioImage; name: string; scale: 2 | 3 | 4; startedAt: number }
+  | { kind: "working"; input: StudioImage; name: string; scale: Scale; startedAt: number }
   | {
       kind: "done";
       input: StudioImage;
       name: string;
-      scale: 2 | 3 | 4;
+      scale: Scale;
       output: StudioImage;
       residual: number;
       ms: number;

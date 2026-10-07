@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useTransition } from "react";
-import type { Job, StudioImage } from "./model";
+import type { Job, Scale, StudioImage } from "./model";
 
 interface WorkerDone {
   type: "done";
@@ -40,7 +40,7 @@ export function useStudioJob() {
     setJob({ kind: "idle" });
   }
 
-  async function upscale(scale: 2 | 3 | 4) {
+  async function upscale(scale: Scale) {
     const cur = curRef.current;
     if (!cur || cur.kind === "working") return;
     const input =

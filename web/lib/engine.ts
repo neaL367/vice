@@ -1,5 +1,6 @@
 // vice engine wrapper: loads the WASM core once, exposes upscale with ABI check.
 // Runs inside a Web Worker (never the main thread).
+import type { Scale } from "../features/studio/model";
 
 export interface UpscaleResult {
   data: Uint8ClampedArray<ArrayBuffer>;
@@ -15,6 +16,14 @@ export interface UpscaleResult {
 // conservatively: 768MB cap. Note for the 8× ship: 2048² input at 8×
 // needs ~6.4GB — 8× will require its own lower input cap (~512px).
 const PEAK_CAP_BYTES = 768 * 1024 * 1024;
+
+// 8× needs ~6.4GB at the 2048px input cap, so it carries its own input cap:
+// 512px longest side peaks ≈500MB, inside the generic ceiling with margin.
+export const EIGHT_X_MAX_SIDE = 512;
+
+export function fitsEightX(w: number, h: number): boolean {
+  return Math.max(w, h) <= EIGHT_X_MAX_SIDE;
+}
 
 export function estimatePeakBytes(w: number, h: number, scale: number): number {
   const hr = w * scale * (h * scale);
@@ -43,9 +52,13 @@ export async function upscaleImage(
   input: Uint8ClampedArray,
   w: number,
   h: number,
-  scale: 2 | 3 | 4,
+  scale: Scale,
 ): Promise<UpscaleResult> {
   const c = await load();
+  if (scale === 8 && !fitsEightX(w, h))
+    throw new Error(
+      `8× needs an input ≤512px on the long side (this one is ${Math.max(w, h)}px). Use a smaller image or 4×.`,
+    );
   const peak = estimatePeakBytes(w, h, scale);
   if (peak > PEAK_CAP_BYTES)
     throw new Error(
@@ -57,7 +70,12 @@ export async function upscaleImage(
   const ow = w * scale;
   const oh = h * scale;
   const pout = c._malloc(ow * oh * 4);
-  const rc: number = c._vice_upscale(pin, w, h, 4, scale, pout);
+  // Scale 8 runs the hierarchical progressive export (staged 2→4→8 in-core);
+  // 2/3/4 use the direct entry (4 is staged 2→4 since the Stage-4 adoption).
+  const rc: number =
+    scale === 8
+      ? c._vice_upscale_progressive(pin, w, h, 4, scale, pout)
+      : c._vice_upscale(pin, w, h, 4, scale, pout);
   if (rc !== 0) {
     c._free(pin);
     c._free(pout);

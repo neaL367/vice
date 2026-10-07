@@ -1,5 +1,7 @@
 "use client";
 
+import type { Scale } from "./model";
+
 // One bottom dock: brand · scale · dims · upscale · download · new image.
 // Single pill, hairline sections, no stacked bars.
 export function Controls({
@@ -7,6 +9,7 @@ export function Controls({
   setScale,
   inDims,
   outDims,
+  canUse8,
   canRun,
   working,
   canDownload,
@@ -14,10 +17,11 @@ export function Controls({
   onDownload,
   onNewImage,
 }: {
-  scale: 2 | 3 | 4;
-  setScale: (s: 2 | 3 | 4) => void;
+  scale: Scale;
+  setScale: (s: Scale) => void;
   inDims: string;
   outDims: string;
+  canUse8: boolean;
   canRun: boolean;
   working: boolean;
   canDownload: boolean;
@@ -30,18 +34,23 @@ export function Controls({
       <span className="font-display text-[17px] tracking-tight text-stone-100">Vice</span>
       <div className="h-6 w-px bg-white/10" aria-hidden="true" />
       <div className="flex gap-0.5 rounded-full bg-white/5 p-0.5" role="group" aria-label="Scale">
-        {([2, 3, 4] as const).map((s) => (
-          <button
-            key={s}
-            onClick={() => setScale(s)}
-            aria-pressed={scale === s}
-            className={`min-h-[34px] rounded-full px-3.5 text-[14px] transition-all ${
-              scale === s ? "bg-stone-100 font-medium text-stone-900 shadow" : "text-stone-400 hover:text-stone-100"
-            }`}
-          >
-            {s}×
-          </button>
-        ))}
+        {([2, 3, 4, 8] as const).map((s) => {
+          const disabled = s === 8 && !canUse8;
+          return (
+            <button
+              key={s}
+              onClick={() => setScale(s)}
+              disabled={disabled}
+              title={disabled ? "8× needs an input ≤512px on the long side" : undefined}
+              aria-pressed={scale === s}
+              className={`min-h-[34px] rounded-full px-3.5 text-[14px] transition-all disabled:opacity-30 ${
+                scale === s ? "bg-stone-100 font-medium text-stone-900 shadow" : "text-stone-400 hover:text-stone-100"
+              }`}
+            >
+              {s}×
+            </button>
+          );
+        })}
       </div>
       <p className="hidden text-[13px] text-stone-500 tabular-nums md:block">
         {inDims} <span className="text-stone-700">→</span> {outDims}

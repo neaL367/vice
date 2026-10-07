@@ -4,9 +4,10 @@ import { useState } from "react";
 import { Controls } from "./controls";
 import { Dropzone } from "./dropzone";
 import { ImageStage } from "./image-stage";
-import type { StudioImage } from "./model";
+import type { Scale, StudioImage } from "./model";
 import { decodeFile, useStudioJob } from "./use-studio-job";
 import { useView } from "./use-view";
+import { fitsEightX } from "../../lib/engine";
 
 // Workspace owns job + view state. Layout pinning:
 // - the measured box fills the area; canvas never positions chrome;
@@ -15,7 +16,7 @@ import { useView } from "./use-view";
 // - the dock sits below in normal flow and can never cover the image.
 export function Workspace() {
   const { job, openImage, upscale } = useStudioJob();
-  const [scale, setScale] = useState<2 | 3 | 4>(2);
+  const [scale, setScale] = useState<Scale>(2);
 
   async function take(f: File | undefined) {
     if (!f || !f.type.startsWith("image/")) return;
@@ -88,11 +89,11 @@ function ActiveWorkspace({
 }: {
   input: StudioImage;
   job: Exclude<ReturnType<typeof useStudioJob>["job"], { kind: "idle" }>;
-  scale: 2 | 3 | 4;
-  setScale: (s: 2 | 3 | 4) => void;
+  scale: Scale;
+  setScale: (s: Scale) => void;
   take: (f: File | undefined) => void;
   download: (out: StudioImage, name: string, s: number) => void;
-  upscale: (s: 2 | 3 | 4) => Promise<void>;
+  upscale: (s: Scale) => Promise<void>;
 }) {
   const result = job.kind === "done" ? job.output : null;
   const working = job.kind === "working";
@@ -231,6 +232,7 @@ function ActiveWorkspace({
           setScale={setScale}
           inDims={`${input.w}×${input.h}`}
           outDims={`${input.w * scale}×${input.h * scale}`}
+          canUse8={fitsEightX(input.w, input.h)}
           canRun={job.kind === "ready" || job.kind === "done"}
           working={working}
           canDownload={job.kind === "done"}

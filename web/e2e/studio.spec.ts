@@ -376,6 +376,65 @@ test("divider spans the image height; Center recovers it at heavy zoom", async (
   expect(errors).toEqual([]);
 });
 
+// 8× ships through the progressive WASM export: tiny BMP in, 512² out.
+test("8x upscale works on small inputs", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  await page.goto("/");
+  await expect(page.getByText("Upscale your image")).toBeVisible();
+
+  // 64×64 24-bit BMP step (left black, right white), built inline.
+  const W = 64;
+  const H = 64;
+  const row = W * 3;
+  const px = Buffer.alloc(row * H);
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++) {
+      const v = x < W / 2 ? 0 : 255;
+      // BMP is bottom-up BGR.
+      const o = (H - 1 - y) * row + x * 3;
+      px[o] = v;
+      px[o + 1] = v;
+      px[o + 2] = v;
+    }
+  const head = Buffer.alloc(54);
+  head.write("BM", 0);
+  head.writeUInt32LE(54 + px.length, 2);
+  head.writeUInt32LE(54, 10);
+  head.writeUInt32LE(40, 14);
+  head.writeInt32LE(W, 18);
+  head.writeInt32LE(H, 22);
+  head.writeUInt16LE(1, 26);
+  head.writeUInt16LE(24, 28);
+  await page.locator('input[type="file"]').first().setInputFiles({
+    name: "tiny.bmp",
+    mimeType: "image/bmp",
+    buffer: Buffer.concat([head, px]),
+  });
+
+  await page.getByRole("button", { name: "8×", exact: true }).click();
+  await page.getByRole("button", { name: "Upscale" }).click();
+  await expect(page.getByText("Ready", { exact: false })).toBeVisible({ timeout: 120000 });
+  const dims = await page.evaluate(() => {
+    const cs = [...document.querySelectorAll("canvas")];
+    const c = cs[cs.length - 1] as HTMLCanvasElement;
+    return { w: c.width, h: c.height };
+  });
+  expect(dims).toEqual({ w: 512, h: 512 });
+  expect(errors).toEqual([]);
+});
+
+// Oversized inputs cannot select 8×: the button disables with guidance.
+test("8x disables on large inputs", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByText("Upscale your image")).toBeVisible();
+  const photo = path.resolve(__dirname, "../../tools/eval/data/photos/kodim23.png");
+  await page.locator('input[type="file"]').first().setInputFiles(photo);
+  const eight = page.getByRole("button", { name: "8×", exact: true });
+  await expect(eight).toBeDisabled();
+  await expect(eight).toHaveAttribute("title", /512px/);
+});
+
 // Offline: after first load the service worker serves shell + WASM from
 // cache, so a full upload→upscale works with the network cut.
 test("works offline after first load", async ({ page, context }) => {

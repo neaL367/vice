@@ -1,6 +1,7 @@
 // vice worker: decode is done on main thread (createImageBitmap); heavy math
 // runs here. Protocol: {type:"run", pixels, w, h, scale, id} → {type:"done", …}.
 import { upscaleImage } from "../lib/engine";
+import type { Scale } from "../features/studio/model";
 
 export type RunMsg = {
   type: "run";
@@ -8,7 +9,7 @@ export type RunMsg = {
   pixels: Uint8ClampedArray<ArrayBuffer>;
   w: number;
   h: number;
-  scale: 2 | 3 | 4;
+  scale: Scale;
 };
 
 self.onmessage = async (ev: MessageEvent<RunMsg>) => {
