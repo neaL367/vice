@@ -375,3 +375,26 @@ test("divider spans the image height; Center recovers it at heavy zoom", async (
   expect(vis.span).toBeGreaterThan(100);
   expect(errors).toEqual([]);
 });
+
+// Offline: after first load the service worker serves shell + WASM from
+// cache, so a full upload→upscale works with the network cut.
+test("works offline after first load", async ({ page, context }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  await page.goto("/");
+  await expect(page.getByText("Upscale your image")).toBeVisible();
+  // Wait for the service worker to take control before cutting the network.
+  await page.evaluate(() => navigator.serviceWorker.ready);
+  await context.setOffline(true);
+  try {
+    await page.reload();
+    await expect(page.getByText("Upscale your image")).toBeVisible({ timeout: 15000 });
+    const photo = path.resolve(__dirname, "../../tools/eval/data/photos/kodim23.png");
+    await page.locator('input[type="file"]').first().setInputFiles(photo);
+    await page.getByRole("button", { name: "Upscale" }).click();
+    await expect(page.getByText("Ready", { exact: false })).toBeVisible({ timeout: 90000 });
+  } finally {
+    await context.setOffline(false);
+  }
+  expect(errors).toEqual([]);
+});

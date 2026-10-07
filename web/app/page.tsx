@@ -1,5 +1,6 @@
 import { Suspense } from "react";
 import { Workspace } from "../features/studio/workspace";
+import { SwRegister } from "./sw-register";
 
 function Shell() {
   return (
@@ -13,6 +14,7 @@ function Shell() {
 export default function Page() {
   return (
     <div className="flex h-dvh flex-col bg-[#131110] text-stone-200">
+      <SwRegister />
       <Suspense fallback={<Shell />}>
         <Workspace />
       </Suspense>
