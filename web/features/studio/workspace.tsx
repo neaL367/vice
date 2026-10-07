@@ -125,71 +125,42 @@ function ActiveWorkspace({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="relative min-h-0 flex-1">
-        <ImageStage
-          input={input}
-          result={result}
-          working={working}
-          startedAt={job.kind === "working" ? job.startedAt : null}
-          attachBox={attachBox}
-          measure={measure}
-          rect={rect}
-          fraction={fraction}
-          dividerX={dividerX}
-          zoomed={zoomed}
-          dragging={dragging}
-          onPointerDown={onPointerDown}
-          onWheel={onWheel}
-          onDoubleClick={onDoubleClick}
-          onKeyDown={onKeyDown}
-          setSplit={split}
-        />
-        {/* Chrome: viewport-anchored siblings of the measured box. */}
-        <div
-          className="pointer-events-none absolute inset-x-0 top-3 flex items-start justify-between px-4"
-          aria-hidden="true"
-        >
-          <div>
-            {result ? (
-              <span className="text-[11px] tracking-widest text-white/70 uppercase">
-                Original
-              </span>
-            ) : (
-              <span className="block max-w-[40vw] truncate font-mono text-[11px] text-white/50 tabular-nums">
-                {job.name}
-              </span>
-            )}
-          </div>
-          <div className="flex flex-col items-end gap-1">
-            <div>
-              {result ? (
-                <span className="text-[11px] tracking-widest text-white/70 uppercase">
-                  Enhanced
-                </span>
-              ) : (
-                <span className="font-mono text-[11px] text-white/50 tabular-nums">
-                  {job.kind === "working"
-                    ? "Working…"
-                    : `${input.w}×${input.h}`}
-                </span>
-              )}
+      {/* Top bar in normal flow: filename, status, and zoom live here so the
+          image area stays clean — nothing floats over pixels anymore. */}
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-1 px-4 pt-2 pb-1">
+        <div className="flex min-w-0 flex-wrap items-baseline gap-x-3">
+          <span className="block max-w-[40vw] truncate font-mono text-[11px] text-white/50 tabular-nums">
+            {job.name}
+          </span>
+          <span className="font-mono text-[11px] text-white/50 tabular-nums">
+            {job.kind === "working"
+              ? "Working…"
+              : `${input.w}×${input.h}`}
+          </span>
+          {job.kind === "done" && (
+            <div
+              className="font-mono text-[11px] text-white/40 tabular-nums"
+              title={`forward residual ${job.residual.toExponential(1)}`}
+            >
+              Ready · {job.output.w}×{job.output.h} · {job.scale}× ·{" "}
+              {(job.ms / 1000).toFixed(1)}s
             </div>
-            {job.kind === "done" && (
-              <div
-                className="font-mono text-[11px] text-white/40 tabular-nums"
-                title={`forward residual ${job.residual.toExponential(1)}`}
-              >
-                Ready · {job.output.w}×{job.output.h} · {job.scale}× ·{" "}
-                {(job.ms / 1000).toFixed(1)}s
-              </div>
-            )}
-          </div>
+          )}
+          {result && (
+            <span className="text-[11px] tracking-widest text-white/40 uppercase">
+              Original | Enhanced
+            </span>
+          )}
+          {job.kind === "error" && (
+            <p role="alert" className="text-[13px] text-[#e07856]">
+              {job.message}
+            </p>
+          )}
         </div>
         <div
-          className="absolute top-12 right-3 flex items-center gap-0.5 rounded-full bg-black/70 px-1 py-1 text-[13px] text-stone-200"
+          className="flex items-center gap-0.5 rounded-full bg-black/70 px-1 py-1 text-[13px] text-stone-200"
           role="group"
           aria-label="Zoom"
-          onPointerDown={(e) => e.stopPropagation()}
         >
           <button
             className="rounded-full px-2.5 py-1 hover:bg-white/10"
@@ -227,6 +198,26 @@ function ActiveWorkspace({
             +
           </button>
         </div>
+      </div>
+      <div className="relative min-h-0 flex-1">
+        <ImageStage
+          input={input}
+          result={result}
+          working={working}
+          startedAt={job.kind === "working" ? job.startedAt : null}
+          attachBox={attachBox}
+          measure={measure}
+          rect={rect}
+          fraction={fraction}
+          dividerX={dividerX}
+          zoomed={zoomed}
+          dragging={dragging}
+          onPointerDown={onPointerDown}
+          onWheel={onWheel}
+          onDoubleClick={onDoubleClick}
+          onKeyDown={onKeyDown}
+          setSplit={split}
+        />
         {result && !touched && !working && (
           <div
             className="pointer-events-none absolute z-10 -translate-x-1/2 rounded-full bg-white px-3 py-1 text-[12px] font-medium whitespace-nowrap text-stone-900 shadow-lg"
@@ -234,14 +225,6 @@ function ActiveWorkspace({
           >
             Drag to compare
           </div>
-        )}
-        {job.kind === "error" && (
-          <p
-            role="alert"
-            className="absolute top-12 left-1/2 -translate-x-1/2 rounded-full bg-black/70 px-4 py-1.5 text-[13px] text-[#e07856]"
-          >
-            {job.message}
-          </p>
         )}
       </div>
       <div className="flex shrink-0 justify-center px-4 pt-3 pb-4">
