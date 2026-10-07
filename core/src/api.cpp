@@ -66,13 +66,24 @@ int vice_upscale(const unsigned char* in, int w, int h, int ch, int scale, unsig
   std::vector<unsigned char> qblk(static_cast<size_t>(scale) * scale);
   for (int c = 0; c < ch; c++) {
     for (int i = 0; i < w * h; i++) lr[(size_t)i] = in[(size_t)i * ch + c];
-    auto r = vice::reconstruct_ibp(lr, w, h, scale, VICE_ITERS);
-    if (r.residuals.back() > worst) worst = r.residuals.back();
+    // Scale 4 uses hierarchical 2→4 staging (Stage-4 adoption: +0.07 dB mean,
+    // no reversals); 2/3 stay single-stage. Intermediates are float64;
+    // exact-sum quantization applies once at the final scale below.
+    std::vector<double> x;
+    if (scale == 4) {
+      auto p = vice::reconstruct_progressive(lr, w, h, 4, VICE_ITERS);
+      for (const auto& st : p.stages) worst = std::max(worst, st.residual_vs_y);
+      x = std::move(p.final);
+    } else {
+      auto r = vice::reconstruct_ibp(lr, w, h, scale, VICE_ITERS);
+      if (r.residuals.back() > worst) worst = r.residuals.back();
+      x = std::move(r.x);
+    }
     for (int by = 0; by < h; by++)
       for (int bx = 0; bx < w; bx++) {
         for (int dy = 0; dy < scale; dy++)
           for (int dx = 0; dx < scale; dx++)
-            blk[(size_t)dy * scale + dx] = r.x[(size_t)(by * scale + dy) * ow + bx * scale + dx];
+            blk[(size_t)dy * scale + dx] = x[(size_t)(by * scale + dy) * ow + bx * scale + dx];
         quantize_exact(blk.data(), scale, (double)(scale * scale) * lr[(size_t)by * w + bx], qblk.data());
         for (int dy = 0; dy < scale; dy++)
           for (int dx = 0; dx < scale; dx++)

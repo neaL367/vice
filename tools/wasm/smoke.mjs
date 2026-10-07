@@ -90,4 +90,38 @@ free(pout);
   free(p8);
   free(q8);
 }
+
+// Scale-4 now stages 2→4 internally (Stage-4 adoption): 4x4 RGB → 16x16.
+{
+  const W4 = 4, H4 = 4, S4 = 4;
+  const in4 = new Uint8Array(W4 * H4 * 3);
+  for (let y = 0; y < H4; y++)
+    for (let x = 0; x < W4; x++) {
+      const v = x < 2 ? 0 : 255;
+      in4.set([v, v, v], (y * W4 + x) * 3);
+    }
+  const p4 = malloc(in4.length);
+  HEAPU8.set(in4, p4);
+  const o4len = W4 * S4 * H4 * S4 * 3;
+  const q4 = malloc(o4len);
+  const rc4 = ccall("vice_upscale", "number", [], [p4, W4, H4, 3, S4, q4]);
+  if (rc4 !== 0) throw new Error("upscale 4x failed: " + rc4);
+  const out4 = HEAPU8.slice(q4, q4 + o4len);
+  const r4 = core._vice_last_residual();
+  console.log("staged-4x residual=" + r4);
+  if (!(r4 < 1e-5)) throw new Error("staged-4x residual gate failed");
+  for (let by = 0; by < H4; by++)
+    for (let bx = 0; bx < W4; bx++) {
+      const src = in4[(by * W4 + bx) * 3];
+      for (let c = 0; c < 3; c++) {
+        let sum = 0;
+        for (let dy = 0; dy < S4; dy++)
+          for (let dx = 0; dx < S4; dx++) sum += out4[((by * S4 + dy) * W4 * S4 + bx * S4 + dx) * 3 + c];
+        if (sum !== S4 * S4 * src) throw new Error(`4x block sum violation at ${bx},${by} ch${c}`);
+      }
+    }
+  console.log("staged 4x block sums exact ok");
+  free(p4);
+  free(q4);
+}
 console.log("WASM SMOKE PASS");

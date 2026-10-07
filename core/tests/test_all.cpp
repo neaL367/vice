@@ -155,6 +155,22 @@ int main() {
     CHECK(vice_upscale_progressive(in.data(), 8, 8, 3, 5, out.data()) == -1);
   }
 
+  // Stage-4 adoption: vice_upscale at scale 4 stages 2→4 internally.
+  // Constant input stays constant; block sums stay exact; residual gated.
+  {
+    std::vector<unsigned char> in(8 * 8 * 3, 100);
+    std::vector<unsigned char> out(32 * 32 * 3, 0);
+    CHECK(vice_upscale(in.data(), 8, 8, 3, 4, out.data()) == 0);
+    CHECK(vice_last_residual() < 1e-5);
+    long sum = 0;
+    for (unsigned char v : out) sum += v;
+    CHECK(sum == 32L * 32 * 3 * 100);
+    auto p = vice::reconstruct_progressive(std::vector<double>(64, 100.0), 8, 8, 4, 4);
+    CHECK(p.stages.size() == 2);
+    CHECK(p.stages[0].scale == 2 && p.stages[1].scale == 4);
+    for (const auto& st : p.stages) CHECK(st.residual_vs_y < 1e-5);
+  }
+
   std::printf(failures == 0 ? "ALL PASS\n" : "FAILURES=%d\n", failures);
   return failures == 0 ? 0 : 1;
 }

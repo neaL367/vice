@@ -21,7 +21,8 @@ unsigned vice_abi_version(void);
 
 /* Upscale w×h×ch bytes (ch = 1, 3, or 4) by scale (2, 3, 4) into out
  * (caller allocates w*scale*h*scale*ch bytes). Returns 0 on success,
- * -1 on bad arguments. Output is rounded to bytes (product path). */
+ * -1 on bad arguments. Output is rounded to bytes (product path).
+ * Scale 4 runs hierarchical 2→4 staging internally (Stage-4 adoption). */
 int vice_upscale(const unsigned char* in, int w, int h, int ch, int scale, unsigned char* out);
 
 /* Hierarchical progressive upscale by scale (2, 4, 8): float64 staging
