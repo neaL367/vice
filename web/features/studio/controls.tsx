@@ -55,6 +55,9 @@ export function Controls({
       <p className="hidden text-[13px] text-stone-500 tabular-nums md:block">
         {inDims} <span className="text-stone-700">→</span> {outDims}
       </p>
+      {!canUse8 && (
+        <p className="text-[12px] text-stone-500">8× needs an input ≤512px on the long side</p>
+      )}
       <div className="h-6 w-px bg-white/10" aria-hidden="true" />
       <button
         onClick={onUpscale}

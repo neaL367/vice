@@ -115,6 +115,13 @@ function ActiveWorkspace({
     setSplit,
     centerComparison,
   } = useView(input, result, working);
+  // First-run coachmark: ActiveWorkspace remounts per image (keyed above),
+  // so the hint returns for each new upload and retires on first touch.
+  const [touched, setTouched] = useState(false);
+  const split = (f: number) => {
+    setTouched(true);
+    setSplit(f);
+  };
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -135,7 +142,7 @@ function ActiveWorkspace({
           onWheel={onWheel}
           onDoubleClick={onDoubleClick}
           onKeyDown={onKeyDown}
-          setSplit={setSplit}
+          setSplit={split}
         />
         {/* Chrome: viewport-anchored siblings of the measured box. */}
         <div
@@ -168,9 +175,12 @@ function ActiveWorkspace({
               )}
             </div>
             {job.kind === "done" && (
-              <div className="font-mono text-[11px] text-white/40 tabular-nums">
-                Ready · {job.output.w}×{job.output.h} · {job.ms.toFixed(0)} ms ·{" "}
-                {job.residual.toExponential(1)}
+              <div
+                className="font-mono text-[11px] text-white/40 tabular-nums"
+                title={`forward residual ${job.residual.toExponential(1)}`}
+              >
+                Ready · {job.output.w}×{job.output.h} · {job.scale}× ·{" "}
+                {(job.ms / 1000).toFixed(1)}s
               </div>
             )}
           </div>
@@ -217,6 +227,14 @@ function ActiveWorkspace({
             +
           </button>
         </div>
+        {result && !touched && !working && (
+          <div
+            className="pointer-events-none absolute z-10 -translate-x-1/2 rounded-full bg-white px-3 py-1 text-[12px] font-medium whitespace-nowrap text-stone-900 shadow-lg"
+            style={{ left: `${dividerX}px`, top: `${rect.y + 8}px` }}
+          >
+            Drag to compare
+          </div>
+        )}
         {job.kind === "error" && (
           <p
             role="alert"

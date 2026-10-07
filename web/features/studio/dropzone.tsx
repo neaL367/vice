@@ -100,10 +100,40 @@ export function Dropzone({
             ? "Decoding pixels…"
             : "Drop an image anywhere"}
       </p>
+      {/* The whole flow in one glance: drop → enlarge → compare. */}
+      <ol className="flex items-center gap-2 text-[12px] text-stone-500" aria-label="How it works">
+        <li>
+          <span className="mr-1.5 inline-flex h-5 w-5 items-center justify-center rounded-full bg-white/5 font-mono text-[11px] text-stone-300">
+            1
+          </span>
+          Drop an image
+        </li>
+        <li aria-hidden="true" className="text-stone-700">
+          →
+        </li>
+        <li>
+          <span className="mr-1.5 inline-flex h-5 w-5 items-center justify-center rounded-full bg-white/5 font-mono text-[11px] text-stone-300">
+            2
+          </span>
+          Pick 2×–8×
+        </li>
+        <li aria-hidden="true" className="text-stone-700">
+          →
+        </li>
+        <li>
+          <span className="mr-1.5 inline-flex h-5 w-5 items-center justify-center rounded-full bg-white/5 font-mono text-[11px] text-stone-300">
+            3
+          </span>
+          Drag to compare
+        </li>
+      </ol>
       <p className="text-[12px] tracking-widest text-stone-600">
-        PNG · JPEG · WEBP · AVIF · FITTED TO 2048PX
+        PNG · JPEG · WEBP · AVIF
       </p>
-      <p className="text-[11px] text-stone-700">On-device · No uploads</p>
+      <p className="max-w-sm text-[12px] leading-relaxed text-stone-500">
+        On-device, no uploads, no AI — the same math every time. Images over
+        2048px are fitted down first.
+      </p>
       {error && (
         <p role="alert" className="text-[14px] text-[#e07856]">
           {error}

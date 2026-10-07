@@ -457,3 +457,27 @@ test("works offline after first load", async ({ page, context }) => {
   }
   expect(errors).toEqual([]);
 });
+
+// Coachmark: first result invites the drag, then gets out of the way.
+test("divider hint shows until first drag", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  await page.goto("/");
+  await expect(page.getByText("Upscale your image")).toBeVisible();
+  const photo = path.resolve(__dirname, "../../tools/eval/data/photos/kodim23.png");
+  await page.locator('input[type="file"]').first().setInputFiles(photo);
+  await page.getByRole("button", { name: "Upscale" }).click();
+  await expect(page.getByText("Ready", { exact: false })).toBeVisible({ timeout: 90000 });
+
+  const hint = page.getByText("Drag to compare", { exact: true });
+  await expect(hint).toBeVisible();
+  const grip = page.locator('[aria-hidden="true"] > div:has-text("⟷")').first();
+  const box = await grip.boundingBox();
+  if (!box) throw new Error("grip not found");
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x - 120, box.y + box.height / 2, { steps: 5 });
+  await page.mouse.up();
+  await expect(hint).toBeHidden();
+  expect(errors).toEqual([]);
+});
