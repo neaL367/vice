@@ -13,6 +13,10 @@ std::vector<double> simulate_forward(const std::vector<double>& hr, int w, int h
 double forward_residual(const std::vector<double>& hr, int w, int h, const std::vector<double>& lr,
                         int lw, int lh, int s);
 
+// Compute residual rlr = lr - DHx directly into destination vector without intermediate allocations.
+void compute_residual_lr(const std::vector<double>& hr, int w, int h, const std::vector<double>& lr,
+                         int lw, int lh, int s, std::vector<double>& rlr);
+
 // Exact box projection Π: every s×s block mean equals the LR sample.
 void project_box_inplace(std::vector<double>& hr, int w, int h,
                          const std::vector<double>& lr, int lw, int lh, int s);

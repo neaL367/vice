@@ -22,6 +22,40 @@ std::vector<double> simulate_forward(const std::vector<double>& hr, int w, int h
   return box_downsample(hr, w, h, s);  // H = identity in product v1
 }
 
+void compute_residual_lr(const std::vector<double>& hr, int w, int h, const std::vector<double>& lr,
+                         int lw, int lh, int s, std::vector<double>& rlr) {
+  (void)h;
+  if (rlr.size() != (size_t)lw * lh) rlr.resize((size_t)lw * lh);
+  if (s == 2) {
+    constexpr double inv_s2 = 0.25;
+    for (int y = 0; y < lh; y++) {
+      const size_t row0 = (size_t)(y * 2) * w;
+      const size_t row1 = row0 + w;
+      const size_t lr_row = (size_t)y * lw;
+      for (int x = 0; x < lw; x++) {
+        const size_t x2 = (size_t)x * 2;
+        const double acc = hr[row0 + x2] + hr[row0 + x2 + 1] +
+                           hr[row1 + x2] + hr[row1 + x2 + 1];
+        rlr[lr_row + x] = lr[lr_row + x] - acc * inv_s2;
+      }
+    }
+    return;
+  }
+
+  const double inv_s2 = 1.0 / static_cast<double>(s * s);
+  for (int y = 0; y < lh; y++) {
+    for (int x = 0; x < lw; x++) {
+      double acc = 0.0;
+      for (int dy = 0; dy < s; dy++) {
+        for (int dx = 0; dx < s; dx++) {
+          acc += hr[(size_t)(y * s + dy) * w + x * s + dx];
+        }
+      }
+      rlr[(size_t)y * lw + x] = lr[(size_t)y * lw + x] - acc * inv_s2;
+    }
+  }
+}
+
 double forward_residual(const std::vector<double>& hr, int w, int h, const std::vector<double>& lr,
                         int lw, int lh, int s) {
   (void)h;

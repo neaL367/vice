@@ -47,6 +47,8 @@ RegMaps regularization_maps(const std::vector<double>& lr, int lw, int lh, int s
 
 // Explicit gradient step on R_freq + R_edge; returned correction is
 // SUBTRACTED from (x + correction) before clamp+project.
+void regularization_step(const std::vector<double>& x, int w, int h, const RegMaps& m,
+                         double eta1, double eta2, std::vector<double>& out);
 std::vector<double> regularization_step(const std::vector<double>& x, int w, int h, const RegMaps& m,
                                         double eta1, double eta2);
 
@@ -61,6 +63,9 @@ struct DeblockParams {
   double block_cap = 0.25;
 };
 
+void deblock_correction(const std::vector<double>& x, int w, int h, int s,
+                        double strength, const DeblockParams& p,
+                        int phase_x, int phase_y, std::vector<double>& out);
 std::vector<double> deblock_correction(const std::vector<double>& x, int w, int h, int s,
                                        double strength, const DeblockParams& p,
                                        int phase_x = 0, int phase_y = 0);

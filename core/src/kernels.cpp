@@ -63,20 +63,18 @@ double kernel_radius(Kernel k) {
   return 1.0;
 }
 
-std::vector<double> upsample(const std::vector<double>& src, int w, int h, int s, Kernel k) {
+UpsamplePlan make_upsample_plan(int w, int h, int s, Kernel k) {
   const double r = kernel_radius(k);
   const int ow = w * s, oh = h * s;
+  UpsamplePlan plan;
+  plan.w = w;
+  plan.h = h;
+  plan.s = s;
+  plan.k = k;
+  plan.ow = ow;
+  plan.oh = oh;
 
-  struct FilterTap {
-    int idx;
-    double wt;
-  };
-  struct FilterSpan {
-    int count;
-    FilterTap taps[16];
-  };
-
-  std::vector<FilterSpan> h_spans(ow);
+  plan.h_spans.resize(ow);
   for (int ox = 0; ox < ow; ox++) {
     const double c = (ox + 0.5) / s - 0.5;
     double wsum = 0.0;
@@ -86,7 +84,7 @@ std::vector<double> upsample(const std::vector<double>& src, int w, int h, int s
       const double wt = kernel_weight(k, c - ix);
       if (wt != 0.0) wsum += wt;
     }
-    auto& span = h_spans[ox];
+    auto& span = plan.h_spans[ox];
     span.count = 0;
     if (wsum != 0.0) {
       for (int ix = min_ix; ix <= max_ix; ix++) {
@@ -97,21 +95,7 @@ std::vector<double> upsample(const std::vector<double>& src, int w, int h, int s
     }
   }
 
-  std::vector<double> horiz(static_cast<size_t>(ow) * h, 0.0);
-  for (int y = 0; y < h; y++) {
-    const size_t row_in = (size_t)y * w;
-    const size_t row_out = (size_t)y * ow;
-    for (int ox = 0; ox < ow; ox++) {
-      const auto& span = h_spans[ox];
-      double acc = 0.0;
-      for (int t = 0; t < span.count; t++) {
-        acc += src[row_in + span.taps[t].idx] * span.taps[t].wt;
-      }
-      horiz[row_out + ox] = acc;
-    }
-  }
-
-  std::vector<FilterSpan> v_spans(oh);
+  plan.v_spans.resize(oh);
   for (int oy = 0; oy < oh; oy++) {
     const double c = (oy + 0.5) / s - 0.5;
     double wsum = 0.0;
@@ -121,7 +105,7 @@ std::vector<double> upsample(const std::vector<double>& src, int w, int h, int s
       const double wt = kernel_weight(k, c - iy);
       if (wt != 0.0) wsum += wt;
     }
-    auto& span = v_spans[oy];
+    auto& span = plan.v_spans[oy];
     span.count = 0;
     if (wsum != 0.0) {
       for (int iy = min_iy; iy <= max_iy; iy++) {
@@ -131,19 +115,47 @@ std::vector<double> upsample(const std::vector<double>& src, int w, int h, int s
       }
     }
   }
+  return plan;
+}
 
-  std::vector<double> out(static_cast<size_t>(ow) * oh, 0.0);
+void upsample_apply(const UpsamplePlan& plan, const std::vector<double>& src,
+                    std::vector<double>& out, std::vector<double>& horiz_buf) {
+  const int w = plan.w, h = plan.h;
+  const int ow = plan.ow, oh = plan.oh;
+  if (horiz_buf.size() < (size_t)ow * h) horiz_buf.resize((size_t)ow * h);
+  if (out.size() < (size_t)ow * oh) out.resize((size_t)ow * oh);
+
+  for (int y = 0; y < h; y++) {
+    const size_t row_in = (size_t)y * w;
+    const size_t row_out = (size_t)y * ow;
+    for (int ox = 0; ox < ow; ox++) {
+      const auto& span = plan.h_spans[ox];
+      double acc = 0.0;
+      for (int t = 0; t < span.count; t++) {
+        acc += src[row_in + span.taps[t].idx] * span.taps[t].wt;
+      }
+      horiz_buf[row_out + ox] = acc;
+    }
+  }
+
   for (int oy = 0; oy < oh; oy++) {
-    const auto& span = v_spans[oy];
+    const auto& span = plan.v_spans[oy];
     const size_t row_out = (size_t)oy * ow;
     for (int x = 0; x < ow; x++) {
       double acc = 0.0;
       for (int t = 0; t < span.count; t++) {
-        acc += horiz[(size_t)span.taps[t].idx * ow + x] * span.taps[t].wt;
+        acc += horiz_buf[(size_t)span.taps[t].idx * ow + x] * span.taps[t].wt;
       }
       out[row_out + x] = acc;
     }
   }
+}
+
+std::vector<double> upsample(const std::vector<double>& src, int w, int h, int s, Kernel k) {
+  UpsamplePlan plan = make_upsample_plan(w, h, s, k);
+  std::vector<double> out(static_cast<size_t>(plan.ow) * plan.oh);
+  std::vector<double> horiz(static_cast<size_t>(plan.ow) * h);
+  upsample_apply(plan, src, out, horiz);
   return out;
 }
 

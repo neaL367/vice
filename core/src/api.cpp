@@ -74,6 +74,31 @@ namespace {
 // Returns the worst stage residual.
 double upscale_channel(const std::vector<double>& lr, int w, int h, int scale,
                        unsigned char* out, int ow, int ch, int c, const double* clamp_lo_hi) {
+  // Constant-channel fast path: If all pixels in the channel are identical (such as
+  // alpha=255 in 4-channel images, or uniform background tiles), the mathematical
+  // IBP reconstruction is an exact constant field with residual 0.0, and exact block sums
+  // (s^2 * y) are identically preserved with 0 quantization error.
+  const size_t n_lr = static_cast<size_t>(w) * h;
+  const double v0 = lr[0];
+  bool is_constant = true;
+  for (size_t i = 1; i < n_lr; ++i) {
+    if (lr[i] != v0) {
+      is_constant = false;
+      break;
+    }
+  }
+  if (is_constant) {
+    const unsigned char b0 = static_cast<unsigned char>(std::round(std::max(0.0, std::min(255.0, v0))));
+    const int oh = h * scale;
+    for (int by = 0; by < oh; ++by) {
+      const size_t row_offset = static_cast<size_t>(by) * ow * ch + c;
+      for (int bx = 0; bx < ow; ++bx) {
+        out[row_offset + static_cast<size_t>(bx) * ch] = b0;
+      }
+    }
+    return 0.0;
+  }
+
   double worst = 0.0;
   std::vector<double> blk(static_cast<size_t>(scale) * scale);
   std::vector<unsigned char> qblk(static_cast<size_t>(scale) * scale);
@@ -156,6 +181,27 @@ int vice_upscale_progressive(const unsigned char* in, int w, int h, int ch, int 
   std::vector<unsigned char> qblk(static_cast<size_t>(scale) * scale);
   for (int c = 0; c < ch; c++) {
     for (int i = 0; i < w * h; i++) lr[(size_t)i] = in[(size_t)i * ch + c];
+    const size_t n_lr = static_cast<size_t>(w) * h;
+    const double v0 = lr[0];
+    bool is_constant = true;
+    for (size_t i = 1; i < n_lr; ++i) {
+      if (lr[i] != v0) {
+        is_constant = false;
+        break;
+      }
+    }
+    if (is_constant) {
+      const unsigned char b0 = static_cast<unsigned char>(std::round(std::max(0.0, std::min(255.0, v0))));
+      const int oh = h * scale;
+      for (int by = 0; by < oh; ++by) {
+        const size_t row_offset = static_cast<size_t>(by) * ow * ch + c;
+        for (int bx = 0; bx < ow; ++bx) {
+          out[row_offset + static_cast<size_t>(bx) * ch] = b0;
+        }
+      }
+      continue;
+    }
+
     const vice::DeblockParams deblock{0.1, 0.5};
     auto p = vice::reconstruct_progressive(lr, w, h, scale, VICE_ITERS, nullptr, &deblock);
     for (const auto& st : p.stages) worst = std::max(worst, st.residual_vs_y);

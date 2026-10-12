@@ -35,8 +35,12 @@ box projection) → integer-exact block quantization.
   suppresses blocking artifacts while preserving 100% bit-identity on clean inputs.
 - **Burst fusion.** Multi-frame sub-pixel registration with confidence gating,
   reconstructing a high-resolution frame from up to 8 low-light/burst captures.
+- **High-throughput 4K pipeline.** Zero-allocation IBP inner loop with precomputed
+  upsample plans, shared bilinear sampling in regularization maps, and an instant
+  mathematical bypass for constant/alpha channels (saving 25% compute on RGBA
+  and 100% on flat tiles).
 - **Parallel multi-worker tiling.** Large inputs split into overlapping halo tiles;
-  tiles are scheduled concurrently across a Web Worker pool scaling to your CPU
+  tiles are scheduled concurrently across a Web Worker pool scaling up to 8 CPU
   cores with real-time per-tile progress. Tiled output is bit-exact versus whole-image.
 - Measured quality: +0.52 dB over the best fixed kernel on Set5 2×, ringing
   down 3–6× on photos, loop ahead of fixed kernels on every Kodak image at

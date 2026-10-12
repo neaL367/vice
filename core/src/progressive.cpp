@@ -25,14 +25,16 @@ ProgressiveResult reconstruct_progressive(const std::vector<double>& y, int lw, 
     }
     StageReport st;
     st.scale = s;
-    st.residual_vs_y = forward_residual(r.x, lw * s, lh * s, y, lw, lh, s);
-    st.x = r.x;
-    out.stages.push_back(std::move(st));
+    st.residual_vs_y = r.residuals.empty() ? forward_residual(r.x, lw * s, lh * s, y, lw, lh, s)
+                                           : r.residuals.back();
+    st.x = std::move(r.x);
     if (s == target_scale) {
-      out.final = out.stages.back().x;
+      out.final = st.x;
+      out.stages.push_back(std::move(st));
       return out;
     }
-    prior = out.stages.back().x;
+    prior = st.x;
+    out.stages.push_back(std::move(st));
     have_prior = true;
   }
 }

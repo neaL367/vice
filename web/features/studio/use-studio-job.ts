@@ -16,7 +16,7 @@ interface WorkerDone {
 
 const POOL_SIZE =
   typeof navigator !== "undefined"
-    ? Math.min(Math.max(1, navigator.hardwareConcurrency || 4), 4)
+    ? Math.min(Math.max(1, navigator.hardwareConcurrency || 4), 8)
     : 4;
 
 function createWorkerPool(): Worker[] {
