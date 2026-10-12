@@ -24,6 +24,8 @@ emcc -O3 -msimd128 -flto -std=c++20 \
   -s EXPORTED_FUNCTIONS='["_vice_abi_version","_vice_upscale","_vice_upscale_progressive","_vice_upscale_ranged","_vice_upscale_burst","_vice_last_residual","_vice_build_info","_malloc","_free"]' \
   -s ALLOW_MEMORY_GROWTH=1 \
   -s INITIAL_MEMORY=67108864 \
+  -s FILESYSTEM=0 \
+  -s ENVIRONMENT=web,worker \
   -s ASSERTIONS=0 \
   -o "$OUT/core.js"
 ls -la "$OUT"
