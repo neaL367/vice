@@ -18,8 +18,18 @@ double clamp_byte(double v) { return v < 0.0 ? 0.0 : v > 255.0 ? 255.0 : v; }
 // (overshoot pixels are the first donors/recipients).
 void quantize_exact(const double* blk, int s, double target, unsigned char* out) {
   const int n = s * s;
-  std::vector<int> vals(n);
-  std::vector<double> frac(n);
+  int stack_vals[64];
+  double stack_frac[64];
+  std::vector<int> heap_vals;
+  std::vector<double> heap_frac;
+  int* vals = stack_vals;
+  double* frac = stack_frac;
+  if (n > 64) {
+    heap_vals.resize(n);
+    heap_frac.resize(n);
+    vals = heap_vals.data();
+    frac = heap_frac.data();
+  }
   long sum = 0;
   for (int i = 0; i < n; i++) {
     double c = clamp_byte(blk[i]);
