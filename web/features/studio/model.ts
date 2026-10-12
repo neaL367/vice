@@ -1,6 +1,7 @@
 // Shared studio model: one job lifecycle, pixels cross once per transition.
 
 export type Scale = 2 | 3 | 4 | 8;
+export type ExportFormat = "png" | "webp" | "jpeg";
 
 export interface StudioImage {
   data: Uint8ClampedArray<ArrayBuffer>;

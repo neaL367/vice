@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Controls } from "./controls";
 import { Dropzone } from "./dropzone";
 import { ImageStage } from "./image-stage";
-import type { Scale, StudioImage } from "./model";
+import { hasAlpha, type ExportFormat, type Scale, type StudioImage } from "./model";
 import { decodeFile, useStudioJob } from "./use-studio-job";
 import { useView } from "./use-view";
 import { fitsEightX } from "../../lib/engine";
@@ -20,6 +20,7 @@ import { fitsEightX } from "../../lib/engine";
 export function Workspace() {
   const { job, openImage, openBurst, reset, upscale, cancel } = useStudioJob();
   const [scale, setScale] = useState<Scale>(2);
+  const [exportFormat, setExportFormat] = useState<ExportFormat>("png");
   // Replace-path failures (dock picker, header picker, drop, paste) must
   // never fail silent — a dead "nothing happens" is worse than an error.
   const [pickError, setPickError] = useState<string | null>(null);
@@ -94,19 +95,36 @@ export function Workspace() {
     const c = document.createElement("canvas");
     c.width = out.w;
     c.height = out.h;
-    c.getContext("2d")!.putImageData(
-      new ImageData(out.data, out.w, out.h),
-      0,
-      0,
+    const ctx = c.getContext("2d")!;
+    if (exportFormat === "jpeg" && hasAlpha(out)) {
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, out.w, out.h);
+      const off = new OffscreenCanvas(out.w, out.h);
+      off.getContext("2d")!.putImageData(new ImageData(out.data, out.w, out.h), 0, 0);
+      ctx.drawImage(off, 0, 0);
+    } else {
+      ctx.putImageData(new ImageData(out.data, out.w, out.h), 0, 0);
+    }
+    const mime =
+      exportFormat === "webp"
+        ? "image/webp"
+        : exportFormat === "jpeg"
+          ? "image/jpeg"
+          : "image/png";
+    const ext = exportFormat === "jpeg" ? "jpg" : exportFormat;
+    const quality = exportFormat === "jpeg" ? 0.92 : exportFormat === "webp" ? 0.95 : undefined;
+    c.toBlob(
+      (b) => {
+        if (!b) return;
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(b);
+        a.download = name.replace(/\.[^.]+$/, "") + `-${s}x.${ext}`;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      },
+      mime,
+      quality,
     );
-    c.toBlob((b) => {
-      if (!b) return;
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(b);
-      a.download = name.replace(/\.[^.]+$/, "") + `-${s}x.png`;
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-    }, "image/png");
   }
 
   if (job.kind === "idle") {
@@ -138,6 +156,8 @@ export function Workspace() {
       job={job}
       scale={scale}
       setScale={setScale}
+      exportFormat={exportFormat}
+      setExportFormat={setExportFormat}
       pickError={pickError}
       onPickFiles={(fs) => {
         if (fs.length > 1) void takeBurst(fs);
@@ -156,6 +176,8 @@ function ActiveWorkspace({
   job,
   scale,
   setScale,
+  exportFormat,
+  setExportFormat,
   pickError,
   onPickFiles,
   onReset,
@@ -167,6 +189,8 @@ function ActiveWorkspace({
   job: Exclude<ReturnType<typeof useStudioJob>["job"], { kind: "idle" }>;
   scale: Scale;
   setScale: (s: Scale) => void;
+  exportFormat: ExportFormat;
+  setExportFormat: (f: ExportFormat) => void;
   pickError: string | null;
   onPickFiles: (fs: File[]) => void;
   onReset: () => void;
@@ -415,6 +439,8 @@ function ActiveWorkspace({
         <Controls
           scale={scale}
           setScale={setScale}
+          exportFormat={exportFormat}
+          setExportFormat={setExportFormat}
           inDims={`${input.w}×${input.h}`}
           outDims={`${input.w * scale}×${input.h * scale}`}
           canUse8={fitsEightX(input.w, input.h)}
