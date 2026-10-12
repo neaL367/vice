@@ -29,26 +29,53 @@ export function ComparisonViewport({
   const alpha = useMemo(() => hasAlpha(input), [input]);
 
   useEffect(() => {
-    const c = inRef.current!;
+    let canceled = false;
+    const c = inRef.current;
+    if (!c) return;
     c.width = input.w;
     c.height = input.h;
-    c.getContext("2d")!.putImageData(
-      new ImageData(input.data, input.w, input.h),
-      0,
-      0,
-    );
+    const ctx = c.getContext("2d");
+    if (!ctx) return;
+    if (typeof createImageBitmap === "function") {
+      void createImageBitmap(new ImageData(input.data, input.w, input.h)).then((bmp) => {
+        if (canceled) {
+          bmp.close();
+          return;
+        }
+        ctx.drawImage(bmp, 0, 0);
+        bmp.close();
+      });
+    } else {
+      ctx.putImageData(new ImageData(input.data, input.w, input.h), 0, 0);
+    }
+    return () => {
+      canceled = true;
+    };
   }, [input]);
 
   useEffect(() => {
     if (!result || !outRef.current) return;
+    let canceled = false;
     const c = outRef.current;
     c.width = result.w;
     c.height = result.h;
-    c.getContext("2d")!.putImageData(
-      new ImageData(result.data, result.w, result.h),
-      0,
-      0,
-    );
+    const ctx = c.getContext("2d");
+    if (!ctx) return;
+    if (typeof createImageBitmap === "function") {
+      void createImageBitmap(new ImageData(result.data, result.w, result.h)).then((bmp) => {
+        if (canceled) {
+          bmp.close();
+          return;
+        }
+        ctx.drawImage(bmp, 0, 0);
+        bmp.close();
+      });
+    } else {
+      ctx.putImageData(new ImageData(result.data, result.w, result.h), 0, 0);
+    }
+    return () => {
+      canceled = true;
+    };
   }, [result]);
 
   return (

@@ -37,7 +37,11 @@ std::vector<double> gradient_magnitude(const std::vector<double>& src, int w, in
 ShiftEst estimate_shift(const std::vector<double>& ref, const std::vector<double>& mov, int w, int h) {
   const auto R = gradient_magnitude(ref, w, h);
   const auto M = gradient_magnitude(mov, w, h);
-  const auto at = [&](double dx, double dy) { return ssd_field(R, shift_image(M, w, h, dx, dy)); };
+  std::vector<double> shifted(static_cast<size_t>(w) * h);
+  const auto at = [&](double dx, double dy) {
+    shift_image(M, w, h, dx, dy, shifted);
+    return ssd_field(R, shifted);
+  };
   double bx = 0.0, by = 0.0, best = std::numeric_limits<double>::infinity();
   for (double dy = -1.0; dy <= 1.001; dy += 0.5)
     for (double dx = -1.0; dx <= 1.001; dx += 0.5) {

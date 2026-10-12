@@ -15,6 +15,7 @@ std::vector<double> upsample(const std::vector<double>& src, int w, int h, int s
 // Bilinear subpixel translation with CLAMPED edges (matches research/ref
 // burst.ts shiftImage exactly, including edge policy — required for TS
 // cross-validation of the burst path).
+void shift_image(const std::vector<double>& src, int w, int h, double dx, double dy, std::vector<double>& out);
 std::vector<double> shift_image(const std::vector<double>& src, int w, int h, double dx, double dy);
 
 }  // namespace vice

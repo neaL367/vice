@@ -97,8 +97,9 @@ std::vector<double> upsample(const std::vector<double>& src, int w, int h, int s
   return out;
 }
 
-std::vector<double> shift_image(const std::vector<double>& src, int w, int h, double dx, double dy) {
-  std::vector<double> out(static_cast<size_t>(w) * h, 0.0);
+void shift_image(const std::vector<double>& src, int w, int h, double dx, double dy,
+                 std::vector<double>& out) {
+  if (out.size() != static_cast<size_t>(w) * h) out.resize(static_cast<size_t>(w) * h);
   for (int y = 0; y < h; y++) {
     for (int x = 0; x < w; x++) {
       const double sx = std::min((double)w - 1.0, std::max(0.0, (double)x - dx));
@@ -115,6 +116,11 @@ std::vector<double> shift_image(const std::vector<double>& src, int w, int h, do
                                src[(size_t)y1 * w + x1] * fx * fy;
     }
   }
+}
+
+std::vector<double> shift_image(const std::vector<double>& src, int w, int h, double dx, double dy) {
+  std::vector<double> out(static_cast<size_t>(w) * h, 0.0);
+  shift_image(src, w, h, dx, dy, out);
   return out;
 }
 
