@@ -61,6 +61,35 @@ export function Workspace() {
     }
   }
 
+  const takeRef = useRef(take);
+  const takeBurstRef = useRef(takeBurst);
+  useEffect(() => {
+    takeRef.current = take;
+    takeBurstRef.current = takeBurst;
+  });
+
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      const files: File[] = [];
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.type.startsWith("image/")) {
+          const f = item.getAsFile();
+          if (f) files.push(f);
+        }
+      }
+      if (files.length > 1) {
+        void takeBurstRef.current(files);
+      } else if (files.length === 1) {
+        void takeRef.current(files[0]);
+      }
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, []);
+
   function download(out: StudioImage, name: string, s: number) {
     const c = document.createElement("canvas");
     c.width = out.w;

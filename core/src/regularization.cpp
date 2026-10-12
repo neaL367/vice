@@ -75,18 +75,38 @@ std::vector<double> deblock_correction(const std::vector<double>& x, int w, int 
   const double k = p.eta3 * strength;
   const long shift_x = (static_cast<long>(phase_x) * s) % period;
   const long shift_y = (static_cast<long>(phase_y) * s) % period;
+
+  std::vector<uint8_t> is_rem_x(w, 0), is_rem_xp1(w, 0);
+  for (int xx = 0; xx < w; xx++) {
+    const long rem_x = ((xx - shift_x) % period + period) % period;
+    const long rem_xp1 = ((xx + 1 - shift_x) % period + period) % period;
+    if (rem_x == 0 && xx > 0) is_rem_x[xx] = 1;
+    if (rem_xp1 == 0 && xx < w - 1) is_rem_xp1[xx] = 1;
+  }
+
+  std::vector<uint8_t> is_rem_y(h, 0), is_rem_yp1(h, 0);
   for (int y = 0; y < h; y++) {
     const long rem_y = ((y - shift_y) % period + period) % period;
     const long rem_yp1 = ((y + 1 - shift_y) % period + period) % period;
+    if (rem_y == 0 && y > 0) is_rem_y[y] = 1;
+    if (rem_yp1 == 0 && y < h - 1) is_rem_yp1[y] = 1;
+  }
+
+  for (int y = 0; y < h; y++) {
+    const uint8_t ry0 = is_rem_y[y];
+    const uint8_t ry1 = is_rem_yp1[y];
+    const size_t row_idx = (size_t)y * w;
     for (int xx = 0; xx < w; xx++) {
-      const size_t i = (size_t)y * w + xx;
+      const uint8_t rx0 = is_rem_x[xx];
+      const uint8_t rx1 = is_rem_xp1[xx];
+      if (!rx0 && !rx1 && !ry0 && !ry1) continue;
+
+      const size_t i = row_idx + xx;
       double c = 0.0;
-      const long rem_x = ((xx - shift_x) % period + period) % period;
-      const long rem_xp1 = ((xx + 1 - shift_x) % period + period) % period;
-      if (rem_x == 0 && xx > 0) c += x[i - 1] - x[i];
-      if (rem_xp1 == 0 && xx < w - 1) c += x[i + 1] - x[i];
-      if (rem_y == 0 && y > 0) c += x[i - (size_t)w] - x[i];
-      if (rem_yp1 == 0 && y < h - 1) c += x[i + (size_t)w] - x[i];
+      if (rx0) c += x[i - 1] - x[i];
+      if (rx1) c += x[i + 1] - x[i];
+      if (ry0) c += x[i - (size_t)w] - x[i];
+      if (ry1) c += x[i + (size_t)w] - x[i];
       double v = k * c;
       if (v < -p.block_cap)
         v = -p.block_cap;
