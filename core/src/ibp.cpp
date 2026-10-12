@@ -45,22 +45,22 @@ IbpResult reconstruct_ibp(const std::vector<double>& lr, int lw, int lh, int s, 
     std::vector<double> corrected(x.size());
     for (size_t i = 0; i < corrected.size(); i++) corrected[i] = x[i] + corr[i];
     auto reg = regularization_step(corrected, lw * s, lh * s, maps, REG_ETA1_DEFAULT, REG_ETA2_DEFAULT);
-    std::vector<double> nd(x.size());
     if (use_deblock) {
       auto dbl =
           deblock_correction(corrected, lw * s, lh * s, s, art.jpeg_strength, *deblock,
                              art.phase_x, art.phase_y);
-      for (size_t i = 0; i < nd.size(); i++) {
+      for (size_t i = 0; i < corrected.size(); i++) {
         double v = corrected[i] - reg[i] + dbl[i];
-        nd[i] = v < lo ? lo : v > hi ? hi : v;
+        corrected[i] = v < lo ? lo : v > hi ? hi : v;
       }
     } else {
-      for (size_t i = 0; i < nd.size(); i++) {
+      for (size_t i = 0; i < corrected.size(); i++) {
         double v = corrected[i] - reg[i];
-        nd[i] = v < lo ? lo : v > hi ? hi : v;
+        corrected[i] = v < lo ? lo : v > hi ? hi : v;
       }
     }
-    x = project_box(nd, lw * s, lh * s, lr, lw, lh, s);
+    project_box_inplace(corrected, lw * s, lh * s, lr, lw, lh, s);
+    x = std::move(corrected);
     r.residuals.push_back(forward_residual(x, lw * s, lh * s, lr, lw, lh, s));
   }
   r.x = x;
@@ -79,12 +79,12 @@ void ibp_pass(const std::vector<double>& lr, int lw, int lh, int s, double lo, d
   for (size_t i = 0; i < corrected.size(); i++) corrected[i] = x[i] + corr[i];
   auto reg = regularization_step(corrected, lw * s, lh * s, maps, REG_ETA1_DEFAULT,
                                  REG_ETA2_DEFAULT);
-  std::vector<double> nd(x.size());
-  for (size_t i = 0; i < nd.size(); i++) {
+  for (size_t i = 0; i < corrected.size(); i++) {
     double v = corrected[i] - reg[i];
-    nd[i] = v < lo ? lo : v > hi ? hi : v;
+    corrected[i] = v < lo ? lo : v > hi ? hi : v;
   }
-  x = project_box(nd, lw * s, lh * s, lr, lw, lh, s);
+  project_box_inplace(corrected, lw * s, lh * s, lr, lw, lh, s);
+  x = std::move(corrected);
 }
 }  // namespace
 

@@ -24,30 +24,56 @@ std::vector<double> simulate_forward(const std::vector<double>& hr, int w, int h
 
 double forward_residual(const std::vector<double>& hr, int w, int h, const std::vector<double>& lr,
                         int lw, int lh, int s) {
-  auto pred = simulate_forward(hr, w, h, s);
+  (void)h;
+  const double inv_s2 = 1.0 / static_cast<double>(s * s);
   double se = 0.0;
-  for (size_t i = 0; i < pred.size(); i++) {
-    const double d = pred[i] - lr[i];
-    se += d * d;
+  for (int y = 0; y < lh; y++) {
+    for (int x = 0; x < lw; x++) {
+      double acc = 0.0;
+      for (int dy = 0; dy < s; dy++) {
+        for (int dx = 0; dx < s; dx++) {
+          acc += hr[(size_t)(y * s + dy) * w + x * s + dx];
+        }
+      }
+      const double d = acc * inv_s2 - lr[(size_t)y * lw + x];
+      se += d * d;
+    }
   }
-  (void)lw;
-  (void)lh;
-  return std::sqrt(se / pred.size());
+  return std::sqrt(se / (static_cast<size_t>(lw) * lh));
+}
+
+void project_box_inplace(std::vector<double>& hr, int w, int h,
+                         const std::vector<double>& lr, int lw, int lh, int s) {
+  (void)h;
+  const double inv_s2 = 1.0 / static_cast<double>(s * s);
+  for (int y = 0; y < lh; y++) {
+    for (int x = 0; x < lw; x++) {
+      double acc = 0.0;
+      for (int dy = 0; dy < s; dy++) {
+        for (int dx = 0; dx < s; dx++) {
+          acc += hr[(size_t)(y * s + dy) * w + x * s + dx];
+        }
+      }
+      const double corr = lr[(size_t)y * lw + x] - acc * inv_s2;
+      for (int dy = 0; dy < s; dy++) {
+        for (int dx = 0; dx < s; dx++) {
+          hr[(size_t)(y * s + dy) * w + x * s + dx] += corr;
+        }
+      }
+    }
+  }
+}
+
+std::vector<double> project_box(std::vector<double>&& hr, int w, int h,
+                                const std::vector<double>& lr, int lw, int lh, int s) {
+  project_box_inplace(hr, w, h, lr, lw, lh, s);
+  return std::move(hr);
 }
 
 std::vector<double> project_box(const std::vector<double>& hr, int w, int h,
                                 const std::vector<double>& lr, int lw, int lh, int s) {
   std::vector<double> out = hr;
-  (void)h;  // rows covered by lh*s; kept for symmetric call shape
-  for (int y = 0; y < lh; y++)
-    for (int x = 0; x < lw; x++) {
-      double acc = 0.0;
-      for (int dy = 0; dy < s; dy++)
-        for (int dx = 0; dx < s; dx++) acc += out[(size_t)(y * s + dy) * w + x * s + dx];
-      const double corr = lr[(size_t)y * lw + x] - acc / (s * s);
-      for (int dy = 0; dy < s; dy++)
-        for (int dx = 0; dx < s; dx++) out[(size_t)(y * s + dy) * w + x * s + dx] += corr;
-    }
+  project_box_inplace(out, w, h, lr, lw, lh, s);
   return out;
 }
 

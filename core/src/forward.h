@@ -14,6 +14,10 @@ double forward_residual(const std::vector<double>& hr, int w, int h, const std::
                         int lw, int lh, int s);
 
 // Exact box projection Π: every s×s block mean equals the LR sample.
+void project_box_inplace(std::vector<double>& hr, int w, int h,
+                         const std::vector<double>& lr, int lw, int lh, int s);
+std::vector<double> project_box(std::vector<double>&& hr, int w, int h,
+                                const std::vector<double>& lr, int lw, int lh, int s);
 std::vector<double> project_box(const std::vector<double>& hr, int w, int h,
                                 const std::vector<double>& lr, int lw, int lh, int s);
 

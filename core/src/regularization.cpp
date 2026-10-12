@@ -38,18 +38,30 @@ RegMaps regularization_maps(const std::vector<double>& lr, int lw, int lh, int s
 
 std::vector<double> regularization_step(const std::vector<double>& x, int w, int h, const RegMaps& m,
                                         double eta1, double eta2) {
-  auto lap = laplacian(x, w, h);
-  std::vector<double> weighted(lap.size());
-  for (size_t i = 0; i < weighted.size(); i++) weighted[i] = m.wFreq[i] * lap[i];
-  auto lap2 = laplacian(weighted, w, h);
   std::vector<double> out(x.size(), 0.0);
-  for (size_t i = 0; i < out.size(); i++) {
-    double over = 0.0;
-    if (x[i] > m.hiHR[i])
-      over = x[i] - m.hiHR[i];
-    else if (x[i] < m.loHR[i])
-      over = x[i] - m.loHR[i];
-    out[i] = eta1 * 2 * lap2[i] + eta2 * 2 * m.vEdge[i] * over;
+  if (eta1 != 0.0) {
+    auto lap = laplacian(x, w, h);
+    std::vector<double> weighted(lap.size());
+    for (size_t i = 0; i < weighted.size(); i++) weighted[i] = m.wFreq[i] * lap[i];
+    auto lap2 = laplacian(weighted, w, h);
+    for (size_t i = 0; i < out.size(); i++) {
+      double over = 0.0;
+      if (x[i] > m.hiHR[i])
+        over = x[i] - m.hiHR[i];
+      else if (x[i] < m.loHR[i])
+        over = x[i] - m.loHR[i];
+      out[i] = eta1 * 2 * lap2[i] + eta2 * 2 * m.vEdge[i] * over;
+    }
+  } else if (eta2 != 0.0) {
+    const double two_eta2 = eta2 * 2.0;
+    for (size_t i = 0; i < out.size(); i++) {
+      double over = 0.0;
+      if (x[i] > m.hiHR[i])
+        over = x[i] - m.hiHR[i];
+      else if (x[i] < m.loHR[i])
+        over = x[i] - m.loHR[i];
+      out[i] = two_eta2 * m.vEdge[i] * over;
+    }
   }
   return out;
 }
