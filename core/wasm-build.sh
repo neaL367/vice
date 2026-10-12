@@ -6,7 +6,7 @@ set -e
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$ROOT/web/public/wasm"
 mkdir -p "$OUT"
-emcc -O3 -std=c++20 \
+emcc -O3 -msimd128 -flto -std=c++20 \
   -I "$ROOT/core/include" \
   "$ROOT/core/src/kernels.cpp" \
   "$ROOT/core/src/forward.cpp" \

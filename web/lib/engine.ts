@@ -52,6 +52,19 @@ export function needsTiling(w: number, h: number, scale: number): boolean {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Core = any;
 
+async function yieldTurn(): Promise<void> {
+  const sched = (globalThis as unknown as { scheduler?: { yield?: () => Promise<void> } }).scheduler;
+  if (typeof sched?.yield === "function") {
+    await sched.yield();
+  } else {
+    await new Promise<void>((resolve) => {
+      const ch = new MessageChannel();
+      ch.port1.onmessage = () => resolve();
+      ch.port2.postMessage(null);
+    });
+  }
+}
+
 async function upscaleTiled(
   c: Core,
   input: Uint8ClampedArray,
@@ -88,54 +101,68 @@ async function upscaleTiled(
   const total = (xBounds.length - 1) * (yBounds.length - 1);
   let done = 0;
   let residual = 0;
-  for (let cy = 0; cy < yBounds.length - 1; cy++)
-    for (let cx = 0; cx < xBounds.length - 1; cx++) {
-      const vx0 = xBounds[cx];
-      const vy0 = yBounds[cy];
-      const vx1 = xBounds[cx + 1];
-      const vy1 = yBounds[cy + 1];
-      const px0 = Math.max(0, vx0 - HALO);
-      const py0 = Math.max(0, vy0 - HALO);
-      const px1 = Math.min(w, vx1 + HALO);
-      const py1 = Math.min(h, vy1 + HALO);
-      const pw = px1 - px0;
-      const ph = py1 - py0;
-      const tile = new Uint8ClampedArray(pw * ph * 4);
-      for (let y = 0; y < ph; y++)
-        tile.set(input.subarray(((py0 + y) * w + px0) * 4, ((py0 + y) * w + px1) * 4), y * pw * 4);
-      const pin = c._malloc(tile.length);
-      c.HEAPU8.set(tile, pin);
-      const pout = c._malloc(pw * scale * ph * scale * 4);
-      const prange = c._malloc(64);
-      const view = new DataView(c.HEAPU8.buffer, prange, 64);
-      for (let i = 0; i < 8; i++) view.setFloat64(i * 8, ranges[i], true);
-      const rc: number = c._vice_upscale_ranged(pin, pw, ph, 4, scale, pout, prange);
-      c._free(pin);
-      c._free(prange);
-      if (rc !== 0) {
-        c._free(pout);
-        throw new Error(`vice_upscale_ranged failed: ${rc}`);
-      }
-      const tbytes = c.HEAPU8.slice(pout, pout + pw * scale * ph * scale * 4);
-      c._free(pout);
-      residual = Math.max(residual, c._vice_last_residual());
-      // Keep only the valid region (halo discarded). Each input row fans
-      // out to S output rows.
-      const sx = (vx0 - px0) * scale;
-      for (let y = vy0; y < vy1; y++)
-        for (let dy = 0; dy < scale; dy++) {
-          const sy = (y - py0) * scale + dy;
-          const len = (vx1 - vx0) * scale * 4;
-          out.set(
-            tbytes.subarray((sy * pw * scale + sx) * 4, (sy * pw * scale + sx) * 4 + len),
-            ((y * scale + dy) * ow + vx0 * scale) * 4,
-          );
+
+  // Pre-allocate maximum tile buffers once on the WASM heap to eliminate
+  // per-tile allocation, fragmentation, and Garbage Collection pauses.
+  const maxTileSide = TILE + 2 * HALO;
+  const maxTileInBytes = maxTileSide * maxTileSide * 4;
+  const maxTileOutBytes = (maxTileSide * scale) * (maxTileSide * scale) * 4;
+  const pin = c._malloc(maxTileInBytes);
+  const pout = c._malloc(maxTileOutBytes);
+  const prange = c._malloc(64);
+  const view = new DataView(c.HEAPU8.buffer, prange, 64);
+  for (let i = 0; i < 8; i++) view.setFloat64(i * 8, ranges[i], true);
+
+  try {
+    for (let cy = 0; cy < yBounds.length - 1; cy++) {
+      for (let cx = 0; cx < xBounds.length - 1; cx++) {
+        const vx0 = xBounds[cx];
+        const vy0 = yBounds[cy];
+        const vx1 = xBounds[cx + 1];
+        const vy1 = yBounds[cy + 1];
+        const px0 = Math.max(0, vx0 - HALO);
+        const py0 = Math.max(0, vy0 - HALO);
+        const px1 = Math.min(w, vx1 + HALO);
+        const py1 = Math.min(h, vy1 + HALO);
+        const pw = px1 - px0;
+        const ph = py1 - py0;
+
+        // Copy input subregion directly into WASM heap buffer row-by-row
+        for (let y = 0; y < ph; y++) {
+          const srcStart = ((py0 + y) * w + px0) * 4;
+          const srcEnd = ((py0 + y) * w + px1) * 4;
+          c.HEAPU8.set(input.subarray(srcStart, srcEnd), pin + y * pw * 4);
         }
-      done++;
-      onProgress?.(done, total);
-      // Yield so progress paints (WASM calls are synchronous).
-      await new Promise((r) => setTimeout(r, 0));
+
+        const rc: number = c._vice_upscale_ranged(pin, pw, ph, 4, scale, pout, prange);
+        if (rc !== 0) throw new Error(`vice_upscale_ranged failed: ${rc}`);
+        residual = Math.max(residual, c._vice_last_residual());
+
+        // Zero-copy read directly from WASM heap into output buffer
+        const sx = (vx0 - px0) * scale;
+        const len = (vx1 - vx0) * scale * 4;
+        for (let y = vy0; y < vy1; y++) {
+          for (let dy = 0; dy < scale; dy++) {
+            const sy = (y - py0) * scale + dy;
+            const srcStart = pout + (sy * pw * scale + sx) * 4;
+            out.set(
+              c.HEAPU8.subarray(srcStart, srcStart + len),
+              ((y * scale + dy) * ow + vx0 * scale) * 4,
+            );
+          }
+        }
+        done++;
+        onProgress?.(done, total);
+        // Low-latency yield so progress events flush without 4ms timer clamp
+        await yieldTurn();
+      }
     }
+  } finally {
+    c._free(pin);
+    c._free(pout);
+    c._free(prange);
+  }
+
   return { data: out, w: ow, h: oh, residual, ms: performance.now() - t0 };
 }
 let core: Core | null = null;
@@ -190,9 +217,8 @@ export async function upscaleImage(
     c._free(pout);
     throw new Error(`vice_upscale failed: ${rc}`);
   }
-  const bytes = new Uint8ClampedArray(
-    c.HEAPU8.slice(pout, pout + ow * oh * 4).buffer as ArrayBuffer,
-  );
+  const bytes = new Uint8ClampedArray(ow * oh * 4);
+  bytes.set(c.HEAPU8.subarray(pout, pout + ow * oh * 4));
   const residual: number = c._vice_last_residual();
   c._free(pin);
   c._free(pout);
@@ -240,9 +266,8 @@ export async function upscaleBurst(
     c._free(pout);
     throw new Error(`vice_upscale_burst failed: ${rc}`);
   }
-  const bytes = new Uint8ClampedArray(
-    c.HEAPU8.slice(pout, pout + ow * oh * 4).buffer as ArrayBuffer,
-  );
+  const bytes = new Uint8ClampedArray(ow * oh * 4);
+  bytes.set(c.HEAPU8.subarray(pout, pout + ow * oh * 4));
   const residual: number = c._vice_last_residual();
   c._free(pout);
   return { data: bytes, w: ow, h: oh, residual, ms: performance.now() - t0 };
