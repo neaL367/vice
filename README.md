@@ -30,21 +30,32 @@ box projection) → integer-exact block quantization.
 
 - Scales 2×/3× run single-stage; **4× stages 2→4** (+0.07 dB, no reversals);
   **8× chains 2→4→8**, each stage projecting against the original input.
-- Large inputs split into overlapping halo tiles with per-tile progress;
-  tiled output is bit-exact versus whole-image.
+- **JPEG/block awareness (H10).** Automatic artifact detection scans horizontal
+  and vertical grid phases across [0..7]; gated adaptive boundary coupling
+  suppresses blocking artifacts while preserving 100% bit-identity on clean inputs.
+- **Burst fusion.** Multi-frame sub-pixel registration with confidence gating,
+  reconstructing a high-resolution frame from up to 8 low-light/burst captures.
+- **Parallel multi-worker tiling.** Large inputs split into overlapping halo tiles;
+  tiles are scheduled concurrently across a Web Worker pool scaling to your CPU
+  cores with real-time per-tile progress. Tiled output is bit-exact versus whole-image.
 - Measured quality: +0.52 dB over the best fixed kernel on Set5 2×, ringing
   down 3–6× on photos, loop ahead of fixed kernels on every Kodak image at
   4× and 8×.
 
 ## The studio
 
-A single-surface comparison workspace: drop / browse / paste an image, pick a
-scale, drag the divider to reveal original vs enlarged, zoom and pan freely,
-download the full-resolution PNG. The WASM core runs in a Web Worker —
-the UI never blocks. First visit caches shell + engine via service worker,
-so the studio works fully offline afterwards. 8× is offered for inputs
-≤512px on the long side; oversized jobs refuse with guidance instead of
-crashing a tab.
+A single-surface comparison workspace:
+- **Input:** Drag & drop single images or bursts, browse files, or paste directly
+  from your clipboard (`Ctrl+V`).
+- **Interactive inspection:** Drag the divider to reveal original vs enlarged,
+  zoom and pan freely with high-DPI canvas rendering.
+- **Control & cancellation:** Scale toggles (2×, 3×, 4×, 8×) with instant job
+  cancellation to regain control on long runs.
+- **Export options:** Download in lossless **PNG**, high-efficiency **WebP**
+  (~70% smaller), or **JPEG** (with automatic alpha-background compositing).
+- **PWA & Offline:** Complete offline functionality via Service Worker caching
+  and native standalone installation (`manifest.ts`, vector icons). 100% browser-local,
+  zero telemetry, zero server dependencies.
 
 > `research/`, `.agents/`, `.scratch/`, `docs/` are local-only by policy and
 > never pushed — see `.gitignore`. Datasets under `tools/eval/data/` likewise.
@@ -58,19 +69,19 @@ vice/
 │  ├─ falsification.md          # every verdict + 20 killed hypotheses
 │  ├─ ref/                      # zero-dependency TS reference (64 tests)
 │  └─ results/                  # benchmark tables (battery, Kodak, full sets)
-├─ core/              # C++20 engine (ABI 3)
-│  ├─ include/vice.h            # C ABI: upscale, progressive, ranged, residual
-│  ├─ src/                      # kernels, forward, descriptors,
+├─ core/              # C++20 engine (ABI 4)
+│  ├─ include/vice.h            # C ABI: upscale, progressive, ranged, burst, residual
+│  ├─ src/                      # kernels, forward, descriptors, burst,
 │  │                            # regularization, ibp, progressive, color, api
-│  ├─ tests/test_all.cpp        # native gates incl. tile bit-exactness
+│  ├─ tests/test_all.cpp        # native gates incl. tile bit-exactness & burst
 │  ├─ apps/vice_upscale.cpp     # PPM CLI (validation bridge)
-│  └─ wasm-build.sh             # emcc → web/public/wasm (needs D:/emsdk)
+│  ├─ wasm-build.sh             # em++ bash build script
+│  └─ wasm-build.ps1            # em++ PowerShell build script (Windows)
 ├─ tools/wasm/        # entry.cpp, node smoke test, tiling agreement probe
 ├─ web/               # Next.js 16.4 + React 19.3 studio (bun, Turbopack)
-│  ├─ app/                      # shell, static guard, offline registration
-│  ├─ features/studio/          # workspace, viewport geometry, gestures
-│  ├─ workers/ lib/             # WASM worker, engine (tiling, ceilings)
-│  └─ e2e/studio.spec.ts        # 14 Playwright tests on real Chrome
+├─ web/app/           # PWA manifest, viewport metadata, service worker register
+├─ web/features/      # workspace, viewport, controls, export formats
+├─ web/workers/ lib/  # multi-worker pool, engine (tiling, ceilings)
 └─ tools/eval/data/   # gitignored datasets (Kodak, Set5/14, BSD100, Urban100)
 ```
 
@@ -81,11 +92,10 @@ bun test research/ref                    # reference suite (64 tests, pre-commit
 cmake -S core -B core/build -G "Visual Studio 17 2022" -A x64
 cmake --build core/build --config Release
 ./core/build/Release/vice_tests.exe      # zero warnings, ALL PASS
-bash core/wasm-build.sh                  # needs emsdk on PATH
-node tools/wasm/smoke.mjs                # ABI + residual + exact block sums
-node tools/wasm/tiling-check.mjs         # tiled-vs-whole agreement (bit-exact)
-bun research/ref/validate-cpp.ts         # TS↔C++ parity: 2× 59.11 dB, 4× 60.71 dB, 8× 63.32 dB
-cd web && bun install && bunx playwright test   # 14 E2E incl. offline + tiling
+powershell -File core/wasm-build.ps1     # or bash core/wasm-build.sh (needs emsdk)
+node tools/wasm/smoke.mjs                # ABI 4 + residual + exact block sums
+node tools/wasm/tiling-check.mjs         # tiled-vs-whole agreement (bit-exact, inf dB)
+cd web && bun install && bun run lint    # ESLint + TypeScript check
 ```
 
 Reference numbers stand for the core: the C++ port cross-validates against the
