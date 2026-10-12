@@ -18,7 +18,7 @@ import { fitsEightX } from "../../lib/engine";
 // React notes: plain components by design — the React Compiler (enabled in
 // next.config.ts) owns memoization. No manual useMemo/useCallback here.
 export function Workspace() {
-  const { job, openImage, openBurst, reset, upscale } = useStudioJob();
+  const { job, openImage, openBurst, reset, upscale, cancel } = useStudioJob();
   const [scale, setScale] = useState<Scale>(2);
   // Replace-path failures (dock picker, header picker, drop, paste) must
   // never fail silent — a dead "nothing happens" is worse than an error.
@@ -117,6 +117,7 @@ export function Workspace() {
       onReset={reset}
       download={download}
       upscale={upscale}
+      onCancel={cancel}
     />
   );
 }
@@ -131,6 +132,7 @@ function ActiveWorkspace({
   onReset,
   download,
   upscale,
+  onCancel,
 }: {
   input: StudioImage;
   job: Exclude<ReturnType<typeof useStudioJob>["job"], { kind: "idle" }>;
@@ -141,6 +143,7 @@ function ActiveWorkspace({
   onReset: () => void;
   download: (out: StudioImage, name: string, s: number) => void;
   upscale: (s: Scale) => Promise<void>;
+  onCancel: () => void;
 }) {
   const result = job.kind === "done" ? job.output : null;
   const working = job.kind === "working";
@@ -390,6 +393,7 @@ function ActiveWorkspace({
           working={working}
           canDownload={job.kind === "done"}
           onUpscale={() => void upscale(scale)}
+          onCancel={onCancel}
           onDownload={() => {
             if (job.kind === "done") download(job.output, job.name, job.scale);
           }}

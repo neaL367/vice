@@ -14,6 +14,7 @@ export function Controls({
   working,
   canDownload,
   onUpscale,
+  onCancel,
   onDownload,
   onPickFiles,
 }: {
@@ -26,6 +27,7 @@ export function Controls({
   working: boolean;
   canDownload: boolean;
   onUpscale: () => void;
+  onCancel?: () => void;
   onDownload: () => void;
   onPickFiles: (fs: File[]) => void;
 }) {
@@ -68,14 +70,32 @@ export function Controls({
         <div className="mx-1 hidden h-6 w-px bg-[#2a2724] sm:block" aria-hidden="true" />
 
         <div className="flex items-center gap-1.5">
-          <button
-            onClick={onUpscale}
-            disabled={!canRun || working}
-            className="vx-pop inline-flex min-h-[36px] items-center gap-2 rounded-full bg-[#f5f4f0] px-5 text-[13.5px] font-medium text-[#0e0d0c] hover:bg-white active:scale-[0.98] disabled:opacity-40"
-          >
-            {working && <span className="vx-spinner !h-3.5 !w-3.5 !border-2 !border-black/20 !border-t-black" aria-hidden="true" />}
-            {working ? "Processing…" : "Upscale"}
-          </button>
+          {working ? (
+            <div className="flex items-center gap-1.5">
+              <span className="inline-flex min-h-[36px] items-center gap-2 rounded-full border border-[#2a2724] bg-[#221f1c] px-4 text-[13px] font-medium text-[#f5f4f0]">
+                <span className="vx-spinner !h-3.5 !w-3.5 !border-2 !border-white/20 !border-t-white" aria-hidden="true" />
+                Processing…
+              </span>
+              {onCancel && (
+                <button
+                  onClick={onCancel}
+                  aria-label="Cancel processing"
+                  title="Cancel processing"
+                  className="vx-pop inline-flex min-h-[36px] items-center gap-1 rounded-full border border-[#5a2b27] bg-[#2a1512] px-3.5 text-[12.5px] font-medium text-[#ff9d94] hover:bg-[#3d1e1a] active:scale-[0.98]"
+                >
+                  Cancel
+                </button>
+              )}
+            </div>
+          ) : (
+            <button
+              onClick={onUpscale}
+              disabled={!canRun}
+              className="vx-pop inline-flex min-h-[36px] items-center gap-2 rounded-full bg-[#f5f4f0] px-5 text-[13.5px] font-medium text-[#0e0d0c] hover:bg-white active:scale-[0.98] disabled:opacity-40"
+            >
+              Upscale
+            </button>
+          )}
           {canDownload && (
             <button
               onClick={onDownload}

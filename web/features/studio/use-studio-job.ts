@@ -124,7 +124,7 @@ export function useStudioJob() {
           ms: done.ms,
         });
       });
-    } catch {
+    } catch (e: unknown) {
       startTransition(() => {
         if (!mountedRef.current) return;
         setJob({
@@ -132,10 +132,27 @@ export function useStudioJob() {
           input,
           name,
           frames,
-          message: "We couldn't process this image.",
+          message: e instanceof Error ? e.message : "We couldn't process this image.",
         });
       });
     }
+  }
+
+  function cancel() {
+    const cur = curRef.current;
+    if (cur.kind !== "working") return;
+    workerRef.current?.terminate();
+    workerRef.current = new Worker(
+      new URL("../../workers/vice.worker.ts", import.meta.url),
+    );
+    startTransition(() => {
+      setJob({
+        kind: "ready",
+        input: cur.input,
+        name: cur.name,
+        frames: cur.frames,
+      });
+    });
   }
 
   // Readable current job inside callbacks without stale closures.
@@ -146,7 +163,7 @@ export function useStudioJob() {
     curRef.current = job;
   }, [job]);
 
-  return { job, openImage, openBurst, reset, upscale };
+  return { job, openImage, openBurst, reset, upscale, cancel };
 }
 
 export async function decodeFile(
