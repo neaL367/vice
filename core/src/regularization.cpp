@@ -54,4 +54,36 @@ std::vector<double> regularization_step(const std::vector<double>& x, int w, int
   return out;
 }
 
+std::vector<double> deblock_correction(const std::vector<double>& x, int w, int h, int s,
+                                       double strength, const DeblockParams& p,
+                                       int phase_x, int phase_y) {
+  std::vector<double> out(x.size(), 0.0);
+  if (p.eta3 == 0.0 || strength == 0.0) return out;
+  const long period = 8L * s;
+  const double k = p.eta3 * strength;
+  const long shift_x = (static_cast<long>(phase_x) * s) % period;
+  const long shift_y = (static_cast<long>(phase_y) * s) % period;
+  for (int y = 0; y < h; y++) {
+    const long rem_y = ((y - shift_y) % period + period) % period;
+    const long rem_yp1 = ((y + 1 - shift_y) % period + period) % period;
+    for (int xx = 0; xx < w; xx++) {
+      const size_t i = (size_t)y * w + xx;
+      double c = 0.0;
+      const long rem_x = ((xx - shift_x) % period + period) % period;
+      const long rem_xp1 = ((xx + 1 - shift_x) % period + period) % period;
+      if (rem_x == 0 && xx > 0) c += x[i - 1] - x[i];
+      if (rem_xp1 == 0 && xx < w - 1) c += x[i + 1] - x[i];
+      if (rem_y == 0 && y > 0) c += x[i - (size_t)w] - x[i];
+      if (rem_yp1 == 0 && y < h - 1) c += x[i + (size_t)w] - x[i];
+      double v = k * c;
+      if (v < -p.block_cap)
+        v = -p.block_cap;
+      else if (v > p.block_cap)
+        v = p.block_cap;
+      out[i] = v;
+    }
+  }
+  return out;
+}
+
 }  // namespace vice

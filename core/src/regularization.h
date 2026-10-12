@@ -15,6 +15,22 @@ namespace vice {
 inline constexpr double REG_ETA1_DEFAULT = 0.0;
 inline constexpr double REG_ETA2_DEFAULT = 0.05;
 
+// Killed hypothesis H5 (gated R_freq revival, 2026-10-12, verdict: KILLED).
+// Proposal: re-admit R_freq only where alias evidence is strong and edge
+// evidence weak (gate g = alias²·(1−edge)), capped at ±0.25 levels/pass,
+// keeping the R_edge term untouched and the product default at eta1=0.
+// Measurements on synthetics (vice_tests FREQ probes, since removed):
+// zone-plate aliased-ring gate activation 0.018, Nyquist cross-hatch 0.012
+// (admission threshold for relevance: mean activation > 0.05); gated output
+// bit-identical to baseline on step/ripple/texture (eg == eb exactly);
+// texture PSNR +0.01 dB (noise). The gate is correctly selective but the
+// admitting set is two orders of magnitude too small to move any photo
+// metric, and the cap bounds total movement to ~1 level where it does fire.
+// Loosening the gate re-admits the content-dependence that removed R_freq
+// from product in the first place. Revival would need photo-scale evidence
+// of a large admitting set — this experiment says not to bother.
+// Full record belongs in research/falsification.md (local-only).
+
 struct RegMaps {
   int hw = 0, hh = 0;
   std::vector<double> wFreq;
@@ -33,5 +49,20 @@ RegMaps regularization_maps(const std::vector<double>& lr, int lw, int lh, int s
 // SUBTRACTED from (x + correction) before clamp+project.
 std::vector<double> regularization_step(const std::vector<double>& x, int w, int h, const RegMaps& m,
                                         double eta1, double eta2);
+
+// H10 deblock response (experimental): explicit correction pulling pixels
+// adjacent to 8-grid boundaries toward their across-boundary neighbor,
+// scaled by eta3·strength and capped per pixel at ±block_cap levels. With
+// eta3=0 or strength=0 the correction is exactly +0.0 everywhere, so the
+// gated-off path is bit-identical to no correction. Kill criteria live in
+// vice_tests (H10 gates) and ibp.h.
+struct DeblockParams {
+  double eta3 = 0.0;
+  double block_cap = 0.25;
+};
+
+std::vector<double> deblock_correction(const std::vector<double>& x, int w, int h, int s,
+                                       double strength, const DeblockParams& p,
+                                       int phase_x = 0, int phase_y = 0);
 
 }  // namespace vice

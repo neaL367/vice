@@ -21,4 +21,23 @@ DescFields compute_descriptors(const std::vector<double>& lr, int w, int h);
 // Bilinear sample of an LR field at HR pixel (hx,hy), scale s. Clamped.
 double sample_field(const std::vector<double>& f, int lw, int lh, int hx, int hy, int s);
 
+// H10 artifact analysis (experimental): JPEG-style block grids show up as
+// periodic spikes in adjacent-pixel differences at multiples of 8. The
+// ratio of boundary-mean to interior-mean absolute difference is ~1.0 on
+// clean content and well above it on blocky content; the present-gate
+// keeps the deblock response inert unless the evidence clears threshold.
+// Grid is assumed aligned (decoded bitmaps); offset grids are follow-up.
+struct ArtifactStats {
+  bool jpeg_present = false;
+  double jpeg_strength = 0.0;  // 0 when absent; excess ratio above threshold
+  double block_ratio_h = 1.0;
+  double block_ratio_v = 1.0;
+  int phase_x = 0;             // [0..7] offset maximizing boundary ratio
+  int phase_y = 0;             // [0..7] offset maximizing boundary ratio
+};
+
+inline constexpr double JPEG_RATIO_THRESHOLD = 1.35;
+
+ArtifactStats analyze_artifacts(const std::vector<double>& lr, int w, int h);
+
 }  // namespace vice

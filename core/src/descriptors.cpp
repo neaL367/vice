@@ -74,4 +74,92 @@ double sample_field(const std::vector<double>& f, int lw, int lh, int hx, int hy
          at(x0, y0 + 1) * (1 - fx) * fy + at(x0 + 1, y0 + 1) * fx * fy;
 }
 
+ArtifactStats analyze_artifacts(const std::vector<double>& lr, int w, int h) {
+  ArtifactStats st;
+  if (w < 2 || h < 2 || lr.size() < (size_t)w * h) return st;
+
+  double sum_diff_h[8] = {0.0}, cnt_diff_h[8] = {0.0};
+  double tot_diff_h = 0.0, tot_cnt_h = 0.0;
+  for (int y = 0; y < h; y++) {
+    for (int x = 1; x < w; x++) {
+      const double d = std::fabs(lr[(size_t)y * w + x] - lr[(size_t)y * w + x - 1]);
+      int rem = x % 8;
+      sum_diff_h[rem] += d;
+      cnt_diff_h[rem] += 1.0;
+      tot_diff_h += d;
+      tot_cnt_h += 1.0;
+    }
+  }
+
+  double sum_diff_v[8] = {0.0}, cnt_diff_v[8] = {0.0};
+  double tot_diff_v = 0.0, tot_cnt_v = 0.0;
+  for (int y = 1; y < h; y++) {
+    for (int x = 0; x < w; x++) {
+      const double d = std::fabs(lr[(size_t)y * w + x] - lr[(size_t)(y - 1) * w + x]);
+      int rem = y % 8;
+      sum_diff_v[rem] += d;
+      cnt_diff_v[rem] += 1.0;
+      tot_diff_v += d;
+      tot_cnt_v += 1.0;
+    }
+  }
+
+  // Scan offsets ox in [0..7] to find the boundary phase maximizing the ratio
+  // of boundary-mean to interior-mean difference. Tie-break keeps offset 0.
+  int best_ox = 0;
+  double best_rh = 1.0;
+  for (int ox = 0; ox < 8; ox++) {
+    const double bnd = sum_diff_h[ox];
+    const double nb = cnt_diff_h[ox];
+    const double in = tot_diff_h - bnd;
+    const double ni = tot_cnt_h - nb;
+    if (nb > 0.0) {
+      double r = 1.0;
+      if (in > 0.0 && ni > 0.0) {
+        r = (bnd / nb) / (in / ni);
+      } else if (bnd > 0.0) {
+        r = 1000.0;
+      }
+      if (r > best_rh) {
+        best_rh = r;
+        best_ox = ox;
+      }
+    }
+  }
+
+  int best_oy = 0;
+  double best_rv = 1.0;
+  for (int oy = 0; oy < 8; oy++) {
+    const double bnd = sum_diff_v[oy];
+    const double nb = cnt_diff_v[oy];
+    const double in = tot_diff_v - bnd;
+    const double ni = tot_cnt_v - nb;
+    if (nb > 0.0) {
+      double r = 1.0;
+      if (in > 0.0 && ni > 0.0) {
+        r = (bnd / nb) / (in / ni);
+      } else if (bnd > 0.0) {
+        r = 1000.0;
+      }
+      if (r > best_rv) {
+        best_rv = r;
+        best_oy = oy;
+      }
+    }
+  }
+
+  st.block_ratio_h = best_rh;
+  st.block_ratio_v = best_rv;
+  st.phase_x = best_ox;
+  st.phase_y = best_oy;
+
+  const double m = st.block_ratio_h > st.block_ratio_v ? st.block_ratio_h : st.block_ratio_v;
+  if (m > JPEG_RATIO_THRESHOLD) {
+    st.jpeg_present = true;
+    st.jpeg_strength = m - JPEG_RATIO_THRESHOLD;
+    if (st.jpeg_strength > 1.0) st.jpeg_strength = 1.0;
+  }
+  return st;
+}
+
 }  // namespace vice

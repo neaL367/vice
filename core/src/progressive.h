@@ -1,6 +1,8 @@
 #pragma once
 #include <vector>
 
+#include "regularization.h"
+
 namespace vice {
 
 struct StageReport {
@@ -20,6 +22,7 @@ struct ProgressiveResult {
 // research/ref/progressive.ts reconstructProgressive.
 ProgressiveResult reconstruct_progressive(const std::vector<double>& y, int lw, int lh,
                                           int target_scale, int iters,
-                                          const double* clamp_lo_hi = nullptr);
+                                          const double* clamp_lo_hi = nullptr,
+                                          const DeblockParams* deblock = nullptr);
 
 }  // namespace vice

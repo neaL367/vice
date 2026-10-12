@@ -2,6 +2,7 @@
 #include <cmath>
 #include <vector>
 #include "burst.h"
+#include "color.h"
 #include "ibp.h"
 #include "progressive.h"
 
@@ -67,12 +68,13 @@ double upscale_channel(const std::vector<double>& lr, int w, int h, int scale,
   std::vector<double> blk(static_cast<size_t>(scale) * scale);
   std::vector<unsigned char> qblk(static_cast<size_t>(scale) * scale);
   std::vector<double> x;
+  const vice::DeblockParams deblock{0.1, 0.5};
   if (scale == 4) {
-    auto p = vice::reconstruct_progressive(lr, w, h, 4, VICE_ITERS, clamp_lo_hi);
+    auto p = vice::reconstruct_progressive(lr, w, h, 4, VICE_ITERS, clamp_lo_hi, &deblock);
     for (const auto& st : p.stages) worst = std::max(worst, st.residual_vs_y);
     x = std::move(p.final);
   } else {
-    auto r = vice::reconstruct_ibp(lr, w, h, scale, VICE_ITERS, nullptr, clamp_lo_hi);
+    auto r = vice::reconstruct_ibp(lr, w, h, scale, VICE_ITERS, nullptr, clamp_lo_hi, &deblock);
     worst = r.residuals.back();
     x = std::move(r.x);
   }
@@ -144,7 +146,8 @@ int vice_upscale_progressive(const unsigned char* in, int w, int h, int ch, int 
   std::vector<unsigned char> qblk(static_cast<size_t>(scale) * scale);
   for (int c = 0; c < ch; c++) {
     for (int i = 0; i < w * h; i++) lr[(size_t)i] = in[(size_t)i * ch + c];
-    auto p = vice::reconstruct_progressive(lr, w, h, scale, VICE_ITERS);
+    const vice::DeblockParams deblock{0.1, 0.5};
+    auto p = vice::reconstruct_progressive(lr, w, h, scale, VICE_ITERS, nullptr, &deblock);
     for (const auto& st : p.stages) worst = std::max(worst, st.residual_vs_y);
     for (int by = 0; by < h; by++)
       for (int bx = 0; bx < w; bx++) {
@@ -203,3 +206,93 @@ int vice_upscale_burst(const unsigned char* const* in, int n, int w, int h, int 
 }
 
 double vice_last_residual(void) { return g_last_residual; }
+
+namespace vice {
+// H9 driver: sRGB bytes → linear×255 working planes → per-channel IBP
+// staging (mirrors upscale_channel's scale policy) → sRGB float → exact
+// quantization against sRGB source bytes.
+double linear_upscale(const unsigned char* in, int w, int h, int ch, int scale,
+                      unsigned char* out, int iters) {
+  if (!in || !out || w <= 0 || h <= 0 || (ch != 3 && ch != 4) ||
+      (scale != 2 && scale != 3 && scale != 4) || iters < 0)
+    return -1.0;
+  const int n = w * h, ow = w * scale;
+  const int planes = ch;
+  std::vector<std::vector<double>> LR((size_t)planes, std::vector<double>((size_t)n));
+  for (int i = 0; i < n; i++)
+    for (int c = 0; c < ch; c++)
+      LR[(size_t)c][(size_t)i] = srgb_to_linear(in[(size_t)i * ch + c] / 255.0) * 255.0;
+  std::vector<std::vector<double>> HR((size_t)planes);
+  double worst = 0.0;
+  const vice::DeblockParams deblock{0.1, 0.5};
+  for (int c = 0; c < ch; c++) {
+    if (scale == 4) {
+      auto p = vice::reconstruct_progressive(LR[(size_t)c], w, h, 4, iters, nullptr, &deblock);
+      for (const auto& st : p.stages) worst = std::max(worst, st.residual_vs_y);
+      HR[(size_t)c] = std::move(p.final);
+    } else {
+      auto r = vice::reconstruct_ibp(LR[(size_t)c], w, h, scale, iters, nullptr, nullptr, &deblock);
+      worst = r.residuals.back();
+      HR[(size_t)c] = std::move(r.x);
+    }
+  }
+  std::vector<double> blk((size_t)scale * scale);
+  std::vector<unsigned char> qblk((size_t)scale * scale);
+  for (int by = 0; by < h; by++)
+    for (int bx = 0; bx < w; bx++) {
+      const size_t s0 = ((size_t)by * w + bx) * ch;
+      for (int c = 0; c < ch; c++) {
+        for (int dy = 0; dy < scale; dy++)
+          for (int dx = 0; dx < scale; dx++) {
+            double lin = HR[(size_t)c][(size_t)(by * scale + dy) * ow + bx * scale + dx] / 255.0;
+            blk[(size_t)dy * scale + dx] = linear_to_srgb(lin) * 255.0;
+          }
+        quantize_exact(blk.data(), scale, (double)(scale * scale) * in[s0 + c], qblk.data());
+        for (int dy = 0; dy < scale; dy++)
+          for (int dx = 0; dx < scale; dx++)
+            out[(size_t)((by * scale + dy) * ow + bx * scale + dx) * ch + c] =
+                qblk[(size_t)dy * scale + dx];
+      }
+    }
+  return worst;
+}
+}  // namespace vice
+
+namespace vice {
+// H8 driver: product-shape upscale with per-channel H6 auto budgets.
+// Scales 2,3 (direct); per-channel clamp from the observation, exact-sum
+// quantization per channel — the same contract as vice_upscale, so RGB
+// exact block sums hold by construction.
+AutoImageResult upscale_auto_rgb(const unsigned char* in, int w, int h, int ch, int scale,
+                                 unsigned char* out, const AutoIters& policy) {
+  AutoImageResult res;
+  if (!in || !out || w <= 0 || h <= 0 || (ch != 1 && ch != 3 && ch != 4) ||
+      (scale != 2 && scale != 3))
+    return res;
+  const int ow = w * scale;
+  std::vector<double> lr((size_t)w * h);
+  std::vector<double> blk((size_t)scale * scale);
+  std::vector<unsigned char> qblk((size_t)scale * scale);
+  double worst = 0.0;
+  for (int c = 0; c < ch; c++) {
+    for (int i = 0; i < w * h; i++) lr[(size_t)i] = in[(size_t)i * ch + c];
+    auto r = vice::reconstruct_ibp_auto(lr, w, h, scale, policy);
+    worst = std::max(worst, r.residuals.back());
+    res.iters_used[c] = r.iters_used;
+    for (int by = 0; by < h; by++)
+      for (int bx = 0; bx < w; bx++) {
+        for (int dy = 0; dy < scale; dy++)
+          for (int dx = 0; dx < scale; dx++)
+            blk[(size_t)dy * scale + dx] = r.x[(size_t)(by * scale + dy) * ow + bx * scale + dx];
+        quantize_exact(blk.data(), scale, (double)(scale * scale) * lr[(size_t)by * w + bx],
+                       qblk.data());
+        for (int dy = 0; dy < scale; dy++)
+          for (int dx = 0; dx < scale; dx++)
+            out[(size_t)((by * scale + dy) * ow + bx * scale + dx) * ch + c] =
+                qblk[(size_t)dy * scale + dx];
+      }
+  }
+  res.residual = worst;
+  return res;
+}
+}  // namespace vice
