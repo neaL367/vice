@@ -6,7 +6,7 @@ set -e
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$ROOT/web/public/wasm"
 mkdir -p "$OUT"
-emcc -O3 -msimd128 -flto -std=c++20 \
+em++ -O3 -msimd128 -flto -std=c++20 \
   -I "$ROOT/core/include" \
   "$ROOT/core/src/kernels.cpp" \
   "$ROOT/core/src/forward.cpp" \
@@ -25,7 +25,7 @@ emcc -O3 -msimd128 -flto -std=c++20 \
   -s ALLOW_MEMORY_GROWTH=1 \
   -s INITIAL_MEMORY=67108864 \
   -s FILESYSTEM=0 \
-  -s ENVIRONMENT=web,worker \
+  -s ENVIRONMENT=web,worker,node \
   -s ASSERTIONS=0 \
   -o "$OUT/core.js"
 ls -la "$OUT"
