@@ -66,32 +66,82 @@ double kernel_radius(Kernel k) {
 std::vector<double> upsample(const std::vector<double>& src, int w, int h, int s, Kernel k) {
   const double r = kernel_radius(k);
   const int ow = w * s, oh = h * s;
-  std::vector<double> horiz(static_cast<size_t>(ow) * h, 0.0);
-  for (int y = 0; y < h; y++) {
-    for (int ox = 0; ox < ow; ox++) {
-      const double c = (ox + 0.5) / s - 0.5;
-      double acc = 0.0, wsum = 0.0;
-      for (int ix = (int)std::floor(c - r) + 1; ix <= (int)std::ceil(c + r) - 1; ix++) {
+
+  struct FilterTap {
+    int idx;
+    double wt;
+  };
+  struct FilterSpan {
+    int count;
+    FilterTap taps[16];
+  };
+
+  std::vector<FilterSpan> h_spans(ow);
+  for (int ox = 0; ox < ow; ox++) {
+    const double c = (ox + 0.5) / s - 0.5;
+    double wsum = 0.0;
+    const int min_ix = (int)std::floor(c - r) + 1;
+    const int max_ix = (int)std::ceil(c + r) - 1;
+    for (int ix = min_ix; ix <= max_ix; ix++) {
+      const double wt = kernel_weight(k, c - ix);
+      if (wt != 0.0) wsum += wt;
+    }
+    auto& span = h_spans[ox];
+    span.count = 0;
+    if (wsum != 0.0) {
+      for (int ix = min_ix; ix <= max_ix; ix++) {
         const double wt = kernel_weight(k, c - ix);
         if (wt == 0.0) continue;
-        acc += src[(size_t)y * w + edge_idx(ix, w)] * wt;
-        wsum += wt;
+        span.taps[span.count++] = {edge_idx(ix, w), wt / wsum};
       }
-      horiz[(size_t)y * ow + ox] = wsum != 0.0 ? acc / wsum : 0.0;
     }
   }
-  std::vector<double> out(static_cast<size_t>(ow) * oh, 0.0);
+
+  std::vector<double> horiz(static_cast<size_t>(ow) * h, 0.0);
+  for (int y = 0; y < h; y++) {
+    const size_t row_in = (size_t)y * w;
+    const size_t row_out = (size_t)y * ow;
+    for (int ox = 0; ox < ow; ox++) {
+      const auto& span = h_spans[ox];
+      double acc = 0.0;
+      for (int t = 0; t < span.count; t++) {
+        acc += src[row_in + span.taps[t].idx] * span.taps[t].wt;
+      }
+      horiz[row_out + ox] = acc;
+    }
+  }
+
+  std::vector<FilterSpan> v_spans(oh);
   for (int oy = 0; oy < oh; oy++) {
     const double c = (oy + 0.5) / s - 0.5;
-    for (int x = 0; x < ow; x++) {
-      double acc = 0.0, wsum = 0.0;
-      for (int iy = (int)std::floor(c - r) + 1; iy <= (int)std::ceil(c + r) - 1; iy++) {
+    double wsum = 0.0;
+    const int min_iy = (int)std::floor(c - r) + 1;
+    const int max_iy = (int)std::ceil(c + r) - 1;
+    for (int iy = min_iy; iy <= max_iy; iy++) {
+      const double wt = kernel_weight(k, c - iy);
+      if (wt != 0.0) wsum += wt;
+    }
+    auto& span = v_spans[oy];
+    span.count = 0;
+    if (wsum != 0.0) {
+      for (int iy = min_iy; iy <= max_iy; iy++) {
         const double wt = kernel_weight(k, c - iy);
         if (wt == 0.0) continue;
-        acc += horiz[(size_t)edge_idx(iy, h) * ow + x] * wt;
-        wsum += wt;
+        span.taps[span.count++] = {edge_idx(iy, h), wt / wsum};
       }
-      out[(size_t)oy * ow + x] = wsum != 0.0 ? acc / wsum : 0.0;
+    }
+  }
+
+  std::vector<double> out(static_cast<size_t>(ow) * oh, 0.0);
+  for (int oy = 0; oy < oh; oy++) {
+    const auto& span = v_spans[oy];
+    const size_t row_out = (size_t)oy * ow;
+    for (int x = 0; x < ow; x++) {
+      double acc = 0.0;
+      for (int t = 0; t < span.count; t++) {
+        acc += horiz[(size_t)span.taps[t].idx * ow + x] * span.taps[t].wt;
+      }
+      out[row_out + x] = acc;
     }
   }
   return out;
