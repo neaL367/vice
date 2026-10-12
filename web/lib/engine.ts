@@ -46,7 +46,7 @@ export const HALO = 16;
 const TILE_PEAK_BYTES = 256 * 1024 * 1024;
 
 export function needsTiling(w: number, h: number, scale: number): boolean {
-  return scale !== 8 && estimatePeakBytes(w, h, scale) > TILE_PEAK_BYTES;
+  return scale !== 8 && (w > TILE || h > TILE || estimatePeakBytes(w, h, scale) > TILE_PEAK_BYTES);
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -196,11 +196,17 @@ export async function upscaleTile(
 ): Promise<{ data: Uint8ClampedArray<ArrayBuffer>; validW: number; validH: number; residual: number }> {
   const c = await load();
   const pin = c._malloc(pixels.length);
-  c.HEAPU8.set(pixels, pin);
   const outW = pw * scale;
   const outH = ph * scale;
   const pout = c._malloc(outW * outH * 4);
   const prange = c._malloc(64);
+  if (!pin || !pout || !prange) {
+    if (pin) c._free(pin);
+    if (pout) c._free(pout);
+    if (prange) c._free(prange);
+    throw new Error("WASM out of memory while allocating tile buffers");
+  }
+  c.HEAPU8.set(pixels, pin);
   const view = new DataView(c.HEAPU8.buffer, prange, 64);
   for (let i = 0; i < 8; i++) view.setFloat64(i * 8, ranges[i], true);
 

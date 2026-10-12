@@ -86,8 +86,10 @@ export function useStudioJob() {
         : null;
     setJob({ kind: "working", input, name, frames, scale, startedAt: Date.now(), progress: null });
     const id = ++idRef.current;
+    if (workersRef.current.length === 0) {
+      workersRef.current = createWorkerPool();
+    }
     const workers = workersRef.current;
-    if (workers.length === 0) return;
 
     try {
       let done: WorkerDone;
@@ -175,74 +177,14 @@ export function useStudioJob() {
 
         await new Promise<void>((resolve, reject) => {
           let settled = false;
+          const cleanupFns: (() => void)[] = [];
           const cleanup = () => {
-            for (const wrk of workers) {
-              wrk.removeEventListener("message", onMsg);
-            }
+            for (const fn of cleanupFns) fn();
+            cleanupFns.length = 0;
           };
 
-          const onMsg = (ev: MessageEvent) => {
+          const runNext = (wrk: Worker) => {
             if (settled) return;
-            const m = ev.data;
-            if (m.id !== id) return;
-            if (m.type === "error") {
-              settled = true;
-              cleanup();
-              reject(new Error(m.message));
-              return;
-            }
-            if (m.type !== "tileDone") return;
-
-            const validW = (m.vx1 - m.vx0) * scale;
-            const validH = (m.vy1 - m.vy0) * scale;
-            const len = validW * 4;
-            for (let y = 0; y < validH; y++) {
-              const dstStart = (((m.vy0 * scale) + y) * ow + (m.vx0 * scale)) * 4;
-              const srcStart = y * validW * 4;
-              out.set(m.data.subarray(srcStart, srcStart + len), dstStart);
-            }
-
-            residual = Math.max(residual, m.residual);
-            doneCount++;
-            setJob((j) => (j.kind === "working" ? { ...j, progress: { done: doneCount, total } } : j));
-
-            if (doneCount === total) {
-              settled = true;
-              cleanup();
-              resolve();
-              return;
-            }
-
-            const workerTarget = ev.target as Worker;
-            if (taskIdx < tasks.length) {
-              const t = tasks[taskIdx++];
-              workerTarget.postMessage(
-                {
-                  type: "tile",
-                  id,
-                  tileId: t.tileId,
-                  pixels: t.pixels,
-                  pw: t.pw,
-                  ph: t.ph,
-                  scale,
-                  ranges,
-                  vx0: t.vx0,
-                  vy0: t.vy0,
-                  vx1: t.vx1,
-                  vy1: t.vy1,
-                  px0: t.px0,
-                  py0: t.py0,
-                },
-                { transfer: [t.pixels.buffer] },
-              );
-            }
-          };
-
-          for (const wrk of workers) {
-            wrk.addEventListener("message", onMsg);
-          }
-
-          for (const wrk of workers) {
             if (taskIdx < tasks.length) {
               const t = tasks[taskIdx++];
               wrk.postMessage(
@@ -265,6 +207,59 @@ export function useStudioJob() {
                 { transfer: [t.pixels.buffer] },
               );
             }
+          };
+
+          for (const wrk of workers) {
+            const handleMessage = (ev: MessageEvent) => {
+              if (settled) return;
+              const m = ev.data;
+              if (m.id !== id) return;
+              if (m.type === "error") {
+                settled = true;
+                cleanup();
+                reject(new Error(m.message));
+                return;
+              }
+              if (m.type !== "tileDone") return;
+
+              const validW = (m.vx1 - m.vx0) * scale;
+              const validH = (m.vy1 - m.vy0) * scale;
+              const len = validW * 4;
+              for (let y = 0; y < validH; y++) {
+                const dstStart = (((m.vy0 * scale) + y) * ow + (m.vx0 * scale)) * 4;
+                const srcStart = y * validW * 4;
+                out.set(m.data.subarray(srcStart, srcStart + len), dstStart);
+              }
+
+              residual = Math.max(residual, m.residual);
+              doneCount++;
+              setJob((j) => (j.kind === "working" ? { ...j, progress: { done: doneCount, total } } : j));
+
+              if (doneCount === total) {
+                settled = true;
+                cleanup();
+                resolve();
+                return;
+              }
+
+              runNext(wrk);
+            };
+
+            const handleError = (ev: ErrorEvent) => {
+              if (settled) return;
+              settled = true;
+              cleanup();
+              reject(new Error(ev.message || "Worker error during tiling"));
+            };
+
+            wrk.addEventListener("message", handleMessage);
+            wrk.addEventListener("error", handleError);
+            cleanupFns.push(() => {
+              wrk.removeEventListener("message", handleMessage);
+              wrk.removeEventListener("error", handleError);
+            });
+
+            runNext(wrk);
           }
         });
 
@@ -281,7 +276,13 @@ export function useStudioJob() {
         // Direct single-worker dispatch (burst or small image)
         const primaryWorker = workers[0];
         done = await new Promise((resolve, reject) => {
+          let settled = false;
+          const cleanup = () => {
+            primaryWorker.removeEventListener("message", onMsg);
+            primaryWorker.removeEventListener("error", onErr);
+          };
           const onMsg = (ev: MessageEvent) => {
+            if (settled) return;
             const m = ev.data;
             if (m.id !== id) return;
             if (m.type === "progress") {
@@ -290,11 +291,19 @@ export function useStudioJob() {
               );
               return;
             }
-            primaryWorker.removeEventListener("message", onMsg);
+            settled = true;
+            cleanup();
             if (m.type === "error") reject(new Error(m.message));
             else resolve(m as WorkerDone);
           };
+          const onErr = (ev: ErrorEvent) => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            reject(new Error(ev.message || "Worker error during upscale"));
+          };
           primaryWorker.addEventListener("message", onMsg);
+          primaryWorker.addEventListener("error", onErr);
           if (frames && frames.length > 1) {
             const copies = frames.map((f) => new Uint8ClampedArray(f.data));
             primaryWorker.postMessage(
