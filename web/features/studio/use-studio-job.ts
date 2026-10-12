@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, useTransition } from "react";
 import type { Job, Scale, StudioImage } from "./model";
+import { HALO, TILE, needsTiling } from "../../lib/engine";
 
 interface WorkerDone {
   type: "done";
@@ -13,28 +14,35 @@ interface WorkerDone {
   ms: number;
 }
 
-// Owns the worker and the job lifecycle. Pixels live here; everything else
-// receives slices. No global store, no context. Plain functions throughout —
-// the React Compiler stabilizes references; curRef avoids stale closures
-// without extra deps. Worker setup/cleanup is StrictMode-safe (terminate).
+const POOL_SIZE =
+  typeof navigator !== "undefined"
+    ? Math.min(Math.max(1, navigator.hardwareConcurrency || 4), 4)
+    : 4;
+
+function createWorkerPool(): Worker[] {
+  const pool: Worker[] = [];
+  for (let i = 0; i < POOL_SIZE; i++) {
+    pool.push(
+      new Worker(new URL("../../workers/vice.worker.ts", import.meta.url)),
+    );
+  }
+  return pool;
+}
+
 export function useStudioJob() {
   const [job, setJob] = useState<Job>({ kind: "idle" });
-  const workerRef = useRef<Worker | null>(null);
+  const workersRef = useRef<Worker[]>([]);
   const idRef = useRef(0);
   const mountedRef = useRef(true);
-  // Job arrivals commit inside startTransition so heavy commits stay
-  // interruptible; kept even without <ViewTransition> consumers.
   const [, startTransition] = useTransition();
 
   useEffect(() => {
     mountedRef.current = true;
-    workerRef.current = new Worker(
-      new URL("../../workers/vice.worker.ts", import.meta.url),
-    );
+    workersRef.current = createWorkerPool();
     return () => {
       mountedRef.current = false;
-      workerRef.current?.terminate();
-      workerRef.current = null;
+      for (const w of workersRef.current) w.terminate();
+      workersRef.current = [];
     };
   }, []);
 
@@ -44,7 +52,6 @@ export function useStudioJob() {
     });
   }
 
-  // Burst open: frame 0 is display/reference; all frames must share dims.
   function openBurst(images: { image: StudioImage; name: string }[]) {
     const first = images[0];
     for (const { image } of images)
@@ -79,38 +86,231 @@ export function useStudioJob() {
         : null;
     setJob({ kind: "working", input, name, frames, scale, startedAt: Date.now(), progress: null });
     const id = ++idRef.current;
-    const worker = workerRef.current!;
+    const workers = workersRef.current;
+    if (workers.length === 0) return;
+
     try {
-      const done: WorkerDone = await new Promise((resolve, reject) => {
-        const onMsg = (ev: MessageEvent) => {
-          const m = ev.data;
-          if (m.id !== id) return;
-          if (m.type === "progress") {
-            // Progress paints outside the transition (urgent, lightweight).
-            setJob((j) =>
-              j.kind === "working" ? { ...j, progress: { done: m.done, total: m.total } } : j,
-            );
-            return;
+      let done: WorkerDone;
+      if (scale !== 8 && !frames && needsTiling(input.w, input.h, scale)) {
+        // Parallel multi-worker tiled execution across CPU cores
+        const t0 = performance.now();
+        const w = input.w;
+        const h = input.h;
+        const ow = w * scale;
+        const oh = h * scale;
+        const out = new Uint8ClampedArray(ow * oh * 4);
+
+        const ranges = new Float64Array(8);
+        for (let ch = 0; ch < 4; ch++) {
+          let lo = 255;
+          let hi = 0;
+          for (let i = ch; i < input.data.length; i += 4) {
+            const v = input.data[i];
+            if (v < lo) lo = v;
+            if (v > hi) hi = v;
           }
-          worker.removeEventListener("message", onMsg);
-          if (m.type === "error") reject(new Error(m.message));
-          else resolve(m as WorkerDone);
-        };
-        worker.addEventListener("message", onMsg);
-        if (frames && frames.length > 1) {
-          const copies = frames.map((f) => new Uint8ClampedArray(f.data));
-          worker.postMessage(
-            { type: "burst", id, frames: copies, w: input.w, h: input.h, scale },
-            { transfer: copies.map((c) => c.buffer) },
-          );
-        } else {
-          const copy = new Uint8ClampedArray(input.data);
-          worker.postMessage(
-            { type: "run", id, pixels: copy, w: input.w, h: input.h, scale },
-            { transfer: [copy.buffer] },
-          );
+          ranges[ch * 2] = lo;
+          ranges[ch * 2 + 1] = hi;
         }
-      });
+
+        const xBounds: number[] = [];
+        for (let x = 0; x < w; x += TILE) xBounds.push(x);
+        xBounds.push(w);
+        const yBounds: number[] = [];
+        for (let y = 0; y < h; y += TILE) yBounds.push(y);
+        yBounds.push(h);
+
+        interface TileTask {
+          tileId: number;
+          pixels: Uint8ClampedArray<ArrayBuffer>;
+          pw: number;
+          ph: number;
+          vx0: number;
+          vy0: number;
+          vx1: number;
+          vy1: number;
+          px0: number;
+          py0: number;
+        }
+
+        const tasks: TileTask[] = [];
+        let nextTileId = 0;
+        for (let cy = 0; cy < yBounds.length - 1; cy++) {
+          for (let cx = 0; cx < xBounds.length - 1; cx++) {
+            const vx0 = xBounds[cx];
+            const vy0 = yBounds[cy];
+            const vx1 = xBounds[cx + 1];
+            const vy1 = yBounds[cy + 1];
+            const px0 = Math.max(0, vx0 - HALO);
+            const py0 = Math.max(0, vy0 - HALO);
+            const px1 = Math.min(w, vx1 + HALO);
+            const py1 = Math.min(h, vy1 + HALO);
+            const pw = px1 - px0;
+            const ph = py1 - py0;
+            const tilePixels = new Uint8ClampedArray(pw * ph * 4);
+            for (let y = 0; y < ph; y++) {
+              const srcStart = ((py0 + y) * w + px0) * 4;
+              const srcEnd = ((py0 + y) * w + px1) * 4;
+              tilePixels.set(input.data.subarray(srcStart, srcEnd), y * pw * 4);
+            }
+            tasks.push({
+              tileId: nextTileId++,
+              pixels: tilePixels as Uint8ClampedArray<ArrayBuffer>,
+              pw,
+              ph,
+              vx0,
+              vy0,
+              vx1,
+              vy1,
+              px0,
+              py0,
+            });
+          }
+        }
+
+        const total = tasks.length;
+        let doneCount = 0;
+        let residual = 0;
+        let taskIdx = 0;
+
+        await new Promise<void>((resolve, reject) => {
+          let settled = false;
+          const cleanup = () => {
+            for (const wrk of workers) {
+              wrk.removeEventListener("message", onMsg);
+            }
+          };
+
+          const onMsg = (ev: MessageEvent) => {
+            if (settled) return;
+            const m = ev.data;
+            if (m.id !== id) return;
+            if (m.type === "error") {
+              settled = true;
+              cleanup();
+              reject(new Error(m.message));
+              return;
+            }
+            if (m.type !== "tileDone") return;
+
+            const validW = (m.vx1 - m.vx0) * scale;
+            const validH = (m.vy1 - m.vy0) * scale;
+            const len = validW * 4;
+            for (let y = 0; y < validH; y++) {
+              const dstStart = (((m.vy0 * scale) + y) * ow + (m.vx0 * scale)) * 4;
+              const srcStart = y * validW * 4;
+              out.set(m.data.subarray(srcStart, srcStart + len), dstStart);
+            }
+
+            residual = Math.max(residual, m.residual);
+            doneCount++;
+            setJob((j) => (j.kind === "working" ? { ...j, progress: { done: doneCount, total } } : j));
+
+            if (doneCount === total) {
+              settled = true;
+              cleanup();
+              resolve();
+              return;
+            }
+
+            const workerTarget = ev.target as Worker;
+            if (taskIdx < tasks.length) {
+              const t = tasks[taskIdx++];
+              workerTarget.postMessage(
+                {
+                  type: "tile",
+                  id,
+                  tileId: t.tileId,
+                  pixels: t.pixels,
+                  pw: t.pw,
+                  ph: t.ph,
+                  scale,
+                  ranges,
+                  vx0: t.vx0,
+                  vy0: t.vy0,
+                  vx1: t.vx1,
+                  vy1: t.vy1,
+                  px0: t.px0,
+                  py0: t.py0,
+                },
+                { transfer: [t.pixels.buffer] },
+              );
+            }
+          };
+
+          for (const wrk of workers) {
+            wrk.addEventListener("message", onMsg);
+          }
+
+          for (const wrk of workers) {
+            if (taskIdx < tasks.length) {
+              const t = tasks[taskIdx++];
+              wrk.postMessage(
+                {
+                  type: "tile",
+                  id,
+                  tileId: t.tileId,
+                  pixels: t.pixels,
+                  pw: t.pw,
+                  ph: t.ph,
+                  scale,
+                  ranges,
+                  vx0: t.vx0,
+                  vy0: t.vy0,
+                  vx1: t.vx1,
+                  vy1: t.vy1,
+                  px0: t.px0,
+                  py0: t.py0,
+                },
+                { transfer: [t.pixels.buffer] },
+              );
+            }
+          }
+        });
+
+        done = {
+          type: "done",
+          id,
+          data: out as Uint8ClampedArray<ArrayBuffer>,
+          w: ow,
+          h: oh,
+          residual,
+          ms: performance.now() - t0,
+        };
+      } else {
+        // Direct single-worker dispatch (burst or small image)
+        const primaryWorker = workers[0];
+        done = await new Promise((resolve, reject) => {
+          const onMsg = (ev: MessageEvent) => {
+            const m = ev.data;
+            if (m.id !== id) return;
+            if (m.type === "progress") {
+              setJob((j) =>
+                j.kind === "working" ? { ...j, progress: { done: m.done, total: m.total } } : j,
+              );
+              return;
+            }
+            primaryWorker.removeEventListener("message", onMsg);
+            if (m.type === "error") reject(new Error(m.message));
+            else resolve(m as WorkerDone);
+          };
+          primaryWorker.addEventListener("message", onMsg);
+          if (frames && frames.length > 1) {
+            const copies = frames.map((f) => new Uint8ClampedArray(f.data));
+            primaryWorker.postMessage(
+              { type: "burst", id, frames: copies, w: input.w, h: input.h, scale },
+              { transfer: copies.map((c) => c.buffer) },
+            );
+          } else {
+            const copy = new Uint8ClampedArray(input.data);
+            primaryWorker.postMessage(
+              { type: "run", id, pixels: copy, w: input.w, h: input.h, scale },
+              { transfer: [copy.buffer] },
+            );
+          }
+        });
+      }
+
       startTransition(() => {
         if (!mountedRef.current) return;
         setJob({
@@ -141,10 +341,8 @@ export function useStudioJob() {
   function cancel() {
     const cur = curRef.current;
     if (cur.kind !== "working") return;
-    workerRef.current?.terminate();
-    workerRef.current = new Worker(
-      new URL("../../workers/vice.worker.ts", import.meta.url),
-    );
+    for (const w of workersRef.current) w.terminate();
+    workersRef.current = createWorkerPool();
     startTransition(() => {
       setJob({
         kind: "ready",

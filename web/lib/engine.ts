@@ -41,8 +41,8 @@ export function estimatePeakBytes(w: number, h: number, scale: number): number {
 // through the ranged export with the GLOBAL channel clamp range, so tile
 // results stitch exactly; only valid regions are kept. Also yields real
 // per-tile progress. Tiled scales are 2/3/4 (8× inputs are capped small).
-const TILE = 512;
-const HALO = 16;
+export const TILE = 512;
+export const HALO = 16;
 const TILE_PEAK_BYTES = 256 * 1024 * 1024;
 
 export function needsTiling(w: number, h: number, scale: number): boolean {
@@ -179,6 +179,62 @@ async function load(): Promise<Core> {
   if (abi !== 4) throw new Error(`WASM ABI mismatch: got ${abi}, want 4`);
   core = c;
   return c;
+}
+
+export async function upscaleTile(
+  pixels: Uint8ClampedArray,
+  pw: number,
+  ph: number,
+  scale: Exclude<Scale, 8>,
+  ranges: Float64Array,
+  vx0: number,
+  vy0: number,
+  vx1: number,
+  vy1: number,
+  px0: number,
+  py0: number,
+): Promise<{ data: Uint8ClampedArray<ArrayBuffer>; validW: number; validH: number; residual: number }> {
+  const c = await load();
+  const pin = c._malloc(pixels.length);
+  c.HEAPU8.set(pixels, pin);
+  const outW = pw * scale;
+  const outH = ph * scale;
+  const pout = c._malloc(outW * outH * 4);
+  const prange = c._malloc(64);
+  const view = new DataView(c.HEAPU8.buffer, prange, 64);
+  for (let i = 0; i < 8; i++) view.setFloat64(i * 8, ranges[i], true);
+
+  try {
+    const rc: number = c._vice_upscale_ranged(pin, pw, ph, 4, scale, pout, prange);
+    if (rc !== 0) throw new Error(`vice_upscale_ranged failed: ${rc}`);
+    const residual: number = c._vice_last_residual();
+
+    const validW = (vx1 - vx0) * scale;
+    const validH = (vy1 - vy0) * scale;
+    const validBytes = new Uint8ClampedArray(validW * validH * 4);
+    const sx = (vx0 - px0) * scale;
+    const len = validW * 4;
+
+    for (let y = vy0; y < vy1; y++) {
+      for (let dy = 0; dy < scale; dy++) {
+        const sy = (y - py0) * scale + dy;
+        const srcStart = pout + (sy * outW + sx) * 4;
+        const dstStart = ((y - vy0) * scale + dy) * validW * 4;
+        validBytes.set(c.HEAPU8.subarray(srcStart, srcStart + len), dstStart);
+      }
+    }
+
+    return {
+      data: validBytes as Uint8ClampedArray<ArrayBuffer>,
+      validW,
+      validH,
+      residual,
+    };
+  } finally {
+    c._free(pin);
+    c._free(pout);
+    c._free(prange);
+  }
 }
 
 export async function upscaleImage(
