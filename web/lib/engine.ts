@@ -1,6 +1,7 @@
 // vice engine wrapper: loads the WASM core once, exposes upscale with ABI check.
 // Runs inside a Web Worker (never the main thread).
 import type { Scale } from "../features/studio/model";
+import type { ViceCore } from "../types/wasm";
 
 export interface UpscaleResult {
   data: Uint8ClampedArray<ArrayBuffer>;
@@ -49,130 +50,30 @@ export function needsTiling(w: number, h: number, scale: number): boolean {
   return scale !== 8 && (w > TILE || h > TILE || estimatePeakBytes(w, h, scale) > TILE_PEAK_BYTES);
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type Core = any;
-
-async function yieldTurn(): Promise<void> {
-  const sched = (globalThis as unknown as { scheduler?: { yield?: () => Promise<void> } }).scheduler;
-  if (typeof sched?.yield === "function") {
-    await sched.yield();
-  } else {
-    await new Promise<void>((resolve) => {
-      const ch = new MessageChannel();
-      ch.port1.onmessage = () => resolve();
-      ch.port2.postMessage(null);
-    });
-  }
+// Burst core layers ~6 float64 HR planes (x, shifted, up, back, corr, nd)
+// plus n LR frame copies. hr = w·s·h·s, so hr·8·6 dominates; JS copies the
+// frames (n·w·h·4) plus the RGBA result (hr·4).
+// Five 1024px frames at 2× peak ≈260MB (inside the generic ceiling);
+// the same input at 4× ≈850MB (refused with guidance — exceeds 768MB).
+export function estimateBurstPeakBytes(w: number, h: number, scale: number, frames: number): number {
+  const hr = w * scale * (h * scale);
+  return hr * 8 * 6 + frames * w * h * 8 + hr * 4;
 }
 
-async function upscaleTiled(
-  c: Core,
-  input: Uint8ClampedArray,
-  w: number,
-  h: number,
-  scale: Exclude<Scale, 8>,
-  onProgress?: (done: number, total: number) => void,
-): Promise<UpscaleResult> {
-  const t0 = performance.now();
-  const ow = w * scale;
-  const oh = h * scale;
-  const out = new Uint8ClampedArray(ow * oh * 4);
-  // Global per-channel clamp range (RGBA) keeps tiles consistent with whole.
-  const ranges = new Float64Array(8);
-  for (let ch = 0; ch < 4; ch++) {
-    let lo = 255;
-    let hi = 0;
-    for (let i = ch; i < input.length; i += 4) {
-      const v = input[i];
-      if (v < lo) lo = v;
-      if (v > hi) hi = v;
-    }
-    ranges[ch * 2] = lo;
-    ranges[ch * 2 + 1] = hi;
-  }
-  // Valid cells partition the image (last cell takes the remainder, however
-  // short); padded regions add halo on all sides, clipped to the image.
-  const xBounds: number[] = [];
-  for (let x = 0; x < w; x += TILE) xBounds.push(x);
-  xBounds.push(w);
-  const yBounds: number[] = [];
-  for (let y = 0; y < h; y += TILE) yBounds.push(y);
-  yBounds.push(h);
-  const total = (xBounds.length - 1) * (yBounds.length - 1);
-  let done = 0;
-  let residual = 0;
+// One core instance per worker (single-threaded WASM; ABI checked at load).
+let core: ViceCore | null = null;
 
-  // Pre-allocate maximum tile buffers once on the WASM heap to eliminate
-  // per-tile allocation, fragmentation, and Garbage Collection pauses.
-  const maxTileSide = TILE + 2 * HALO;
-  const maxTileInBytes = maxTileSide * maxTileSide * 4;
-  const maxTileOutBytes = (maxTileSide * scale) * (maxTileSide * scale) * 4;
-  const pin = c._malloc(maxTileInBytes);
-  const pout = c._malloc(maxTileOutBytes);
-  const prange = c._malloc(64);
-  const view = new DataView(c.HEAPU8.buffer, prange, 64);
-  for (let i = 0; i < 8; i++) view.setFloat64(i * 8, ranges[i], true);
-
-  try {
-    for (let cy = 0; cy < yBounds.length - 1; cy++) {
-      for (let cx = 0; cx < xBounds.length - 1; cx++) {
-        const vx0 = xBounds[cx];
-        const vy0 = yBounds[cy];
-        const vx1 = xBounds[cx + 1];
-        const vy1 = yBounds[cy + 1];
-        const px0 = Math.max(0, vx0 - HALO);
-        const py0 = Math.max(0, vy0 - HALO);
-        const px1 = Math.min(w, vx1 + HALO);
-        const py1 = Math.min(h, vy1 + HALO);
-        const pw = px1 - px0;
-        const ph = py1 - py0;
-
-        // Copy input subregion directly into WASM heap buffer row-by-row
-        for (let y = 0; y < ph; y++) {
-          const srcStart = ((py0 + y) * w + px0) * 4;
-          const srcEnd = ((py0 + y) * w + px1) * 4;
-          c.HEAPU8.set(input.subarray(srcStart, srcEnd), pin + y * pw * 4);
-        }
-
-        const rc: number = c._vice_upscale_ranged(pin, pw, ph, 4, scale, pout, prange);
-        if (rc !== 0) throw new Error(`vice_upscale_ranged failed: ${rc}`);
-        residual = Math.max(residual, c._vice_last_residual());
-
-        // Zero-copy read directly from WASM heap into output buffer
-        const sx = (vx0 - px0) * scale;
-        const len = (vx1 - vx0) * scale * 4;
-        for (let y = vy0; y < vy1; y++) {
-          for (let dy = 0; dy < scale; dy++) {
-            const sy = (y - py0) * scale + dy;
-            const srcStart = pout + (sy * pw * scale + sx) * 4;
-            out.set(
-              c.HEAPU8.subarray(srcStart, srcStart + len),
-              ((y * scale + dy) * ow + vx0 * scale) * 4,
-            );
-          }
-        }
-        done++;
-        onProgress?.(done, total);
-        // Low-latency yield so progress events flush without 4ms timer clamp
-        await yieldTurn();
-      }
-    }
-  } finally {
-    c._free(pin);
-    c._free(pout);
-    c._free(prange);
-  }
-
-  return { data: out, w: ow, h: oh, residual, ms: performance.now() - t0 };
-}
-let core: Core | null = null;
-
-async function load(): Promise<Core> {
+async function load(): Promise<ViceCore> {
   if (core) return core;
-  // Served from public/wasm (committed build output). webpackIgnore keeps
-  // Next from trying to bundle the Emscripten glue; it loads at runtime.
-  const mod = (await import(/* webpackIgnore: true */ "/wasm/core.js")) as {
-    default: () => Promise<Core>;
+  // Served from public/wasm (committed build output). The non-literal
+  // specifier is deliberate: webpack/turbopackIgnore comments keep the
+  // bundlers from rewriting it, and the non-static argument keeps TS from
+  // trying to resolve files that only exist at runtime.
+  const coreUrl = "/wasm/core.js";
+  const mod = (await import(
+    /* webpackIgnore: true */ /* turbopackIgnore: true */ coreUrl
+  )) as {
+    default: () => Promise<ViceCore>;
   };
   const c = await mod.default();
   const abi: number = c._vice_abi_version();
@@ -248,26 +149,34 @@ export async function upscaleImage(
   w: number,
   h: number,
   scale: Scale,
-  onProgress?: (done: number, total: number) => void,
 ): Promise<UpscaleResult> {
   const c = await load();
   if (scale === 8 && !fitsEightX(w, h))
     throw new Error(
       `8× needs an input ≤512px on the long side (this one is ${Math.max(w, h)}px). Use a smaller image or 4×.`,
     );
+  // Tiling is owned by the main thread's worker pool (see use-studio-job);
+  // a run message big enough to tile must never reach the worker.
   if (scale !== 8 && needsTiling(w, h, scale))
-    return upscaleTiled(c, input, w, h, scale, onProgress);
+    throw new Error(
+      `Internal dispatch error: ${w}×${h} at ${scale}× must run tiled, not whole-image.`,
+    );
   const peak = estimatePeakBytes(w, h, scale);
   if (peak > PEAK_CAP_BYTES)
     throw new Error(
       `Too large for this device at ${scale}× (≈${Math.round(peak / 1048576)}MB working set). Try ${scale > 2 ? "2×" : "a smaller image"}.`,
     );
   const t0 = performance.now();
-  const pin = c._malloc(input.length);
-  c.HEAPU8.set(input, pin);
   const ow = w * scale;
   const oh = h * scale;
+  const pin = c._malloc(input.length);
   const pout = c._malloc(ow * oh * 4);
+  if (!pin || !pout) {
+    if (pin) c._free(pin);
+    if (pout) c._free(pout);
+    throw new Error("WASM out of memory while allocating upscale buffers");
+  }
+  c.HEAPU8.set(input, pin);
   // Scale 8 runs the hierarchical progressive export (staged 2→4→8 in-core);
   // 2/3/4 use the direct entry (4 is staged 2→4 since the Stage-4 adoption).
   const rc: number =
@@ -307,30 +216,40 @@ export async function upscaleBurst(
     throw new Error(
       `Burst frames larger than ${BURST_MAX_SIDE}px on the long side are refused (got ${Math.max(w, h)}px).`,
     );
+  const peak = estimateBurstPeakBytes(w, h, scale, inputs.length);
+  if (peak > PEAK_CAP_BYTES)
+    throw new Error(
+      `Burst working set too large for this device at ${scale}× with ${inputs.length} frames (≈${Math.round(peak / 1048576)}MB). Use fewer frames or 2×.`,
+    );
   const t0 = performance.now();
   const pins: number[] = [];
-  for (const f of inputs) {
-    if (f.length !== w * h * 4) throw new Error("Burst frames must share dimensions.");
-    const p = c._malloc(f.length);
-    c.HEAPU8.set(f, p);
-    pins.push(p);
+  let ptab = 0;
+  let pout = 0;
+  try {
+    for (const f of inputs) {
+      if (f.length !== w * h * 4) throw new Error("Burst frames must share dimensions.");
+      const p = c._malloc(f.length);
+      if (!p) throw new Error("WASM out of memory while staging burst frames");
+      c.HEAPU8.set(f, p);
+      pins.push(p);
+    }
+    ptab = c._malloc(pins.length * 4);
+    if (!ptab) throw new Error("WASM out of memory while building the burst frame table");
+    const view = new DataView(c.HEAPU8.buffer, ptab, pins.length * 4);
+    pins.forEach((p, i) => view.setUint32(i * 4, p, true));
+    const ow = w * scale;
+    const oh = h * scale;
+    pout = c._malloc(ow * oh * 4);
+    if (!pout) throw new Error("WASM out of memory while allocating the burst result");
+    const rc: number = c._vice_upscale_burst(ptab, pins.length, w, h, 4, scale, pout, 0);
+    if (rc !== 0) throw new Error(`vice_upscale_burst failed: ${rc}`);
+    const bytes = new Uint8ClampedArray(ow * oh * 4);
+    bytes.set(c.HEAPU8.subarray(pout, pout + ow * oh * 4));
+    const residual: number = c._vice_last_residual();
+    return { data: bytes, w: ow, h: oh, residual, ms: performance.now() - t0 };
+  } finally {
+    if (ptab) c._free(ptab);
+    for (const p of pins) c._free(p);
+    if (pout) c._free(pout);
   }
-  const ptab = c._malloc(pins.length * 4);
-  const view = new DataView(c.HEAPU8.buffer, ptab, pins.length * 4);
-  pins.forEach((p, i) => view.setUint32(i * 4, p, true));
-  const ow = w * scale;
-  const oh = h * scale;
-  const pout = c._malloc(ow * oh * 4);
-  const rc: number = c._vice_upscale_burst(ptab, pins.length, w, h, 4, scale, pout, 0);
-  c._free(ptab);
-  for (const p of pins) c._free(p);
-  if (rc !== 0) {
-    c._free(pout);
-    throw new Error(`vice_upscale_burst failed: ${rc}`);
-  }
-  const bytes = new Uint8ClampedArray(ow * oh * 4);
-  bytes.set(c.HEAPU8.subarray(pout, pout + ow * oh * 4));
-  const residual: number = c._vice_last_residual();
-  c._free(pout);
-  return { data: bytes, w: ow, h: oh, residual, ms: performance.now() - t0 };
 }
