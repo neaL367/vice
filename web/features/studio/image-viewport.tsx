@@ -139,22 +139,31 @@ export function ComparisonViewport({
     ctx.putImageData(diffImg, 0, 0);
   }, [input, result, mode]);
 
+  // Keep all canvases mounted continuously so their pixel buffers are never destroyed
+  // on mode transitions (switching between split comparison and difference heatmap).
   return (
     <div
       className={`absolute overflow-hidden ${alpha ? "vx-checker" : ""}`}
       style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h }}
     >
       <canvas ref={inRef} className="absolute inset-0 h-full w-full" />
-      {result && mode === "split" && (
+      {result && (
         <div
           className="absolute inset-0 overflow-hidden"
-          style={{ clipPath: calculateClip(fraction) }}
+          style={{
+            clipPath: calculateClip(fraction),
+            display: mode === "split" ? "block" : "none",
+          }}
         >
           <canvas ref={outRef} className="absolute inset-0 h-full w-full" />
         </div>
       )}
-      {result && mode === "diff" && (
-        <canvas ref={diffRef} className="absolute inset-0 h-full w-full" />
+      {result && (
+        <canvas
+          ref={diffRef}
+          className="absolute inset-0 h-full w-full"
+          style={{ display: mode === "diff" ? "block" : "none" }}
+        />
       )}
     </div>
   );
