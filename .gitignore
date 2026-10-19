@@ -12,6 +12,7 @@ web/node_modules/
 node_modules/
 
 # Test artifacts
+test-results/
 web/test-results/
 web/playwright-report/
 web/coverage/
