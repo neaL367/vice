@@ -287,7 +287,7 @@ test("zoom out returns to center; download is full-res output", async ({ page })
 
   // Download delivers full-resolution bytes under the right name.
   const dl = page.waitForEvent("download");
-  await page.getByRole("button", { name: "Download result" }).click();
+  await page.getByRole("button", { name: /^Download/ }).click();
   const download = await dl;
   expect(download.suggestedFilename()).toMatch(/kodim23-2x\.png$/);
   const filePath = await download.path();
