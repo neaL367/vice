@@ -191,7 +191,7 @@ export function useStudioJob() {
         }
 
         const total = tasks.length;
-        let doneCount = 0;
+        const doneTiles = new Set<number>();
         let residual = 0;
         let taskIdx = 0;
 
@@ -205,19 +205,59 @@ export function useStudioJob() {
           };
           rejectRef.current = reject;
 
-          // Self-healing dispatch: a worker that dies mid-job (e.g. boot-race
-          // with the SW cache on an offline reload) gets its in-flight tile
-          // requeued onto a respawned slot, within a respawn budget; past the
-          // budget the job rejects. Requeues always go to the task tail —
-          // other workers pick them up when they finish their current tile.
+          // Self-healing dispatch. Error events close one failure class, but
+          // a worker whose compute wedges or whose boot stalls silently never
+          // fires "error" — without a watchdog its in-flight tile parks the
+          // job forever, with the progress bar frozen wherever it stalled.
+          // Each in-flight tile therefore carries a deadline; on expiry (or
+          // error) the tile is requeued to a respawned slot within a budget.
           let respawnBudget = workers.length * 2;
-          const slotState = new Map<Worker, { tile: TileTask | null }>();
+          const TILE_TIMEOUT_MS = 90_000;
+          const slotState = new Map<Worker, { tile: TileTask | null; assignedAt: number }>();
+          const handlers = new Map<Worker, { msg: (ev: MessageEvent) => void; err: (ev: ErrorEvent) => void }>();
+
+          const cleanupSlot = (wrk: Worker) => {
+            const h = handlers.get(wrk);
+            if (h) {
+              wrk.removeEventListener("message", h.msg);
+              wrk.removeEventListener("error", h.err);
+              handlers.delete(wrk);
+            }
+          };
+
+          const declareDead = (wrk: Worker, reason: string) => {
+            if (settled) return;
+            const sts = slotState.get(wrk);
+            if (!sts) return;
+            // The tile may still be undelivered (worker died before
+            // reporting) — requeue it for another worker.
+            if (sts.tile) {
+              tasks.push(sts.tile);
+              sts.tile = null;
+            }
+            cleanupSlot(wrk);
+            wrk.terminate();
+            if (respawnBudget-- > 0) {
+              const nw = spawnOneWorker();
+              const idx = workersRef.current.indexOf(wrk);
+              if (idx >= 0) workersRef.current[idx] = nw;
+              slotState.set(nw, { tile: null, assignedAt: 0 });
+              attach(nw);
+              runNext(nw);
+              return;
+            }
+            settled = true;
+            cleanup();
+            reject(new Error(reason));
+          };
 
           const runNext = (wrk: Worker) => {
             if (settled) return;
             if (taskIdx < tasks.length) {
               const t = tasks[taskIdx++];
-              slotState.get(wrk)!.tile = t;
+              const sts = slotState.get(wrk)!;
+              sts.tile = t;
+              sts.assignedAt = performance.now();
               wrk.postMessage(
                 {
                   type: "tile",
@@ -241,7 +281,7 @@ export function useStudioJob() {
           };
 
           const attach = (wrk: Worker) => {
-            const handleMessage = (ev: MessageEvent) => {
+            const msg = (ev: MessageEvent) => {
               if (settled) return;
               const m = ev.data;
               if (m.id !== id) return;
@@ -253,6 +293,13 @@ export function useStudioJob() {
               }
               if (m.type !== "tileDone") return;
               slotState.get(wrk)!.tile = null;
+              // A terminated zombie may have had its last tileDone already in
+              // flight; that tile is being recomputed elsewhere — count it once.
+              if (doneTiles.has(m.tileId)) {
+                runNext(wrk);
+                return;
+              }
+              doneTiles.add(m.tileId);
 
               const validW = (m.vx1 - m.vx0) * scale;
               const validH = (m.vy1 - m.vy0) * scale;
@@ -264,10 +311,9 @@ export function useStudioJob() {
               }
 
               residual = Math.max(residual, m.residual);
-              doneCount++;
-              setJob((j) => (j.kind === "working" ? { ...j, progress: { done: doneCount, total } } : j));
+              setJob((j) => (j.kind === "working" ? { ...j, progress: { done: doneTiles.size, total } } : j));
 
-              if (doneCount === total) {
+              if (doneTiles.size === total) {
                 settled = true;
                 cleanup();
                 resolve();
@@ -277,45 +323,35 @@ export function useStudioJob() {
               runNext(wrk);
             };
 
-            const handleError = (ev: ErrorEvent) => {
-              if (settled) return;
-              const sts = slotState.get(wrk);
-              if (!sts) return;
-              // The tile may still be undelivered (worker died before
-              // reporting) — requeue it for another worker.
-              if (sts.tile) {
-                tasks.push(sts.tile);
-                sts.tile = null;
-              }
-              wrk.removeEventListener("message", handleMessage);
-              wrk.removeEventListener("error", handleError);
-              if (respawnBudget-- > 0) {
-                const nw = spawnOneWorker();
-                const idx = workersRef.current.indexOf(wrk);
-                if (idx >= 0) workersRef.current[idx] = nw;
-                slotState.set(nw, { tile: null });
-                attach(nw);
-                runNext(nw);
-                return;
-              }
-              settled = true;
-              cleanup();
-              reject(new Error(ev.message || "Worker error during tiling"));
-            };
+            const err = (ev: ErrorEvent) => declareDead(wrk, ev.message || "Worker error during tiling");
 
-            wrk.addEventListener("message", handleMessage);
-            wrk.addEventListener("error", handleError);
+            wrk.addEventListener("message", msg);
+            wrk.addEventListener("error", err);
+            handlers.set(wrk, { msg, err });
             cleanupFns.push(() => {
-              wrk.removeEventListener("message", handleMessage);
-              wrk.removeEventListener("error", handleError);
+              wrk.removeEventListener("message", msg);
+              wrk.removeEventListener("error", err);
+              handlers.delete(wrk);
             });
           };
 
           for (const wrk of workers) {
-            slotState.set(wrk, { tile: null });
+            slotState.set(wrk, { tile: null, assignedAt: 0 });
             attach(wrk);
             runNext(wrk);
           }
+
+          const watchdog = setInterval(() => {
+            if (settled) return;
+            const now = performance.now();
+            // Snapshot: declareDead mutates slotState/workers while scanning.
+            for (const [wrk, sts] of [...slotState]) {
+              if (sts.tile && now - sts.assignedAt > TILE_TIMEOUT_MS) {
+                declareDead(wrk, "Tile exceeded its compute deadline");
+              }
+            }
+          }, 10_000);
+          cleanupFns.push(() => clearInterval(watchdog));
         });
 
         done = {
@@ -335,6 +371,7 @@ export function useStudioJob() {
           const cleanup = () => {
             primaryWorker.removeEventListener("message", onMsg);
             primaryWorker.removeEventListener("error", onErr);
+            clearTimeout(jobTimer);
             rejectRef.current = null;
           };
           rejectRef.current = reject;
@@ -361,6 +398,19 @@ export function useStudioJob() {
           };
           primaryWorker.addEventListener("message", onMsg);
           primaryWorker.addEventListener("error", onErr);
+          // No partial progress flows from this path, so a wedged worker is
+          // otherwise indistinguishable from a long legitimate run. Budget by
+          // output and (for bursts) per-frame fusion work; expiry rejects
+          // instead of freezing the state forever.
+          const inPixels = input.w * input.h;
+          const outPixels = inPixels * scale * scale;
+          const budgetMs = 30_000 + ((outPixels + 2 * inPixels * (frames?.length ?? 1)) / 1000) * 12;
+          const jobTimer = setTimeout(() => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            reject(new Error("This run exceeded its compute budget — try a smaller output or fewer burst frames."));
+          }, budgetMs);
           if (frames && frames.length > 1) {
             const copies = frames.map((f) => new Uint8ClampedArray(f.data));
             primaryWorker.postMessage(
