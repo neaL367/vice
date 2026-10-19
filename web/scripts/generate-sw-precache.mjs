@@ -115,31 +115,53 @@ if (refs.length === 0) {
 // [deps...]). The runtime reverses the dep list and appends the suffix/base
 // config, so the fragment must be composed in that same shape.
 let workerUrl = null;
+// Context for diagnostics when extraction fails on CI layouts.
+let workerDiag = null;
 for (const rel of refs) {
-  const m = canRead(rel)?.match(
+  const content = canRead(rel);
+  if (content == null) continue;
+  const m = content.match(
     /f\("static\/chunks\/(turbopack-worker-[A-Za-z0-9_-]+\.js)",\[([^\]]*)\]/,
   );
-  if (!m) continue;
-  const deps = m[2]
-    .split('","')
-    .map((x) => x.replaceAll('"', "").trim())
-    .filter(Boolean)
-    .reverse()
-    .map((d) => `/_next/${d}`);
-  const cfg = [deps, "", "/_next/", null, null];
-  workerUrl =
-    "/_next/static/chunks/" + m[1] + "#params=" + encodeURIComponent(JSON.stringify(cfg));
-  break;
+  if (m) {
+    const deps = m[2]
+      .split('","')
+      .map((x) => x.replaceAll('"', "").trim())
+      .filter(Boolean)
+      .reverse()
+      .map((d) => `/_next/${d}`);
+    const cfg = [deps, "", "/_next/", null, null];
+    workerUrl =
+      "/_next/static/chunks/" + m[1] + "#params=" + encodeURIComponent(JSON.stringify(cfg));
+    break;
+  }
+  // No loader call in this file, but it may still be the worker container:
+  // remember the first such ref for the failure log.
+  if (workerDiag == null && /turbopack-worker-/.test(content)) {
+    const idx = content.indexOf("turbopack-worker-");
+    workerDiag = `${rel} — first occurrence context: ${JSON.stringify(content.slice(Math.max(0, idx - 40), idx + 100))}`;
+  }
 }
 if (workerUrl) log("worker bootstrap entry reconstructed");
-else log("worker bootstrap entry not derived (offline worker spawn stays best-effort)");
+else {
+  log("worker bootstrap entry not derived (offline worker spawn stays best-effort)");
+  log("discovered refs:", refs.join(" | ") || "(none)");
+  if (workerDiag) log("worker-related content found:", workerDiag);
+}
 
-// Keep the fragment-less worker container OUT of the plain list: serving it
-// offline strips the hash and breaks boot with a missing bootstrap config.
-const plain = refs
-  .map((rel) => `/_next/${rel}`)
-  .filter((u) => !u.endsWith("/turbopack-worker-"));
-if (workerUrl) plain.push(workerUrl);
+// When the fragmented worker entry exists, keep the fragment-less container
+// OUT of the plain list: serving it offline strips the hash and breaks boot
+// with a missing bootstrap config. Without the entry there is nothing to
+// subtract — the plain entry at least caches the file for later visits.
+const plain = refs.map((rel) => `/_next/${rel}`);
+if (workerUrl) {
+  const plainContainer = workerUrl.split("#")[0];
+  const cleaned = plain.filter((u) => u !== plainContainer);
+  if (cleaned.length < plain.length) log("plain worker container dropped in favor of fragmented entry");
+  cleaned.push(workerUrl);
+  plain.length = 0;
+  plain.push(...cleaned);
+}
 
 const entries = [...MANUAL, ...plain];
 if (entries.length <= MANUAL.length) {
