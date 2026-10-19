@@ -41,14 +41,30 @@ struct RegMaps {
 
 // 5-point discrete Laplacian, replicate edges.
 std::vector<double> laplacian(const std::vector<double>& d, int w, int h);
+// Allocation-free variant: out is resized only when it does not already
+// match d.size(); identical arithmetic and word order as laplacian().
+void laplacian_into(const std::vector<double>& d, int w, int h, std::vector<double>& out);
 
 // Static penalty maps from the LR observation (geometry is fixed).
 RegMaps regularization_maps(const std::vector<double>& lr, int lw, int lh, int s);
+
+// Scratch space for the eta1 (R_freq) path so the IBP inner loop can stay
+// allocation-free: buffers are grown once per reconstruct call and reused
+// across passes. Same float arithmetic as the allocating overload.
+struct RegScratch {
+  std::vector<double> lap;
+  std::vector<double> weighted;
+  std::vector<double> lap2;
+};
 
 // Explicit gradient step on R_freq + R_edge; returned correction is
 // SUBTRACTED from (x + correction) before clamp+project.
 void regularization_step(const std::vector<double>& x, int w, int h, const RegMaps& m,
                          double eta1, double eta2, std::vector<double>& out);
+// Inner-loop variant: reuses scratch; float-bit-identical to the overload
+// above for identical inputs.
+void regularization_step(const std::vector<double>& x, int w, int h, const RegMaps& m,
+                         double eta1, double eta2, std::vector<double>& out, RegScratch& scratch);
 std::vector<double> regularization_step(const std::vector<double>& x, int w, int h, const RegMaps& m,
                                         double eta1, double eta2);
 

@@ -16,6 +16,18 @@ std::vector<double> laplacian(const std::vector<double>& d, int w, int h) {
   return out;
 }
 
+void laplacian_into(const std::vector<double>& d, int w, int h, std::vector<double>& out) {
+  if (out.size() != d.size()) out.assign(d.size(), 0.0);
+  for (int y = 0; y < h; y++)
+    for (int x = 0; x < w; x++) {
+      const int xm = x > 0 ? x - 1 : x, xp = x < w - 1 ? x + 1 : x;
+      const int ym = y > 0 ? y - 1 : y, yp = y < h - 1 ? y + 1 : y;
+      const size_t i = (size_t)y * w + x;
+      out[i] = 4 * d[i] - d[(size_t)y * w + xm] - d[(size_t)y * w + xp] - d[(size_t)ym * w + x] -
+               d[(size_t)yp * w + x];
+    }
+}
+
 namespace {
 inline int clamp_coord(int i, int n) { return i < 0 ? 0 : i >= n ? n - 1 : i; }
 }
@@ -71,22 +83,23 @@ RegMaps regularization_maps(const std::vector<double>& lr, int lw, int lh, int s
 }
 
 void regularization_step(const std::vector<double>& x, int w, int h, const RegMaps& m,
-                         double eta1, double eta2, std::vector<double>& out) {
+                         double eta1, double eta2, std::vector<double>& out, RegScratch& scratch) {
   if (out.size() != x.size()) out.assign(x.size(), 0.0);
   else std::fill(out.begin(), out.end(), 0.0);
 
   if (eta1 != 0.0) {
-    auto lap = laplacian(x, w, h);
-    std::vector<double> weighted(lap.size());
-    for (size_t i = 0; i < weighted.size(); i++) weighted[i] = m.wFreq[i] * lap[i];
-    auto lap2 = laplacian(weighted, w, h);
+    laplacian_into(x, w, h, scratch.lap);
+    scratch.weighted.resize(x.size());
+    for (size_t i = 0; i < scratch.weighted.size(); i++)
+      scratch.weighted[i] = m.wFreq[i] * scratch.lap[i];
+    laplacian_into(scratch.weighted, w, h, scratch.lap2);
     for (size_t i = 0; i < out.size(); i++) {
       double over = 0.0;
       if (x[i] > m.hiHR[i])
         over = x[i] - m.hiHR[i];
       else if (x[i] < m.loHR[i])
         over = x[i] - m.loHR[i];
-      out[i] = eta1 * 2 * lap2[i] + eta2 * 2 * m.vEdge[i] * over;
+      out[i] = eta1 * 2 * scratch.lap2[i] + eta2 * 2 * m.vEdge[i] * over;
     }
   } else if (eta2 != 0.0) {
     const double two_eta2 = eta2 * 2.0;
@@ -100,6 +113,12 @@ void regularization_step(const std::vector<double>& x, int w, int h, const RegMa
       out[i] = two_eta2 * m.vEdge[i] * over;
     }
   }
+}
+
+void regularization_step(const std::vector<double>& x, int w, int h, const RegMaps& m,
+                         double eta1, double eta2, std::vector<double>& out) {
+  RegScratch scratch;
+  regularization_step(x, w, h, m, eta1, eta2, out, scratch);
 }
 
 std::vector<double> regularization_step(const std::vector<double>& x, int w, int h, const RegMaps& m,

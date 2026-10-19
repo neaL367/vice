@@ -5,6 +5,10 @@ namespace vice {
 
 // Box decimation D (s×s block means). Requires w,h divisible by s.
 std::vector<double> box_downsample(const std::vector<double>& hr, int w, int h, int s);
+// Allocation-free variant for hot loops: identical arithmetic and word
+// ordering to box_downsample; out is resized only when needed.
+void box_downsample_into(const std::vector<double>& hr, int w, int h, int s,
+                         std::vector<double>& out);
 
 // Full forward simulation DHx (H = identity in product v1).
 std::vector<double> simulate_forward(const std::vector<double>& hr, int w, int h, int s);

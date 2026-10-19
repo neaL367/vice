@@ -18,6 +18,20 @@ std::vector<double> box_downsample(const std::vector<double>& hr, int w, int h, 
   return out;
 }
 
+void box_downsample_into(const std::vector<double>& hr, int w, int h, int s,
+                         std::vector<double>& out) {
+  if (w % s != 0 || h % s != 0) throw std::invalid_argument("not divisible");
+  const int lw = w / s, lh = h / s;
+  if (out.size() != (size_t)lw * lh) out.assign((size_t)lw * lh, 0.0);
+  for (int y = 0; y < lh; y++)
+    for (int x = 0; x < lw; x++) {
+      double acc = 0.0;
+      for (int dy = 0; dy < s; dy++)
+        for (int dx = 0; dx < s; dx++) acc += hr[(size_t)(y * s + dy) * w + x * s + dx];
+      out[(size_t)y * lw + x] = acc / (s * s);
+    }
+}
+
 std::vector<double> simulate_forward(const std::vector<double>& hr, int w, int h, int s) {
   return box_downsample(hr, w, h, s);  // H = identity in product v1
 }

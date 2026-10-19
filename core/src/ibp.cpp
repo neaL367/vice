@@ -46,6 +46,7 @@ IbpResult reconstruct_ibp(const std::vector<double>& lr, int lw, int lh, int s, 
   }
 
   UpsamplePlan bilinear_plan = make_upsample_plan(lw, lh, s, Kernel::Bilinear);
+  RegScratch reg_scratch;
   std::vector<double> rlr(lr.size());
   std::vector<double> horiz_buf((size_t)hw * lh);
   std::vector<double> corr(hr_size);
@@ -58,7 +59,8 @@ IbpResult reconstruct_ibp(const std::vector<double>& lr, int lw, int lh, int s, 
     compute_residual_lr(x, hw, hh, lr, lw, lh, s, rlr);
     upsample_apply(bilinear_plan, rlr, corr, horiz_buf);
     for (size_t i = 0; i < hr_size; i++) corrected[i] = x[i] + corr[i];
-    regularization_step(corrected, hw, hh, maps, REG_ETA1_DEFAULT, REG_ETA2_DEFAULT, reg);
+    regularization_step(corrected, hw, hh, maps, REG_ETA1_DEFAULT, REG_ETA2_DEFAULT, reg,
+                        reg_scratch);
     if (use_deblock) {
       deblock_correction(corrected, hw, hh, s, art.jpeg_strength, *deblock,
                          art.phase_x, art.phase_y, dbl);
@@ -84,7 +86,7 @@ IbpResult reconstruct_ibp(const std::vector<double>& lr, int lw, int lh, int s, 
 namespace {
 // One guarded pass shared by the fixed and auto loops (identical floats).
 void ibp_pass(const std::vector<double>& lr, int lw, int lh, int s, double lo, double hi,
-              const RegMaps& maps, const UpsamplePlan& plan,
+              const RegMaps& maps, const UpsamplePlan& plan, RegScratch& reg_scratch,
               std::vector<double>& rlr, std::vector<double>& horiz_buf,
               std::vector<double>& corr, std::vector<double>& corrected,
               std::vector<double>& reg, std::vector<double>& x) {
@@ -94,7 +96,7 @@ void ibp_pass(const std::vector<double>& lr, int lw, int lh, int s, double lo, d
   compute_residual_lr(x, hw, hh, lr, lw, lh, s, rlr);
   upsample_apply(plan, rlr, corr, horiz_buf);
   for (size_t i = 0; i < hr_size; i++) corrected[i] = x[i] + corr[i];
-  regularization_step(corrected, hw, hh, maps, REG_ETA1_DEFAULT, REG_ETA2_DEFAULT, reg);
+  regularization_step(corrected, hw, hh, maps, REG_ETA1_DEFAULT, REG_ETA2_DEFAULT, reg, reg_scratch);
   for (size_t i = 0; i < hr_size; i++) {
     double v = corrected[i] - reg[i];
     corrected[i] = v < lo ? lo : v > hi ? hi : v;
@@ -129,6 +131,7 @@ IbpResult reconstruct_ibp_auto(const std::vector<double>& lr, int lw, int lh, in
   r.residuals.push_back(forward_residual(x, hw, hh, lr, lw, lh, s));
   RegMaps maps = regularization_maps(lr, lw, lh, s);
   UpsamplePlan bilinear_plan = make_upsample_plan(lw, lh, s, Kernel::Bilinear);
+  RegScratch reg_scratch;
   std::vector<double> rlr(lr.size());
   std::vector<double> horiz_buf((size_t)hw * lh);
   std::vector<double> corr(hr_size);
@@ -137,7 +140,8 @@ IbpResult reconstruct_ibp_auto(const std::vector<double>& lr, int lw, int lh, in
 
   int done = 0;
   while (done < hi_it) {
-    ibp_pass(lr, lw, lh, s, lo, hi, maps, bilinear_plan, rlr, horiz_buf, corr, corrected, reg, x);
+    ibp_pass(lr, lw, lh, s, lo, hi, maps, bilinear_plan, reg_scratch, rlr, horiz_buf, corr,
+             corrected, reg, x);
     r.residuals.push_back(forward_residual(x, hw, hh, lr, lw, lh, s));
     done++;
     // Stall stop: strictly improving but relatively stalled, past the

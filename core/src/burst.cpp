@@ -130,14 +130,18 @@ BurstResult reconstruct_burst(const std::vector<std::vector<double>>& frames, in
     }
     if (use.size() >= 2) {
       const auto up0 = upsample(ref, lw, lh, s, Kernel::Lanczos3);
+      // Presized gate scratch (the gate runs once per frame; shared buffers).
+      std::vector<double> gate_shift((size_t)lw * s * lh * s);
+      std::vector<double> gate_p((size_t)lw * lh);
       const auto predErr = [&](double dx, double dy, const std::vector<double>& f) {
-        const auto p = box_downsample(shift_image(up0, lw * s, lh * s, dx * s, dy * s), lw * s, lh * s, s);
+        shift_image(up0, lw * s, lh * s, dx * s, dy * s, gate_shift);
+        box_downsample_into(gate_shift, lw * s, lh * s, s, gate_p);
         double e = 0.0;
-        for (size_t i = 0; i < p.size(); i++) {
-          const double d = p[i] - f[i];
+        for (size_t i = 0; i < gate_p.size(); i++) {
+          const double d = gate_p[i] - f[i];
           e += d * d;
         }
-        return e / p.size();
+        return e / gate_p.size();
       };
       double eEst = 0.0, eZero = 0.0;
       for (int k : use) {
@@ -155,23 +159,37 @@ BurstResult reconstruct_burst(const std::vector<std::vector<double>>& frames, in
     lo = std::min(lo, v);
     hi = std::max(hi, v);
   }
+  const int hw = lw * s, hh = lh * s;
+  const size_t hr_size = (size_t)hw * hh;
   std::vector<double> x = upsample(ref, lw, lh, s, Kernel::Lanczos3);
+  // Zero-alloc pass loop: buffers are sized once above the loop; arithmetic
+  // order is unchanged, so results are float-identical to the allocating
+  // reference flow.
+  UpsamplePlan bilinear_plan = make_upsample_plan(lw, lh, s, Kernel::Bilinear);
+  std::vector<double> shifted(hr_size);
+  std::vector<double> pred((size_t)lw * lh);
+  std::vector<double> rlr((size_t)lw * lh);
+  std::vector<double> up(hr_size);
+  std::vector<double> back(hr_size);
+  std::vector<double> horiz((size_t)hw * lh);
+  std::vector<double> corr(hr_size, 0.0);
+  std::vector<double> nd(hr_size);
   for (int t = 0; t < iters; t++) {
-    std::vector<double> corr(x.size(), 0.0);
+    std::fill(corr.begin(), corr.end(), 0.0);
     for (int k : use) {
-      const auto pred = box_downsample(shift_image(x, lw * s, lh * s, reg[k].dx * s, reg[k].dy * s), lw * s, lh * s, s);
-      std::vector<double> rlr(pred.size(), 0.0);
+      shift_image(x, hw, hh, reg[k].dx * s, reg[k].dy * s, shifted);
+      box_downsample_into(shifted, hw, hh, s, pred);
       for (size_t i = 0; i < rlr.size(); i++) rlr[i] = frames[k][i] - pred[i];
-      const auto up = upsample(rlr, lw, lh, s, Kernel::Bilinear);
-      const auto back = shift_image(up, lw * s, lh * s, -reg[k].dx * s, -reg[k].dy * s);
+      upsample_apply(bilinear_plan, rlr, up, horiz);
+      shift_image(up, hw, hh, -reg[k].dx * s, -reg[k].dy * s, back);
       for (size_t i = 0; i < corr.size(); i++) corr[i] += back[i] / use.size();
     }
-    std::vector<double> nd(x.size());
     for (size_t i = 0; i < nd.size(); i++) {
       const double v = x[i] + corr[i];
       nd[i] = v < lo ? lo : v > hi ? hi : v;
     }
-    x = project_box(nd, lw * s, lh * s, ref, lw, lh, s);
+    project_box_inplace(nd, hw, hh, ref, lw, lh, s);
+    x.swap(nd);
   }
   BurstResult out;
   out.x = x;

@@ -11,6 +11,12 @@ double g_last_residual = -1.0;
 
 double clamp_byte(double v) { return v < 0.0 ? 0.0 : v > 255.0 ? 255.0 : v; }
 
+// Ranged-entry contract guard: both endpoints finite and ordered. NaN/inf or
+// an inverted range would otherwise poison clamp+project silently.
+bool valid_range(double lo, double hi) {
+  return std::isfinite(lo) && std::isfinite(hi) && lo <= hi;
+}
+
 // Integer-exact block quantization: round, then push ±1 levels along largest
 // fractional headroom until the block sums to s²× the source byte exactly.
 // Always terminates exact: target ∈ [0, 255s²], and err ≠ 0 implies some pixel
@@ -154,6 +160,8 @@ int vice_upscale_ranged(const unsigned char* in, int w, int h, int ch, int scale
   if (!in || !out || !clamp_lo_hi || w <= 0 || h <= 0 || (ch != 1 && ch != 3 && ch != 4) ||
       (scale != 2 && scale != 3 && scale != 4))
     return -1;
+  for (int c = 0; c < ch; c++)
+    if (!valid_range(clamp_lo_hi[(size_t)c * 2], clamp_lo_hi[(size_t)c * 2 + 1])) return -1;
   const int ow = w * scale;
   double worst = 0.0;
   std::vector<double> lr(static_cast<size_t>(w) * h);
@@ -228,6 +236,9 @@ int vice_upscale_burst(const unsigned char* const* in, int n, int w, int h, int 
     return -1;
   for (int k = 0; k < n; k++)
     if (!in[k]) return -1;
+  if (shifts_or_null)
+    for (int k = 0; k < n * 2; k++)
+      if (!std::isfinite(shifts_or_null[k])) return -1;
   const int ow = w * scale;
   double worst = 0.0;
   std::vector<double> blk(static_cast<size_t>(scale) * scale);

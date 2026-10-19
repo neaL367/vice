@@ -8,6 +8,10 @@ namespace vice {
 struct StageReport {
   int scale = 0;
   double residual_vs_y = 0.0;  // ‖D_s x_s − y‖ after the stage (must stay ~0)
+  // Memory contract: stage planes are NOT retained here — every stage
+  // output is released after it inits the next stage; the only planes that
+  // survive the call are ProgressiveResult.final. Keep the field (existing
+  // ABI/report shape) but it is always empty.
   std::vector<double> x;
 };
 

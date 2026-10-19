@@ -28,7 +28,9 @@ int vice_upscale(const unsigned char* in, int w, int h, int ch, int scale, unsig
 /* Tiled-reconstruction entry: same contract as vice_upscale (scales 2, 3, 4)
  * except the per-channel clamp range is caller-supplied (2×ch doubles:
  * lo,hi per channel) instead of tile-local — keeps tiled runs consistent
- * with whole-image runs. Used by the web worker for large inputs. */
+ * with whole-image runs. clamp_lo_hi entries must be finite with lo ≤ hi
+ * per channel (NaN/inf or an inverted range returns -1). Used by the web
+ * worker for large inputs. */
 int vice_upscale_ranged(const unsigned char* in, int w, int h, int ch, int scale,
                         unsigned char* out, const double* clamp_lo_hi);
 
@@ -39,6 +41,9 @@ int vice_upscale_ranged(const unsigned char* in, int w, int h, int ch, int scale
  * reference for projection and quantization. Same return contract. */
 int vice_upscale_burst(const unsigned char* const* in, int n, int w, int h, int ch, int scale,
                        unsigned char* out, const double* shifts_or_null);
+
+/* shifts_or_null entries must all be finite (any NaN or ±inf returns -1;
+ * no partial reconstruction is started). */
 
 /* Hierarchical progressive upscale by scale (2, 4, 8): float64 staging
  * through 2x steps, every stage projecting against the input; integer-exact

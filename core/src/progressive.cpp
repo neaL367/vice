@@ -27,13 +27,14 @@ ProgressiveResult reconstruct_progressive(const std::vector<double>& y, int lw, 
     st.scale = s;
     st.residual_vs_y = r.residuals.empty() ? forward_residual(r.x, lw * s, lh * s, y, lw, lh, s)
                                            : r.residuals.back();
-    st.x = std::move(r.x);
     if (s == target_scale) {
-      out.final = st.x;
+      out.final = std::move(r.x);
       out.stages.push_back(std::move(st));
       return out;
     }
-    prior = st.x;
+    // Only the immediate prior is needed to init the next stage; intermediate
+    // planes are not retained (StageReport.x stays empty — see progressive.h).
+    prior = std::move(r.x);
     out.stages.push_back(std::move(st));
     have_prior = true;
   }
