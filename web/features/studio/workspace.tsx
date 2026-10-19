@@ -25,6 +25,10 @@ export function Workspace() {
   // never fail silent — a dead "nothing happens" is worse than an error.
   const [pickError, setPickError] = useState<string | null>(null);
 
+  // Counter bumped on every successful open guarantees ActiveWorkspace
+  // remounts (fresh zoom/pan/split/hint) even for same-name same-dims files.
+  const [instance, setInstance] = useState(0);
+
   async function take(f: File | undefined) {
     if (!f) return;
     if (!f.type.startsWith("image/")) {
@@ -34,6 +38,7 @@ export function Workspace() {
     try {
       const { image, name } = await decodeFile(f);
       setPickError(null);
+      setInstance((n) => n + 1);
       openImage(image, name);
     } catch {
       setPickError("We couldn't read this image. Try another image.");
@@ -56,6 +61,7 @@ export function Workspace() {
       const decoded = await Promise.all(imgs.map((f) => decodeFile(f)));
       if (scale === 8) setScale(2);
       setPickError(null);
+      setInstance((n) => n + 1);
       openBurst(decoded);
     } catch {
       setPickError("We couldn't read these images. Try other images.");
@@ -91,20 +97,7 @@ export function Workspace() {
     return () => window.removeEventListener("paste", onPaste);
   }, []);
 
-  function download(out: StudioImage, name: string, s: number) {
-    const c = document.createElement("canvas");
-    c.width = out.w;
-    c.height = out.h;
-    const ctx = c.getContext("2d")!;
-    if (exportFormat === "jpeg" && hasAlpha(out)) {
-      ctx.fillStyle = "#ffffff";
-      ctx.fillRect(0, 0, out.w, out.h);
-      const off = new OffscreenCanvas(out.w, out.h);
-      off.getContext("2d")!.putImageData(new ImageData(out.data, out.w, out.h), 0, 0);
-      ctx.drawImage(off, 0, 0);
-    } else {
-      ctx.putImageData(new ImageData(out.data, out.w, out.h), 0, 0);
-    }
+  async function download(out: StudioImage, name: string, s: number) {
     const mime =
       exportFormat === "webp"
         ? "image/webp"
@@ -113,24 +106,62 @@ export function Workspace() {
           : "image/png";
     const ext = exportFormat === "jpeg" ? "jpg" : exportFormat;
     const quality = exportFormat === "jpeg" ? 0.92 : exportFormat === "webp" ? 0.95 : undefined;
-    c.toBlob(
-      (b) => {
-        if (!b) return;
-        const a = document.createElement("a");
-        a.href = URL.createObjectURL(b);
-        a.download = name.replace(/\.[^.]+$/, "") + `-${s}x.${ext}`;
-        a.click();
-        setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-      },
-      mime,
-      quality,
-    );
+    const needBg = exportFormat === "jpeg" && hasAlpha(out);
+    try {
+      let blob: Blob | null = null;
+      if (typeof OffscreenCanvas === "function") {
+        const stage = new OffscreenCanvas(out.w, out.h);
+        const ctx = stage.getContext("2d")!;
+        if (needBg) {
+          // putImageData writes alpha verbatim (no composite), so alpha is
+          // composited over white via the source-over draw below.
+          ctx.fillStyle = "#ffffff";
+          ctx.fillRect(0, 0, out.w, out.h);
+          const tmp = new OffscreenCanvas(out.w, out.h);
+          tmp.getContext("2d")!.putImageData(new ImageData(out.data, out.w, out.h), 0, 0);
+          ctx.drawImage(tmp, 0, 0);
+        } else {
+          ctx.putImageData(new ImageData(out.data, out.w, out.h), 0, 0);
+        }
+        blob = await stage.convertToBlob({ type: mime, quality });
+      } else {
+        const c = document.createElement("canvas");
+        c.width = out.w;
+        c.height = out.h;
+        const ctx = c.getContext("2d")!;
+        if (needBg) {
+          ctx.fillStyle = "#ffffff";
+          ctx.fillRect(0, 0, out.w, out.h);
+          const tmp = document.createElement("canvas");
+          tmp.width = out.w;
+          tmp.height = out.h;
+          tmp.getContext("2d")!.putImageData(new ImageData(out.data, out.w, out.h), 0, 0);
+          ctx.drawImage(tmp, 0, 0);
+        } else {
+          ctx.putImageData(new ImageData(out.data, out.w, out.h), 0, 0);
+        }
+        blob = await new Promise<Blob | null>((resolve) => c.toBlob(resolve, mime, quality));
+      }
+      if (!blob) {
+        setPickError(
+          "Export failed — the result likely exceeds this device's canvas limits. Try a smaller scale.",
+        );
+        return;
+      }
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = name.replace(/\.[^.]+$/, "") + `-${s}x.${ext}`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    } catch {
+      setPickError("Export failed — try a smaller scale or the PNG format.");
+    }
   }
 
   if (job.kind === "idle") {
     return (
       <div className="flex min-h-0 flex-1 flex-col">
-        <Dropzone onImage={openImage} onBurst={takeBurst} />
+        <Dropzone onImage={openImage} onBurst={takeBurst} pickError={pickError} />
       </div>
     );
   }
@@ -151,7 +182,7 @@ export function Workspace() {
   const frameCount = job.frames?.length ?? 1;
   return (
     <ActiveWorkspace
-      key={`${job.name}-${input.w}x${input.h}-${frameCount}`}
+      key={`${instance}-${job.name}-${input.w}x${input.h}-${frameCount}`}
       input={input}
       job={job}
       scale={scale}
@@ -200,6 +231,7 @@ function ActiveWorkspace({
 }) {
   const result = job.kind === "done" ? job.output : null;
   const working = job.kind === "working";
+  const framesN = job.frames?.length ?? 1;
   const {
     attachBox,
     measure,
@@ -226,29 +258,15 @@ function ActiveWorkspace({
     setSplit(f);
   };
 
-  // Accept new images anywhere in the active view: drag-drop + paste keep
-  // working after the first upload, so replacing never needs a refresh.
-  // Parent callback arrives via ref so listeners subscribe once.
+  // Accept new images anywhere in the active view: drag-drop + file pickers
+  // keep working after the first upload. Paste is single-owned by Workspace
+  // (exactly one window listener) — never subscribe here again.
   const pickRef = useRef(onPickFiles);
   useEffect(() => {
     pickRef.current = onPickFiles;
   }, [onPickFiles]);
   const dragDepth = useRef(0);
   const [dragOver, setDragOver] = useState(false);
-
-  useEffect(() => {
-    const onPaste = (e: ClipboardEvent) => {
-      const fs = [...(e.clipboardData?.items ?? [])]
-        .map((i) => (i.type.startsWith("image/") ? i.getAsFile() : null))
-        .filter((f): f is File => f !== null);
-      if (fs.length > 0) {
-        e.preventDefault();
-        pickRef.current(fs);
-      }
-    };
-    window.addEventListener("paste", onPaste);
-    return () => window.removeEventListener("paste", onPaste);
-  }, []);
 
   function imageFiles(dt: DataTransfer | null): File[] {
     if (!dt) return [];
@@ -401,7 +419,7 @@ function ActiveWorkspace({
             working={working}
             startedAt={job.kind === "working" ? job.startedAt : null}
             progress={job.kind === "working" ? job.progress : null}
-            framesN={job.frames?.length ?? 1}
+            framesN={framesN}
             attachBox={attachBox}
             measure={measure}
             rect={rect}
@@ -444,6 +462,7 @@ function ActiveWorkspace({
           inDims={`${input.w}×${input.h}`}
           outDims={`${input.w * scale}×${input.h * scale}`}
           canUse8={fitsEightX(input.w, input.h)}
+          isBurst={framesN > 1}
           canRun={job.kind === "ready" || job.kind === "done"}
           working={working}
           canDownload={job.kind === "done"}

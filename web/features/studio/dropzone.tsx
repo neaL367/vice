@@ -4,19 +4,22 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { StudioImage } from "./model";
 import { decodeFile } from "./use-studio-job";
 
-// Empty state: one surface for drop, browse, paste, keyboard. Drag depth is
-// tracked with a counter (dragleave fires on child entry — a boolean flickers).
-// Images over 2048px are fitted down before processing; stated, not hidden.
+// Empty state: one surface for drop, browse, keyboard. Page-wide paste is
+// owned by Workspace (exactly one listener) so a paste never decodes twice
+// here; browse/drop stay local. Drag depth is tracked with a counter
+// (dragleave fires on child entry — a boolean flickers). Images over 2048px
+// are fitted down before processing; stated, not hidden.
 //
-// React notes: parent callbacks arrive via refs so `take` stays stable and the
-// page-wide paste listener subscribes once (no re-subscribe churn per render).
+// React notes: parent callbacks arrive via refs so `take` stays stable.
 // The React Compiler memoizes the rest; no manual useMemo here by design.
 export function Dropzone({
   onImage,
   onBurst,
+  pickError,
 }: {
   onImage: (img: StudioImage, name: string) => void;
   onBurst: (fs: File[]) => void;
+  pickError: string | null;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const depth = useRef(0);
@@ -50,19 +53,6 @@ export function Dropzone({
       setReading(false);
     }
   }, []);
-
-  // Page-wide paste: subscribes once, reads latest callbacks via refs.
-  // Cleanup mirrors setup so StrictMode's double-mount never double-listens.
-  useEffect(() => {
-    const onPaste = (e: ClipboardEvent) => {
-      const f = [...(e.clipboardData?.items ?? [])]
-        .find((i) => i.type.startsWith("image/"))
-        ?.getAsFile();
-      if (f) void take(f);
-    };
-    window.addEventListener("paste", onPaste);
-    return () => window.removeEventListener("paste", onPaste);
-  }, [take]);
 
   function burstOrSingle(fs: File[]) {
     if (fs.length > 1) onBurstRef.current(fs);
@@ -180,9 +170,9 @@ export function Dropzone({
             ))}
           </div>
 
-          {error && (
+          {(error || pickError) && (
             <p role="alert" className="mt-4 text-[13px] font-medium text-[#ff9d94]">
-              {error}
+              {error ?? pickError}
             </p>
           )}
         </div>

@@ -25,8 +25,12 @@ export type Job =
     }
   | { kind: "error"; input: StudioImage | null; name: string; frames: StudioImage[] | null; message: string };
 
+// Full scan (memoized per image by callers). Every alpha byte is inspected:
+// sparse alpha (1px borders, tiny cutouts) must be reported, and the scan
+// costs a few ms even at 2048². Callers memoize; everything else subsamples
+// would risk silently wrong checker/JPEG compositing.
 export function hasAlpha(img: StudioImage): boolean {
-  for (let i = 3; i < img.data.length; i += 64 * 4) {
+  for (let i = 3; i < img.data.length; i += 4) {
     if (img.data[i] < 255) return true;
   }
   return false;

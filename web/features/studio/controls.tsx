@@ -12,6 +12,7 @@ export function Controls({
   inDims,
   outDims,
   canUse8,
+  isBurst,
   canRun,
   working,
   canDownload,
@@ -27,6 +28,7 @@ export function Controls({
   inDims: string;
   outDims: string;
   canUse8: boolean;
+  isBurst: boolean;
   canRun: boolean;
   working: boolean;
   canDownload: boolean;
@@ -44,14 +46,20 @@ export function Controls({
           aria-label="Scale"
         >
           {([2, 3, 4, 8] as const).map((s) => {
-            const disabled = s === 8 && !canUse8;
+            const disabled = (s === 8 && !canUse8) || (s === 8 && isBurst);
             const active = scale === s;
             return (
               <button
                 key={s}
                 onClick={() => setScale(s)}
                 disabled={disabled}
-                title={disabled ? "8× needs an input ≤512px on the long side" : undefined}
+                title={
+                  disabled
+                    ? s === 8 && isBurst
+                      ? "Burst fusion stops at 4×"
+                      : "8× needs an input ≤512px on the long side"
+                    : undefined
+                }
                 aria-pressed={scale === s}
                 className={`vx-pop min-h-[32px] min-w-[46px] rounded-full px-3 text-[13.5px] disabled:opacity-30 ${
                   active
@@ -140,11 +148,17 @@ export function Controls({
           </label>
         </div>
       </div>
-      {!canUse8 && (
-        <p className="text-center text-[11.5px] text-[#6f6c66]">
-          8× needs an input ≤512px on the long side — pick 4× or a smaller image
-        </p>
-      )}
+  {isBurst ? (
+    <p className="text-center text-[11.5px] text-[#6f6c66]">
+      Burst fusion stops at 4× — pick 2×, 3×, or 4×
+    </p>
+  ) : (
+    canUse8 || (
+      <p className="text-center text-[11.5px] text-[#6f6c66]">
+        8× needs an input ≤512px on the long side — pick 4× or a smaller image
+      </p>
+    )
+  )}
     </div>
   );
 }

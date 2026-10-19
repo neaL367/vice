@@ -14,18 +14,25 @@ interface WorkerDone {
   ms: number;
 }
 
-const POOL_SIZE =
-  typeof navigator !== "undefined"
-    ? Math.min(Math.max(1, navigator.hardwareConcurrency || 4), 8)
-    : 4;
+const deviceMemoryGB = (nav: Navigator | undefined): number =>
+  nav ? ((nav as Navigator & { deviceMemory?: number }).deviceMemory ?? 8) : 8;
+
+const POOL_SIZE = (() => {
+  if (typeof navigator === "undefined") return 4;
+  const cores = navigator.hardwareConcurrency || 4;
+  const mem = deviceMemoryGB(navigator);
+  // Memory-bound cap: 2GB devices tolerate 2 workers, 4GB → 4, more → 8.
+  const memCap = mem <= 2 ? 2 : mem <= 4 ? 4 : 8;
+  return Math.min(Math.max(1, cores), 8, Math.max(1, memCap));
+})();
+
+function spawnOneWorker(): Worker {
+  return new Worker(new URL("../../workers/vice.worker.ts", import.meta.url));
+}
 
 function createWorkerPool(): Worker[] {
   const pool: Worker[] = [];
-  for (let i = 0; i < POOL_SIZE; i++) {
-    pool.push(
-      new Worker(new URL("../../workers/vice.worker.ts", import.meta.url)),
-    );
-  }
+  for (let i = 0; i < POOL_SIZE; i++) pool.push(spawnOneWorker());
   return pool;
 }
 
@@ -34,13 +41,29 @@ export function useStudioJob() {
   const workersRef = useRef<Worker[]>([]);
   const idRef = useRef(0);
   const mountedRef = useRef(true);
+  // Reject register for the in-flight upscale promise: cancel() settles it
+  // BEFORE terminating the pool, so the big output/tile closures actually
+  // unwind instead of parking worker memory forever.
+  const rejectRef = useRef<((reason: Error) => void) | null>(null);
   const [, startTransition] = useTransition();
+
+  function ensurePool(): Worker[] {
+    if (workersRef.current.length === 0) workersRef.current = createWorkerPool();
+    return workersRef.current;
+  }
 
   useEffect(() => {
     mountedRef.current = true;
-    workersRef.current = createWorkerPool();
+    // Warm the pool at mount, not at first job: offline usage must find the
+    // pool already compiled, and spawn-on-load also pays script-compile cost
+    // off the critical upscale path. Worker-internal importScripts chunks are
+    // precached at SW install (see scripts/generate-sw-precache.mjs), so this
+    // spawn cannot miss its module graph.
+    ensurePool();
     return () => {
       mountedRef.current = false;
+      rejectRef.current?.(new Error("unmounted"));
+      rejectRef.current = null;
       for (const w of workersRef.current) w.terminate();
       workersRef.current = [];
     };
@@ -86,10 +109,7 @@ export function useStudioJob() {
         : null;
     setJob({ kind: "working", input, name, frames, scale, startedAt: Date.now(), progress: null });
     const id = ++idRef.current;
-    if (workersRef.current.length === 0) {
-      workersRef.current = createWorkerPool();
-    }
-    const workers = workersRef.current;
+    const workers = ensurePool();
 
     try {
       let done: WorkerDone;
@@ -181,12 +201,23 @@ export function useStudioJob() {
           const cleanup = () => {
             for (const fn of cleanupFns) fn();
             cleanupFns.length = 0;
+            rejectRef.current = null;
           };
+          rejectRef.current = reject;
+
+          // Self-healing dispatch: a worker that dies mid-job (e.g. boot-race
+          // with the SW cache on an offline reload) gets its in-flight tile
+          // requeued onto a respawned slot, within a respawn budget; past the
+          // budget the job rejects. Requeues always go to the task tail —
+          // other workers pick them up when they finish their current tile.
+          let respawnBudget = workers.length * 2;
+          const slotState = new Map<Worker, { tile: TileTask | null }>();
 
           const runNext = (wrk: Worker) => {
             if (settled) return;
             if (taskIdx < tasks.length) {
               const t = tasks[taskIdx++];
+              slotState.get(wrk)!.tile = t;
               wrk.postMessage(
                 {
                   type: "tile",
@@ -209,7 +240,7 @@ export function useStudioJob() {
             }
           };
 
-          for (const wrk of workers) {
+          const attach = (wrk: Worker) => {
             const handleMessage = (ev: MessageEvent) => {
               if (settled) return;
               const m = ev.data;
@@ -221,6 +252,7 @@ export function useStudioJob() {
                 return;
               }
               if (m.type !== "tileDone") return;
+              slotState.get(wrk)!.tile = null;
 
               const validW = (m.vx1 - m.vx0) * scale;
               const validH = (m.vy1 - m.vy0) * scale;
@@ -247,6 +279,25 @@ export function useStudioJob() {
 
             const handleError = (ev: ErrorEvent) => {
               if (settled) return;
+              const sts = slotState.get(wrk);
+              if (!sts) return;
+              // The tile may still be undelivered (worker died before
+              // reporting) — requeue it for another worker.
+              if (sts.tile) {
+                tasks.push(sts.tile);
+                sts.tile = null;
+              }
+              wrk.removeEventListener("message", handleMessage);
+              wrk.removeEventListener("error", handleError);
+              if (respawnBudget-- > 0) {
+                const nw = spawnOneWorker();
+                const idx = workersRef.current.indexOf(wrk);
+                if (idx >= 0) workersRef.current[idx] = nw;
+                slotState.set(nw, { tile: null });
+                attach(nw);
+                runNext(nw);
+                return;
+              }
               settled = true;
               cleanup();
               reject(new Error(ev.message || "Worker error during tiling"));
@@ -258,7 +309,11 @@ export function useStudioJob() {
               wrk.removeEventListener("message", handleMessage);
               wrk.removeEventListener("error", handleError);
             });
+          };
 
+          for (const wrk of workers) {
+            slotState.set(wrk, { tile: null });
+            attach(wrk);
             runNext(wrk);
           }
         });
@@ -280,7 +335,9 @@ export function useStudioJob() {
           const cleanup = () => {
             primaryWorker.removeEventListener("message", onMsg);
             primaryWorker.removeEventListener("error", onErr);
+            rejectRef.current = null;
           };
+          rejectRef.current = reject;
           const onMsg = (ev: MessageEvent) => {
             if (settled) return;
             const m = ev.data;
@@ -334,6 +391,9 @@ export function useStudioJob() {
         });
       });
     } catch (e: unknown) {
+      // cancel()/unmount reject with an owned message and already set the
+      // right state; surfacing it again here would overwrite that state.
+      if (e instanceof Error && (e.message === "cancelled" || e.message === "unmounted")) return;
       startTransition(() => {
         if (!mountedRef.current) return;
         setJob({
@@ -350,6 +410,10 @@ export function useStudioJob() {
   function cancel() {
     const cur = curRef.current;
     if (cur.kind !== "working") return;
+    // Settle the pending promise FIRST (freeing the output/tile closures),
+    // then drop the pool. Catch above swallows the owned reason.
+    rejectRef.current?.(new Error("cancelled"));
+    rejectRef.current = null;
     for (const w of workersRef.current) w.terminate();
     workersRef.current = createWorkerPool();
     startTransition(() => {
@@ -357,7 +421,7 @@ export function useStudioJob() {
         kind: "ready",
         input: cur.input,
         name: cur.name,
-        frames: cur.frames,
+        frames: cur.frames ?? null,
       });
     });
   }
@@ -382,14 +446,25 @@ export async function decodeFile(
     const k = Math.min(1, cap / Math.max(bmp.width, bmp.height));
     const w = Math.max(1, Math.round(bmp.width * k));
     const h = Math.max(1, Math.round(bmp.height * k));
-    const off = new OffscreenCanvas(w, h);
-    const ctx = off.getContext("2d", { willReadFrequently: true });
-    if (!ctx) throw new Error("no 2d context");
-    ctx.drawImage(bmp, 0, 0, w, h);
-    const img = ctx.getImageData(0, 0, w, h);
-    // Exact copy: getImageData buffers may be pooled/oversized, and ImageData
-    // requires length === 4wh exactly. A view over a pooled buffer throws.
-    const data = new Uint8ClampedArray(img.data);
+    const read = (ctx: OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D): Uint8ClampedArray =>
+      new Uint8ClampedArray(ctx.getImageData(0, 0, w, h).data);
+    let data: Uint8ClampedArray;
+    if (typeof OffscreenCanvas === "function") {
+      const off = new OffscreenCanvas(w, h);
+      const ctx = off.getContext("2d", { willReadFrequently: true });
+      if (!ctx) throw new Error("no 2d context");
+      ctx.drawImage(bmp, 0, 0, w, h);
+      data = read(ctx);
+    } else {
+      // Older Safari: no OffscreenCanvas — decode through a detached canvas.
+      const c = document.createElement("canvas");
+      c.width = w;
+      c.height = h;
+      const ctx = c.getContext("2d", { willReadFrequently: true });
+      if (!ctx) throw new Error("no 2d context");
+      ctx.drawImage(bmp, 0, 0, w, h);
+      data = read(ctx);
+    }
     return {
       image: { data: data as Uint8ClampedArray<ArrayBuffer>, w, h },
       name: f.name,
