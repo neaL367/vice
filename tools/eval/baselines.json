@@ -1,0 +1,44 @@
+{
+  "step-2x": {
+    "psnr": "Infinity",
+    "scale": 2,
+    "w": 32,
+    "h": 32,
+    "ch": 1
+  },
+  "gradient-2x": {
+    "psnr": "Infinity",
+    "scale": 2,
+    "w": 32,
+    "h": 32,
+    "ch": 1
+  },
+  "flat-2x": {
+    "psnr": "Infinity",
+    "scale": 2,
+    "w": 32,
+    "h": 32,
+    "ch": 1
+  },
+  "step-4x": {
+    "psnr": "Infinity",
+    "scale": 4,
+    "w": 16,
+    "h": 16,
+    "ch": 1
+  },
+  "gradient-4x": {
+    "psnr": "Infinity",
+    "scale": 4,
+    "w": 16,
+    "h": 16,
+    "ch": 1
+  },
+  "checkerboard-2x": {
+    "psnr": "Infinity",
+    "scale": 2,
+    "w": 32,
+    "h": 32,
+    "ch": 1
+  }
+}

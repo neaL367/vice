@@ -174,15 +174,63 @@ BurstResult reconstruct_burst(const std::vector<std::vector<double>>& frames, in
   std::vector<double> horiz((size_t)hw * lh);
   std::vector<double> corr(hr_size, 0.0);
   std::vector<double> nd(hr_size);
+  // Residual/confidence-weighted fusion:
+  // Outlier or poorly registered frames get penalized via their alignment
+  // residual ||shifted(ref) - frame_k|| relative to median residual.
+  std::vector<double> weights(use.size(), 1.0);
+  double total_weight = 0.0;
+  if (!shifts && use.size() > 1) {
+    std::vector<double> residuals(use.size(), 0.0);
+    std::vector<double> sorted_residuals;
+    std::vector<double> ref_shifted((size_t)lw * lh);
+    for (size_t idx = 0; idx < use.size(); idx++) {
+      int k = use[idx];
+      if (k == 0) {
+        residuals[idx] = 0.0;
+      } else {
+        shift_image(ref, lw, lh, reg[k].dx, reg[k].dy, ref_shifted);
+        double diff = 0.0;
+        for (size_t i = 0; i < ref.size(); i++) {
+          double d = ref_shifted[i] - frames[k][i];
+          diff += d * d;
+        }
+        residuals[idx] = std::sqrt(diff / ref.size());
+        sorted_residuals.push_back(residuals[idx]);
+      }
+    }
+    double med = 1.0;
+    if (!sorted_residuals.empty()) {
+      std::sort(sorted_residuals.begin(), sorted_residuals.end());
+      med = sorted_residuals[sorted_residuals.size() / 2];
+      if (med < 1e-6) med = 1e-6;
+    }
+    for (size_t idx = 0; idx < use.size(); idx++) {
+      int k = use[idx];
+      if (k == 0) {
+        weights[idx] = 1.0;
+      } else {
+        double r = residuals[idx] / med;
+        // Damp outlier contribution; factor in registration confidence
+        weights[idx] = std::clamp(reg[k].confidence, 0.1, 1.0) * std::exp(-0.5 * r * r);
+      }
+      total_weight += weights[idx];
+    }
+  } else {
+    for (size_t idx = 0; idx < use.size(); idx++) total_weight += weights[idx];
+  }
+  if (total_weight <= 0.0) total_weight = (double)use.size();
+
   for (int t = 0; t < iters; t++) {
     std::fill(corr.begin(), corr.end(), 0.0);
-    for (int k : use) {
+    for (size_t idx = 0; idx < use.size(); idx++) {
+      int k = use[idx];
+      double w_k = weights[idx] / total_weight;
       shift_image(x, hw, hh, reg[k].dx * s, reg[k].dy * s, shifted);
       box_downsample_into(shifted, hw, hh, s, pred);
       for (size_t i = 0; i < rlr.size(); i++) rlr[i] = frames[k][i] - pred[i];
       upsample_apply(bilinear_plan, rlr, up, horiz);
       shift_image(up, hw, hh, -reg[k].dx * s, -reg[k].dy * s, back);
-      for (size_t i = 0; i < corr.size(); i++) corr[i] += back[i] / use.size();
+      for (size_t i = 0; i < corr.size(); i++) corr[i] += back[i] * w_k;
     }
     for (size_t i = 0; i < nd.size(); i++) {
       const double v = x[i] + corr[i];

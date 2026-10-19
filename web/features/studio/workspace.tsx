@@ -232,6 +232,7 @@ function ActiveWorkspace({
   const result = job.kind === "done" ? job.output : null;
   const working = job.kind === "working";
   const framesN = job.frames?.length ?? 1;
+  const [viewMode, setViewMode] = useState<"split" | "diff">("split");
   const {
     attachBox,
     measure,
@@ -379,6 +380,20 @@ function ActiveWorkspace({
                 Center
               </button>
             )}
+            {result && (
+              <button
+                className={`rounded-full px-2.5 py-1 text-[12px] font-medium transition-colors ${
+                  viewMode === "diff"
+                    ? "bg-[#f5f4f0] text-[#0e0d0c]"
+                    : "text-[#a8a29e] hover:bg-white/[0.06] hover:text-[#f5f4f0]"
+                }`}
+                onClick={() => setViewMode((m) => (m === "split" ? "diff" : "split"))}
+                aria-label="Toggle difference heatmap"
+                title="Toggle amplified residual heat map"
+              >
+                {viewMode === "diff" ? "Split view" : "Diff"}
+              </button>
+            )}
             <button
               className="rounded-full px-2.5 py-1 text-[#a8a29e] hover:bg-white/[0.06] hover:text-[#f5f4f0]"
               onClick={() => zoomBy(1.25)}
@@ -427,13 +442,14 @@ function ActiveWorkspace({
             dividerX={dividerX}
             zoomed={zoomed}
             dragging={dragging}
+            mode={viewMode}
             onPointerDown={onPointerDown}
             onWheel={onWheel}
             onDoubleClick={onDoubleClick}
             onKeyDown={onKeyDown}
             setSplit={split}
           />
-          {result && !touched && !working && (
+          {result && !touched && !working && viewMode === "split" && (
             <div
               className="pointer-events-none absolute z-10 -translate-x-1/2 rounded-full bg-[#f5f4f0] px-3 py-1.5 text-[12px] font-medium whitespace-nowrap text-[#0e0d0c] shadow-lg"
               style={{ left: `${dividerX}px`, top: `${rect.y + 12}px` }}

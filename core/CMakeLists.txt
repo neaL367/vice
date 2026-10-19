@@ -12,6 +12,7 @@ add_library(vice STATIC
   src/progressive.cpp
   src/burst.cpp
   src/color.cpp
+  src/dither.cpp
   src/api.cpp
 )
 target_include_directories(vice PUBLIC include PRIVATE src)

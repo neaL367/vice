@@ -23,6 +23,7 @@ export function ImageStage({
   dividerX,
   zoomed,
   dragging,
+  mode = "split",
   onPointerDown,
   onWheel,
   onDoubleClick,
@@ -42,6 +43,7 @@ export function ImageStage({
   dividerX: number;
   zoomed: boolean;
   dragging: boolean;
+  mode?: "split" | "diff";
   onPointerDown: (e: React.PointerEvent) => void;
   onWheel: (e: React.WheelEvent) => void;
   onDoubleClick: () => void;
@@ -86,21 +88,27 @@ export function ImageStage({
         result={result}
         rect={rect}
         fraction={result ? fraction : 1}
+        mode={mode}
       />
       {/* Floating labels */}
       {!working && (
         <>
           <span className="pointer-events-none absolute top-3 left-3 rounded-full bg-black/55 px-2.5 py-1 text-[11px] font-medium text-white backdrop-blur">
-            Original
+            {mode === "diff" ? "Residual (Heatmap)" : "Original"}
           </span>
-          {result && (
+          {result && mode === "split" && (
             <span className="pointer-events-none absolute top-3 right-3 rounded-full bg-white/90 px-2.5 py-1 text-[11px] font-medium text-[#0e0d0c] shadow-sm">
               Enhanced
             </span>
           )}
+          {result && mode === "diff" && (
+            <span className="pointer-events-none absolute top-3 right-3 rounded-full bg-black/55 px-2.5 py-1 text-[11px] font-medium text-[#ff9d94] backdrop-blur">
+              8× amplified abs(HR − LR)
+            </span>
+          )}
         </>
       )}
-      {result && (
+      {result && mode === "split" && (
         <>
           <div
             className="pointer-events-none absolute"

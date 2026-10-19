@@ -18,8 +18,8 @@ const ccall = (name, ret, args, vals) => {
 };
 
 const abi = ccall("vice_abi_version", "number", [], []);
-if (abi !== 4) throw new Error("ABI mismatch: " + abi);
-console.log("abi=4 ok");
+if (abi !== 5) throw new Error("ABI mismatch: " + abi);
+console.log("abi=5 ok");
 
 // 8x8 RGBA step (left black, right white), 2x.
 const W = 8, H = 8, S = 2;

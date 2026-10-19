@@ -2,6 +2,7 @@
 
 export type Scale = 2 | 3 | 4 | 8;
 export type ExportFormat = "png" | "webp" | "jpeg";
+export type ViewMode = "split" | "diff";
 
 export interface StudioImage {
   data: Uint8ClampedArray<ArrayBuffer>;

@@ -3,6 +3,7 @@
 #include <vector>
 #include "burst.h"
 #include "color.h"
+#include "dither.h"
 #include "ibp.h"
 #include "progressive.h"
 
@@ -219,6 +220,82 @@ int vice_upscale_progressive(const unsigned char* in, int w, int h, int ch, int 
           for (int dx = 0; dx < scale; dx++)
             blk[(size_t)dy * scale + dx] = p.final[(size_t)(by * scale + dy) * ow + bx * scale + dx];
         quantize_exact(blk.data(), scale, (double)(scale * scale) * lr[(size_t)by * w + bx], qblk.data());
+        for (int dy = 0; dy < scale; dy++)
+          for (int dx = 0; dx < scale; dx++)
+            out[(size_t)((by * scale + dy) * ow + bx * scale + dx) * ch + c] =
+                qblk[(size_t)dy * scale + dx];
+      }
+  }
+  g_last_residual = worst;
+  return 0;
+}
+
+// ABI v5: Ordered dither at quantization (Bayer 8x8). mode=0 delegates to
+// vice_upscale (zero extra cost, bit-identical bytes). mode=1 perturbs each
+// float block pixel with a spatially-periodic Bayer threshold before calling
+// quantize_exact, biasing the greedy correction to spread error spatially and
+// break 8-bit banding in smooth gradients. Exact block sums are still enforced
+// by quantize_exact after dithering. Scales 2, 3, 4 (not 8; use progressive).
+int vice_upscale_dithered(const unsigned char* in, int w, int h, int ch, int scale,
+                          unsigned char* out, int mode) {
+  if (mode != 0 && mode != 1) return -1;
+  if (!in || !out || w <= 0 || h <= 0 || (ch != 1 && ch != 3 && ch != 4) ||
+      (scale != 2 && scale != 3 && scale != 4))
+    return -1;
+  // mode=0: legacy path — delegate to vice_upscale, zero extra cost.
+  if (mode == 0) return vice_upscale(in, w, h, ch, scale, out);
+  // mode=1: ordered Bayer 8x8 dither before quantize_exact.
+  const int ow = w * scale;
+  double worst = 0.0;
+  std::vector<double> lr(static_cast<size_t>(w) * h);
+  std::vector<double> blk(static_cast<size_t>(scale) * scale);
+  std::vector<unsigned char> qblk(static_cast<size_t>(scale) * scale);
+  const vice::DeblockParams deblock{0.1, 0.5};
+  for (int c = 0; c < ch; c++) {
+    for (int i = 0; i < w * h; i++) lr[(size_t)i] = in[(size_t)i * ch + c];
+    // Constant-channel fast path: all pixels identical, no dither needed.
+    const size_t n_lr = static_cast<size_t>(w) * h;
+    const double v0 = lr[0];
+    bool is_constant = true;
+    for (size_t i = 1; i < n_lr; ++i) {
+      if (lr[i] != v0) { is_constant = false; break; }
+    }
+    if (is_constant) {
+      const unsigned char b0 = static_cast<unsigned char>(
+          std::round(std::max(0.0, std::min(255.0, v0))));
+      const int oh = h * scale;
+      for (int by = 0; by < oh; ++by) {
+        const size_t row_offset = static_cast<size_t>(by) * ow * ch + c;
+        for (int bx = 0; bx < ow; ++bx)
+          out[row_offset + static_cast<size_t>(bx) * ch] = b0;
+      }
+      continue;
+    }
+    std::vector<double> x;
+    if (scale == 4) {
+      auto p = vice::reconstruct_progressive(lr, w, h, 4, VICE_ITERS, nullptr, &deblock);
+      for (const auto& st : p.stages) worst = std::max(worst, st.residual_vs_y);
+      x = std::move(p.final);
+    } else {
+      auto r = vice::reconstruct_ibp(lr, w, h, scale, VICE_ITERS, nullptr, nullptr, &deblock);
+      worst = std::max(worst, r.residuals.back());
+      x = std::move(r.x);
+    }
+    for (int by = 0; by < h; by++)
+      for (int bx = 0; bx < w; bx++) {
+        for (int dy = 0; dy < scale; dy++)
+          for (int dx = 0; dx < scale; dx++)
+            blk[(size_t)dy * scale + dx] =
+                x[(size_t)(by * scale + dy) * ow + bx * scale + dx];
+        // Apply Bayer threshold to float block before rounding.
+        for (int dy = 0; dy < scale; dy++)
+          for (int dx = 0; dx < scale; dx++) {
+            double t = vice::bayer_threshold(bx, by, dx, dy, scale);
+            blk[(size_t)dy * scale + dx] = std::max(0.0, std::min(255.0,
+                blk[(size_t)dy * scale + dx] + t));
+          }
+        quantize_exact(blk.data(), scale,
+                       (double)(scale * scale) * lr[(size_t)by * w + bx], qblk.data());
         for (int dy = 0; dy < scale; dy++)
           for (int dx = 0; dx < scale; dx++)
             out[(size_t)((by * scale + dy) * ow + bx * scale + dx) * ch + c] =

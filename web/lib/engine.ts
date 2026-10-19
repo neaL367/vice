@@ -77,7 +77,7 @@ async function load(): Promise<ViceCore> {
   };
   const c = await mod.default();
   const abi: number = c._vice_abi_version();
-  if (abi !== 4) throw new Error(`WASM ABI mismatch: got ${abi}, want 4`);
+  if (abi !== 5) throw new Error(`WASM ABI mismatch: got ${abi}, want 5`);
   core = c;
   return c;
 }

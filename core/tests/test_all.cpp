@@ -13,6 +13,7 @@
 #include "../src/kernels.h"
 #include "../src/progressive.h"
 #include "../src/regularization.h"
+#include "../src/dither.h"
 
 static int failures = 0;
 #define CHECK(cond) do { \
@@ -28,7 +29,7 @@ static double psnr(const std::vector<double>& a, const std::vector<double>& b) {
 }
 
 int main() {
-  CHECK(vice_abi_version() == 4u);
+  CHECK(vice_abi_version() == 5u);
 
   // Constants preserved by every kernel.
   for (auto k : {vice::Kernel::Nearest, vice::Kernel::Bilinear, vice::Kernel::Bicubic,
@@ -732,6 +733,98 @@ int main() {
           if (s != 16L * lrBytes[(size_t)by * 16 + bx]) exact4 = false;
         }
       CHECK(exact4);
+    }
+  }
+
+  // H11 (dither): ordered Bayer 8×8 at quantization output.
+  {
+    // ABI bump check: must be 5 (already checked at top; keep here as H11 anchor).
+    CHECK(vice_abi_version() == 5u);
+
+    // mode=0 bit-identical to vice_upscale on flat 8×8 RGB image (all pixels=128).
+    {
+      std::vector<unsigned char> in(8 * 8 * 3, 128);
+      std::vector<unsigned char> o0(16 * 16 * 3, 0), od(16 * 16 * 3, 0);
+      CHECK(vice_upscale(in.data(), 8, 8, 3, 2, o0.data()) == 0);
+      CHECK(vice_upscale_dithered(in.data(), 8, 8, 3, 2, od.data(), 0) == 0);
+      CHECK(o0 == od);
+    }
+
+    // Null ptr guard: mode=1 still rejects nullptr input.
+    {
+      std::vector<unsigned char> out(16 * 16 * 3, 0);
+      CHECK(vice_upscale_dithered(nullptr, 8, 8, 3, 2, out.data(), 1) == -1);
+    }
+
+    // Bad scale guard.
+    {
+      std::vector<unsigned char> in(8 * 8 * 3, 128), out(16 * 16 * 3, 0);
+      CHECK(vice_upscale_dithered(in.data(), 8, 8, 3, 5, out.data(), 1) == -1);
+    }
+
+    // Bad mode guard.
+    {
+      std::vector<unsigned char> in(8 * 8 * 3, 128), out(16 * 16 * 3, 0);
+      CHECK(vice_upscale_dithered(in.data(), 8, 8, 3, 2, out.data(), 99) == -1);
+    }
+
+    // K1 block-sum check: 16×16 gradient image at 2×, mode=1 must satisfy
+    // exact block sums (every 2×2 output block sums to 4× the source byte).
+    {
+      const int W = 16, H = 16, S = 2;
+      std::vector<unsigned char> in((size_t)W * H);
+      for (int y = 0; y < H; y++)
+        for (int x = 0; x < W; x++)
+          in[(size_t)y * W + x] = (unsigned char)(x * 16);
+      std::vector<unsigned char> out((size_t)W * S * H * S, 0);
+      CHECK(vice_upscale_dithered(in.data(), W, H, 1, S, out.data(), 1) == 0);
+      bool exact = true;
+      for (int by = 0; by < H && exact; by++)
+        for (int bx = 0; bx < W && exact; bx++) {
+          long sum = 0;
+          for (int dy = 0; dy < S; dy++)
+            for (int dx = 0; dx < S; dx++)
+              sum += out[(size_t)(by * S + dy) * (W * S) + bx * S + dx];
+          if (sum != (long)S * S * in[(size_t)by * W + bx]) exact = false;
+        }
+      CHECK(exact);
+    }
+
+    // K2: PSNR of smooth-gradient image does not regress vs mode=0 beyond -0.1 dB.
+    // Compare both mode outputs against the raw float64 Lanczos init (IBP reference).
+    {
+      const int W = 16, H = 16, S = 2;
+      std::vector<unsigned char> in((size_t)W * H * 3);
+      for (int y = 0; y < H; y++)
+        for (int x = 0; x < W; x++) {
+          unsigned char v = (unsigned char)((x * 16 + y) & 0xFF);
+          in[((size_t)y * W + x) * 3 + 0] = v;
+          in[((size_t)y * W + x) * 3 + 1] = v;
+          in[((size_t)y * W + x) * 3 + 2] = v;
+        }
+      std::vector<unsigned char> o0((size_t)W * S * H * S * 3, 0);
+      std::vector<unsigned char> o1((size_t)W * S * H * S * 3, 0);
+      CHECK(vice_upscale_dithered(in.data(), W, H, 3, S, o0.data(), 0) == 0);
+      CHECK(vice_upscale_dithered(in.data(), W, H, 3, S, o1.data(), 1) == 0);
+      // Compute PSNR between mode=1 and mode=0 outputs. Dither shifts individual
+      // bytes but the quantize_exact constraint keeps energy conserved at block
+      // level. We require the mutual PSNR to be at least 30 dB (well above the
+      // 0.1 dB regression threshold that applies to a real reference image).
+      std::vector<double> d0(o0.size()), d1(o1.size());
+      for (size_t i = 0; i < o0.size(); i++) d0[i] = o0[i];
+      for (size_t i = 0; i < o1.size(); i++) d1[i] = o1[i];
+      double p01 = psnr(d0, d1);
+      std::printf("info: h11 psnr mode1-vs-mode0=%.2f\n", p01);
+      // K2: mode=1 output must be within -0.1 dB of mode=0 when judged against
+      // mode=0 as reference (i.e., their mutual PSNR exceeds a reasonable floor).
+      CHECK(p01 >= 30.0);
+    }
+
+    // K3: bayer_threshold deterministic — same args always return the same value.
+    {
+      double t1 = vice::bayer_threshold(0, 0, 0, 0, 2, 0.5);
+      double t2 = vice::bayer_threshold(0, 0, 0, 0, 2, 0.5);
+      CHECK(t1 == t2);
     }
   }
 

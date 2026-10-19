@@ -14,7 +14,7 @@ extern "C" {
  * thread at a time (workers use separate threads, never shared calls).
  */
 
-#define VICE_ABI_VERSION 4u
+#define VICE_ABI_VERSION 5u  /* v5: adds vice_upscale_dithered (Bayer 8×8 ordered dither) */
 #define VICE_ITERS 4
 
 unsigned vice_abi_version(void);
@@ -50,6 +50,12 @@ int vice_upscale_burst(const unsigned char* const* in, int n, int w, int h, int 
  * block quantization applies once at the final scale. Same return contract. */
 int vice_upscale_progressive(const unsigned char* in, int w, int h, int ch, int scale,
                              unsigned char* out);
+
+/* ABI v5: Ordered dither at quantization (Bayer 8×8). mode=0 → none (legacy
+ * path, bit-identical to vice_upscale); mode=1 → ordered (kills 8-bit banding
+ * in smooth gradients). Same return contract as vice_upscale. */
+int vice_upscale_dithered(const unsigned char* in, int w, int h, int ch, int scale,
+                          unsigned char* out, int mode);
 
 /* RMS forward residual ‖DHx−y‖ of the last vice_upscale call, in levels. */
 double vice_last_residual(void);
